@@ -56,14 +56,16 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       # GHCR image names must be lowercase. Repo = HamedSanaei/cloud -> hamedsanaei/cloud
-      - name: Compute immutable image reference
+      - name: Compute image references (immutable SHA + convenience latest)
         id: image
         run: |
           REPO_LOWER="${{ github.repository }}"
           REPO_LOWER="${REPO_LOWER,,}"
           SHA="${{ github.sha }}"
-          echo "ref=ghcr.io/${REPO_LOWER}:sha-${SHA}" >>"$GITHUB_OUTPUT"
-          echo "sha=${SHA}" >>"$GITHUB_OUTPUT"
+          echo "ref=ghcr.io/${REPO_LOWER}:sha-${SHA}"       >>"$GITHUB_OUTPUT"
+          # convenience tag — never used as the deployment source
+          echo "latest=ghcr.io/${REPO_LOWER}:latest"        >>"$GITHUB_OUTPUT"
+          echo "sha=${SHA}"                                  >>"$GITHUB_OUTPUT"
           echo "configured image: ghcr.io/${REPO_LOWER}:sha-${SHA}"
 
       - name: Log in to GHCR (for push)
@@ -73,27 +75,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & push immutable SHA image (BuildKit, cached layers)
+      - name: Build & push image to GHCR (immutable SHA + convenience latest)
+        # Pushed in ONE BuildKit operation (push: true) so BOTH tags land on
+        # GHCR. The image is NOT loaded into the runner's local daemon, so a
+        # later `docker tag`/`docker push` would fail — avoid that entirely.
+        # The sha-<commit> tag is the immutable version actually deployed; the
+        # `latest` tag is a convenience pointer only.
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ steps.image.outputs.ref }}
+          tags: |
+            ${{ steps.image.outputs.ref }}
+            ${{ steps.image.outputs.latest }}
           labels: |
             org.opencontainers.image.title=tofan-cloud
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Push convenience 'latest' tag
-        run: |
-          set -euo pipefail
-          LOW="${{ github.repository }}"
-          LOW="${LOW,,}"
-          SHA_REF="${{ steps.image.outputs.ref }}"
-          docker tag "${SHA_REF}" "ghcr.io/${LOW}:latest"
-          docker push "ghcr.io/${LOW}:latest"
 
   deploy:
     name: Deploy to production over SSH (with rollback)
