@@ -1,4 +1,4 @@
-name: Build, Publish to GHCR, and Deploy
+name: Cloud Production Pipeline
 
 on:
   push:
@@ -7,6 +7,7 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
+  pull_request:
   workflow_dispatch:
     inputs:
       skip_public_healthcheck:
@@ -27,12 +28,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-push:
-    name: Build & push immutable image to GHCR
+  # ==========================================================================
+  # JOB 1 — test-build
+  # Runs for PR, push to main, and workflow_dispatch. Validates the app and
+  # the production image. Never pushes or deploys.
+  # ==========================================================================
+  test-build:
+    name: Test, build, and smoke-test
     runs-on: ubuntu-latest
-    outputs:
-      image: ${{ steps.image.outputs.ref }}
-      sha: ${{ steps.image.outputs.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -54,6 +57,55 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Build production image (validation)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: tofan-cloud:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the built image
+        run: |
+          set -euo pipefail
+          IMAGE_ID="$(docker images -q tofan-cloud:ci | head -n1)"
+          [[ -n "$IMAGE_ID" ]] || { echo "::error::image not found"; exit 1; }
+          docker rm -f tofan-cloud-ci-smoke >/dev/null 2>&1 || true
+          docker run -d --rm --name tofan-cloud-ci-smoke -p 127.0.0.1:8901:80 \
+            --security-opt no-new-privileges \
+            --cap-drop ALL --cap-add CHOWN --cap-add SETGID \
+            "${IMAGE_ID}" >/dev/null
+          trap 'docker rm -f tofan-cloud-ci-smoke >/dev/null 2>&1 || true' EXIT
+          sleep 3
+          echo "--- /healthz (must be the app's, not default nginx) ---"
+          body="$(curl -fsS http://127.0.0.1:8901/healthz)"
+          echo "$body"
+          [[ "$body" == "ok" ]] || { echo "::error::unexpected /healthz body"; exit 1; }
+          echo "--- /dashboard (SPA fallback) HTTP status ---"
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8901/dashboard)"
+          echo "HTTP $code"
+          [[ "$code" == "200" ]] || { echo "::error::SPA route did not return 200"; exit 1; }
+
+  # ==========================================================================
+  # JOB 2 — build-push
+  # Runs ONLY for push to main and workflow_dispatch (never for pull_request).
+  # Builds and pushes the immutable SHA image plus a convenience latest tag in
+  # one BuildKit operation. Production deploys always use the SHA tag.
+  # ==========================================================================
+  build-push:
+    name: Build & push image to GHCR
+    needs: test-build
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    outputs:
+      image: ${{ steps.image.outputs.ref }}
+      sha: ${{ steps.image.outputs.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       # GHCR image names must be lowercase. Repo = HamedSanaei/cloud -> hamedsanaei/cloud
       - name: Compute image references (immutable SHA + convenience latest)
@@ -95,7 +147,12 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy:
+  # ==========================================================================
+  # JOB 3 — deploy-production
+  # Runs ONLY for push to main and workflow_dispatch (never for pull_request).
+  # Bound to the 'production' GitHub Environment so its secrets are exposed.
+  # ==========================================================================
+  deploy-production:
     name: Deploy to production over SSH (with rollback)
     needs: build-push
     runs-on: ubuntu-latest
@@ -103,6 +160,7 @@ jobs:
     # secrets (DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS,
     # GHCR_USERNAME/GHCR_TOKEN) are exposed to this job.
     environment: production
+    if: github.event_name != 'pull_request'
     steps:
       - name: Checkout (for deploy scripts)
         uses: actions/checkout@v4
