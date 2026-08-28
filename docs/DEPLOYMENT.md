@@ -14,7 +14,7 @@ touching it — isolated project name, network, container, directory and port.
 Developer pushes to main
         │
         ▼
-GitHub Actions  (workflow: deploy.yml)
+GitHub Actions  (workflow: pipeline.yml)
         │  npm ci → typecheck → build
         │  Docker multi-stage build (BuildKit)
         ▼
@@ -54,27 +54,39 @@ Browser → Cloudflare → Host nginx/reverse proxy → 127.0.0.1:${CLOUD_PORT} 
 > dev machine only. The one-time bootstrap **fails safely** if the selected port
 > is occupied and tells you to pick another `CLOUD_PORT` (see §4). `CLOUD_PORT`
 > is read from the environment everywhere (`docker-compose.yml`,
-> `.github/workflows/*.yml`, `deploy/scripts/*.sh`) and is easy to change.
+> `.github/workflows/pipeline.yml`, `deploy/scripts/*.sh`) and is easy to
+> change.
 
 ---
 
-## 2. CI/CD workflow files
+## 2. CI/CD pipeline
 
-`.github/workflows/ci.yml`
-- Runs on every push and PR to `main`.
-- `npm ci` → `npm run typecheck` → `npm run build`.
-- Builds the production Docker image (validation only) and smoke-tests it
-  (`/healthz` and the SPA route `/dashboard`).
-- Does **not** push to GHCR and does **not** deploy.
+A single unified workflow drives CI and deployment:
 
-`.github/workflows/deploy.yml`
-- Runs on push to `main` and via `workflow_dispatch` (manual redeploy).
-- `concurrency: cloud-production / cancel-in-progress: false` — only one
-  deployment at a time; a deploy already in progress is never interrupted.
-- Job `build-push`: builds + pushes the immutable `sha-<commit>` tag (and
-  `latest`) to GHCR using `GITHUB_TOKEN`.
-- Job `deploy`: pushes the reusable script `deploy/scripts/deploy.sh` to the
-  server and runs it over SSH with automatic rollback.
+`.github/workflows/pipeline.yml` — **Cloud Production Pipeline**
+
+It supports three triggers: `pull_request`, push to `main`, and
+`workflow_dispatch`.
+
+Job flow:
+
+- **Pull Request:** `test-build` → stop (no image push, no deployment).
+- **Push to `main`:** `test-build` → `build-push` → `deploy-production`.
+- **workflow_dispatch:** `test-build` → `build-push` → `deploy-production`.
+
+- `test-build` runs for pull requests, push to `main`, and `workflow_dispatch`:
+  `npm ci` → `npm run typecheck` → `npm run build`, builds the production
+  Docker image and smoke-tests it (`/healthz` returns `ok`, `/dashboard`
+  returns HTTP 200). It does **not** push to GHCR and does **not** deploy.
+- `build-push` does **NOT** run on pull requests. It builds and pushes the
+  immutable `sha-<commit>` tag (and the convenience `latest` tag) to GHCR
+  using `GITHUB_TOKEN`. Production always deploys the immutable SHA tag.
+- `deploy-production` does **NOT** run on pull requests. It pushes the
+  reusable script `deploy/scripts/deploy.sh` to the server and runs it over
+  SSH with automatic rollback. It uses the GitHub Environment `production`,
+  where the deployment secrets are stored. Only one production deployment
+  runs at a time (`concurrency: cloud-production`, `cancel-in-progress:
+  false`); a deploy already in progress is never interrupted.
 
 ---
 
@@ -312,7 +324,7 @@ Substitute `8540` with your chosen `CLOUD_PORT` if you changed it.
 
 ## 12. Manual redeploy (workflow_dispatch)
 
-Actions → *Build, Publish to GHCR, and Deploy* → *Run workflow*:
+Actions → *Cloud Production Pipeline* → *Run workflow*:
 - Runs from `main` with the exact `sha-<commit>` of that commit.
 - The `skip_public_healthcheck` input defaults to `false` (strict). Use it
   `true` only for the very first bootstrap.

@@ -33,7 +33,6 @@ info "Local port     : ${CLOUD_PORT}"
 
 # --- 1) Docker + Docker Compose ------------------------------------------------
 command -v docker >/dev/null 2>&1 || die "docker not found on this server — install Docker first."
-command -v docker >/dev/null 2>&1
 docker compose version >/dev/null 2>&1 || die "docker compose (v2) not available — install the compose plugin first."
 good "docker + docker compose available"
 
@@ -117,7 +116,7 @@ echo "     Proxied. SSL/TLS = Full (strict)."
 echo "  3. Create GitHub Actions Secrets: DEPLOY_HOST, DEPLOY_PORT,"
 echo "     DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS"
 echo "     (+ GHCR_USERNAME & GHCR_TOKEN if the GHCR package is private)."
-echo "  4. Trigger the 'Build, Publish to GHCR, and Deploy' workflow."
+echo "  4. Trigger the 'Cloud Production Pipeline' workflow."
 echo
 echo "  NOTE: The very FIRST deploy can be run with SKIP_PUBLIC_HEALTHCHECK=1"
 echo "        if DNS/reverse-proxy/Cloudflare are not ready yet. All normal"
