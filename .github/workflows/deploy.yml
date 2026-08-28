@@ -99,6 +99,10 @@ jobs:
     name: Deploy to production over SSH (with rollback)
     needs: build-push
     runs-on: ubuntu-latest
+    # Bind to the 'production' GitHub Environment so its environment-level
+    # secrets (DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS,
+    # GHCR_USERNAME/GHCR_TOKEN) are exposed to this job.
+    environment: production
     steps:
       - name: Checkout (for deploy scripts)
         uses: actions/checkout@v4
