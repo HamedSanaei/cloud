@@ -8,13 +8,13 @@ export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
   const [searchOpen, setSearchOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
-  const [dark, setDark] = useState(() => localStorage.getItem('mizban-theme') === 'dark')
+  const [dark, setDark] = useState(() => localStorage.getItem('cloud-server-theme') === 'dark')
   const searchRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
 
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
-    localStorage.setItem('mizban-theme', dark ? 'dark' : 'light')
+    localStorage.setItem('cloud-server-theme', dark ? 'dark' : 'light')
   }, [dark])
 
   useEffect(() => {
