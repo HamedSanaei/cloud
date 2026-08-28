@@ -51,3 +51,11 @@ npm run preview
 - `src/styles.css`: Design Tokenها و قواعد responsive و dark mode
 
 این نسخه Frontend مستقل است و برای نمایش داده‌ها از حالت‌های نمونه استفاده می‌کند. اتصال به API را می‌توان بدون تغییر ساختار صفحات در لایه داده اضافه کرد.
+
+## استقرار Production (Deployment)
+
+پایپ‌لاین CI/CD و استقرار Docker برای محیط Production در مستند زیر شرح داده شده است:
+
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+
+خلاصه: هر پوش به `main` یک تصویر تغییرناپذیر `ghcr.io/hamedsanaei/cloud:sha-<commit>` می‌سازد و آن را روی سرور Production (هم‌راه با Vendora) در `/opt/tofan/cloud` با کانتینر `tofan-cloud` روی پورت محلی `127.0.0.1:8540` و با **رول‌بک خودکار** استقرار می‌دهد.

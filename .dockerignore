@@ -1,0 +1,44 @@
+# Node
+node_modules
+**/node_modules
+
+# Build output
+dist
+build
+.vite
+
+# Local storage / logs
+*.log
+*.local
+
+# Version control
+.git
+.gitignore
+.github
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.prod.yml
+
+# Deploy scripts & docs (not needed inside the image)
+deploy/
+scripts/
+docs/
+
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Env & secrets (never ship to image)
+.env
+.env.*
+*.pem
+*.key
+*.ghcr.env
+.ghcr.env
+config.json
+known_hosts

@@ -1,0 +1,204 @@
+name: Build, Publish to GHCR, and Deploy
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+  workflow_dispatch:
+    inputs:
+      skip_public_healthcheck:
+        description: >-
+          Skip public health checks. Set to true ONLY for the initial bootstrap
+          before DNS/reverse-proxy/Cloudflare are live.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+# Only ONE production deployment may run at a time. A deployment already
+# modifying production must not be interrupted halfway by another push.
+concurrency:
+  group: cloud-production
+  cancel-in-progress: false
+
+jobs:
+  build-push:
+    name: Build & push immutable image to GHCR
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.ref }}
+      sha: ${{ steps.image.outputs.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build (Vite)
+        run: npm run build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # GHCR image names must be lowercase. Repo = HamedSanaei/cloud -> hamedsanaei/cloud
+      - name: Compute immutable image reference
+        id: image
+        run: |
+          REPO_LOWER="${{ github.repository }}"
+          REPO_LOWER="${REPO_LOWER,,}"
+          SHA="${{ github.sha }}"
+          echo "ref=ghcr.io/${REPO_LOWER}:sha-${SHA}" >>"$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >>"$GITHUB_OUTPUT"
+          echo "configured image: ghcr.io/${REPO_LOWER}:sha-${SHA}"
+
+      - name: Log in to GHCR (for push)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push immutable SHA image (BuildKit, cached layers)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.image.outputs.ref }}
+          labels: |
+            org.opencontainers.image.title=tofan-cloud
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Push convenience 'latest' tag
+        run: |
+          set -euo pipefail
+          LOW="${{ github.repository }}"
+          LOW="${LOW,,}"
+          SHA_REF="${{ steps.image.outputs.ref }}"
+          docker tag "${SHA_REF}" "ghcr.io/${LOW}:latest"
+          docker push "ghcr.io/${LOW}:latest"
+
+  deploy:
+    name: Deploy to production over SSH (with rollback)
+    needs: build-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for deploy scripts)
+        uses: actions/checkout@v4
+
+      - name: Validate required SSH secrets
+        env:
+          H: ${{ secrets.DEPLOY_HOST }}
+          U: ${{ secrets.DEPLOY_USER }}
+          K: ${{ secrets.DEPLOY_SSH_KEY }}
+          KH: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          [[ -n "$H" ]]  || { echo "::error::DEPLOY_HOST is not set"; exit 1; }
+          [[ -n "$U" ]]  || { echo "::error::DEPLOY_USER is not set"; exit 1; }
+          [[ -n "$K" ]]  || { echo "::error::DEPLOY_SSH_KEY is not set"; exit 1; }
+          [[ -n "$KH" ]] || { echo "::error::DEPLOY_KNOWN_HOSTS is not set"; exit 1; }
+          # GHCR auth is optional: only the pushing side needs write; the puller
+          # can use a PUBLIC package, or GHCR_USERNAME/GHCR_TOKEN (read:packages)
+          # for a PRIVATE package. They are validated & installed below if present.
+          echo "All required SSH deploy secrets present."
+
+      - name: Write SSH config (key + known_hosts)
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          [[ -n "$DEPLOY_SSH_KEY" ]] || { echo "::error::DEPLOY_SSH_KEY is empty"; exit 1; }
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Preconfigured known_hosts — NO ssh-keyscan, NO StrictHostKeyChecking=no.
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null   # validate it's a real key
+          echo "SSH key + known_hosts written and validated."
+
+      - name: Install deploy script on server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          PORT="${DEPLOY_PORT:-22}"
+          TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
+          SSHCOMMON="-o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -i ~/.ssh/deploy_key"
+          ssh ${SSHCOMMON} -p "${PORT}" "${TARGET}" "mkdir -p /opt/tofan/cloud/scripts"
+          scp ${SSHCOMMON} -P "${PORT}" deploy/scripts/deploy.sh "${TARGET}:/opt/tofan/cloud/scripts/deploy.sh"
+          ssh ${SSHCOMMON} -p "${PORT}" "${TARGET}" "chmod +x /opt/tofan/cloud/scripts/deploy.sh && rm -f /opt/tofan/cloud/.ghcr.env && echo 'deploy.sh installed'"
+
+      - name: Install GHCR credentials on server (PRIVATE package only)
+        # Only runs when GHCR_USERNAME is set => the package is private and the
+        # server needs credentials to pull. GHCR_TOKEN is written to a temporary
+        # 0600 file, used for an authenticated `docker login` by deploy.sh, then
+        # removed. The token value is never echoed.
+        if: ${{ secrets.GHCR_USERNAME != '' }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          set -euo pipefail
+          PORT="${DEPLOY_PORT:-22}"
+          TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
+          SSHCOMMON="-o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -i ~/.ssh/deploy_key"
+          printf 'GHCR_USERNAME=%s\nGHCR_TOKEN=%s\n' "$GHCR_USERNAME" "$GHCR_TOKEN" > "$RUNNER_TEMP/.ghcr.env"
+          chmod 600 "$RUNNER_TEMP/.ghcr.env"
+          scp ${SSHCOMMON} -P "${PORT}" "$RUNNER_TEMP/.ghcr.env" "${TARGET}:/opt/tofan/cloud/.ghcr.env"
+          ssh ${SSHCOMMON} -p "${PORT}" "${TARGET}" "chmod 600 /opt/tofan/cloud/.ghcr.env && echo 'ghcr creds staged on server (removed after deploy)'"
+
+      - name: Run deploy (with automatic rollback)
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          IMAGE: ${{ needs.build-push.outputs.image }}
+          SHA: ${{ needs.build-push.outputs.sha }}
+          SKIP: ${{ inputs.skip_public_healthcheck }}
+        run: |
+          set -euo pipefail
+          PORT="${DEPLOY_PORT:-22}"
+          TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
+          SKIP_PUBLIC="${SKIP:-false}"
+          # bootstrap-only flag; strict (0) is the default for all other runs
+          if [[ "$SKIP_PUBLIC" == "true" ]]; then
+            FLAG='SKIP_PUBLIC_HEALTHCHECK=1'
+            echo "NOTE: SKIP_PUBLIC_HEALTHCHECK=1 (initial bootstrap) — public checks skipped."
+          else
+            FLAG='SKIP_PUBLIC_HEALTHCHECK=0'
+          fi
+          echo "Deploying image: ${IMAGE} (sha ${SHA})"
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o ConnectTimeout=30 -i ~/.ssh/deploy_key \
+              -p "${PORT}" \
+              "${TARGET}" \
+              "set -a && source /opt/tofan/cloud/.ghcr.env 2>/dev/null || true; set +a; \
+               COMPOSE_DIR=/opt/tofan/cloud CLOUD_PORT=8540 ${FLAG} \
+               bash /opt/tofan/cloud/scripts/deploy.sh '${IMAGE}' 'https://cloud.tofanservice.ir'; \
+               rc=\$?; rm -f /opt/tofan/cloud/.ghcr.env; exit \$rc"

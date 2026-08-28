@@ -1,0 +1,47 @@
+name: tofan-cloud
+
+# tofan-cloud — production deployment of the Cloud console (static React SPA).
+#
+# Isolated completely from Vendora:
+#   - unique compose project name ("tofan-cloud")
+#   - own network ("tofan-cloud_net")
+#   - own localhost-only port (CLOUD_PORT, default 8540)
+#   - bound ONLY to 127.0.0.1; the host ingress + Cloudflare are the only
+#     way the public reaches this container.
+#
+# Replace IMAGE_SHA with a full GHCR image reference (e.g.
+# ghcr.io/hamedsanaei/cloud:sha-<commit>) — copy this file into
+# /opt/tofan/cloud/.env and set the variable there, or export it inline.
+#
+# The deploy script drives this file and always pins the exact immutable SHA.
+
+services:
+  cloud:
+    image: ${IMAGE_SHA:?IMAGE_SHA must be set to a full GHCR image tag}
+    container_name: tofan-cloud
+    restart: unless-stopped
+    networks:
+      - tofan-cloud_net
+    ports:
+      # Bind only to loopback — never expose publicly.
+      - "127.0.0.1:${CLOUD_PORT:-8540}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/healthz"]
+      interval: 20s
+      timeout: 4s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # nginx runs as the unprivileged 'nginx' user (set in the Dockerfile) and
+    # needs only these two capabilities to manage its own runtime files.
+    cap_add:
+      - CHOWN
+      - SETGID
+
+networks:
+  tofan-cloud_net:
+    driver: bridge
+    name: tofan-cloud_net
