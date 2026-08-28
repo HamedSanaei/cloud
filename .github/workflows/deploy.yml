@@ -151,12 +151,31 @@ jobs:
           scp ${SSHCOMMON} -P "${PORT}" deploy/scripts/deploy.sh "${TARGET}:/opt/tofan/cloud/scripts/deploy.sh"
           ssh ${SSHCOMMON} -p "${PORT}" "${TARGET}" "chmod +x /opt/tofan/cloud/scripts/deploy.sh && rm -f /opt/tofan/cloud/.ghcr.env && echo 'deploy.sh installed'"
 
+      - name: Detect GHCR auth dependencies (PRIVATE package only)
+        # GitHub Actions does NOT allow `secrets` in an `if:` conditional, and a
+        # step's own `env` is unavailable to that same step's `if:` (it is
+        # evaluated first). So we detect secret presence here and expose a plain
+        # boolean output, then gate the next step on that output. This keeps
+        # GHCR_TOKEN scoped to exactly one step and never prints it.
+        id: ghcr_auth
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$GHCR_USERNAME" ]]; then
+            echo "required=true" >> "$GITHUB_OUTPUT"
+            echo "GHCR package is PRIVATE: authenticated pull will be configured."
+          else
+            echo "required=false" >> "$GITHUB_OUTPUT"
+            echo "No GHCR credentials configured; assuming a PUBLIC GHCR package."
+          fi
+
       - name: Install GHCR credentials on server (PRIVATE package only)
-        # Only runs when GHCR_USERNAME is set => the package is private and the
-        # server needs credentials to pull. GHCR_TOKEN is written to a temporary
-        # 0600 file, used for an authenticated `docker login` by deploy.sh, then
-        # removed. The token value is never echoed.
-        if: ${{ secrets.GHCR_USERNAME != '' }}
+        # Runs only when the detection step above found GHCR_USERNAME set.
+        # GHCR_TOKEN is written to a temporary 0600 file, used for an
+        # authenticated `docker login` by deploy.sh, then removed. The token
+        # value is never echoed.
+        if: ${{ steps.ghcr_auth.outputs.required == 'true' }}
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
