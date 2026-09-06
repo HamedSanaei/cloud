@@ -233,6 +233,53 @@ UNKNOWN→reconciliation — all against the mock provider.
 - **404 on `/api/v1/catalog/vps`** — FX rate or pricing rules not configured
   (admin `POST /api/v1/admin/fx-rates`).
 
+## Local persistent configuration
+
+For local backend development, keep secrets in `backend/.env.local` (git-ignored,
+loaded automatically — never committed):
+
+```env
+LEASEWEB_API_KEY=YOUR_LOCAL_SECRET
+LEASEWEB_MODE=live
+LEASEWEB_ORDERING_ENABLED=false
+```
+
+Loading is centralized in `backend/src/lib/env-loader.ts`, invoked once from
+`loadConfig()` before any config is read. Precedence:
+
+1. existing process environment variables (always win)
+2. `backend/.env.local`
+3. `backend/.env`
+4. application defaults
+
+All local commands see the file automatically, from any working directory:
+
+```bash
+npm --prefix backend run dev
+npm --prefix backend run db:migrate
+npm --prefix backend run leaseweb -- doctor
+npm --prefix backend run leaseweb -- sync-offers
+npm --prefix backend run leaseweb -- list-monthly
+npm --prefix backend run env:check
+```
+
+Warnings:
+
+- **Never commit `backend/.env.local`** (it is git-ignored; `git check-ignore backend/.env.local` must list it).
+- **Never send the API key in chat or logs** — diagnostics only print `configured`/`missing`.
+- **Keep paid ordering disabled during discovery**: `LEASEWEB_ORDERING_ENABLED=false`.
+- Production never uses these files: `NODE_ENV=production` skips file loading entirely, Docker build contexts ignore `*.env.local`, and nothing is COPY'd into images.
+
+First verification command after pasting your key:
+
+```bash
+npm --prefix backend run env:check
+# backend/.env.local: found
+# LEASEWEB_API_KEY: configured
+# LEASEWEB_MODE: live
+# LEASEWEB_ORDERING_ENABLED: false
+```
+
 ## Read-only live setup (account discovery)
 
 Connect the backend to the real Leaseweb account **without placing any paid

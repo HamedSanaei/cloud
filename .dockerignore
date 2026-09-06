@@ -35,7 +35,13 @@ Thumbs.db
 
 # Env & secrets (never ship to image)
 .env
+.env.local
 .env.*
+.env.*.local
+backend/.env
+backend/.env.local
+backend/.env.*
+backend/.env.*.local
 *.pem
 *.key
 *.ghcr.env

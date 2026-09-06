@@ -4,6 +4,7 @@
  * logged, never committed, and never exposed through any API endpoint.
  */
 import { z } from 'zod'
+import { loadLocalEnvFiles } from './lib/env-loader.js'
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -63,6 +64,12 @@ export type AppConfig = z.infer<typeof envSchema>
 let cached: AppConfig | null = null
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  // Centralized local env loading (backend/.env.local then backend/.env).
+  // Runs before any config value is read; explicit process env wins; skipped
+  // in production. Every entrypoint (API, worker, migrate, seed, CLI) funnels
+  // through loadConfig(), so this is the only place files are read.
+  if (env === process.env) loadLocalEnvFiles()
+
   const parsed = envSchema.safeParse(env)
   if (!parsed.success) {
     const details = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')

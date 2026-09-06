@@ -18,6 +18,7 @@
  *    LONGER CONTRACT are never collapsed into a single "monthly".
  */
 import { loadConfig, getConfig } from '../config.js'
+import { describeLocalEnv } from '../lib/env-loader.js'
 import { createDb } from '../db/index.js'
 import { migrate } from '../db/migrate.js'
 import { registerConfiguredProviders, getProvider } from '../modules/providers/registry.js'
@@ -48,8 +49,11 @@ function getMonthlyInvoicingOptions(billingOptions: unknown): ProviderBillingOpt
 async function runDoctor() {
   const config = getConfig()
   const orderingEnabled = config.LEASEWEB_ORDERING_ENABLED
+  const local = describeLocalEnv()
   console.log('Leaseweb doctor')
-  console.log('  mode                 :', config.LEASEWEB_MODE)
+  console.log(`  LEASEWEB_API_KEY      : ${local.apiKey}`)
+  console.log(`  LEASEWEB_MODE         : ${local.mode}`)
+  console.log(`  LEASEWEB_ORDERING_ENABLED: ${local.orderingEnabled}`)
   console.log('  ordering enabled     :', orderingEnabled ? 'YES' : 'NO')
   console.log('  paid POST safety guard:', orderingEnabled ? 'INACTIVE — live ordering allowed' : 'ACTIVE')
 

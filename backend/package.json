@@ -21,7 +21,8 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:check": "drizzle-kit check",
     "seed": "tsx src/scripts/seed.ts",
-    "leaseweb": "tsx src/scripts/leaseweb-cli.ts"
+    "leaseweb": "tsx src/scripts/leaseweb-cli.ts",
+    "env:check": "tsx src/scripts/env-check.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
