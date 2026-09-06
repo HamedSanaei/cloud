@@ -1,5 +1,6 @@
-import { AlertTriangle, Inbox, UserRoundCheck, type LucideIcon } from 'lucide-react'
+import { AlertTriangle, Inbox, RefreshCw, UserRoundCheck, type LucideIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { Button } from './Button'
 import { LinkButton } from './Button'
 import { Card } from './Card'
 
@@ -52,6 +53,23 @@ export function LoadingState({ label = 'در حال بارگذاری...' }: { la
     <div className="loading-state" role="status">
       <span className="spinner" />
       <span>{label}</span>
+    </div>
+  )
+}
+
+export function QueryError({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <div className="empty-state empty-state--compact">
+      <span className="empty-state__icon"><AlertTriangle size={28} /></span>
+      <h3>دریافت اطلاعات ناموفق بود</h3>
+      <p>{message}</p>
+      {onRetry ? (
+        <div className="empty-state__action">
+          <Button variant="secondary" size="sm" icon={<RefreshCw size={16} />} onClick={onRetry}>
+            تلاش مجدد
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }

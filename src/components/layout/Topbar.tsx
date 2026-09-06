@@ -2,19 +2,34 @@ import { Bell, Menu, Moon, Search, Sun, UserRound, WalletCards, X } from 'lucide
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { accountLinks, allSearchItems } from '../../data/navigation'
+import { useApiQuery } from '../../hooks/useApiQuery'
+import { getNotifications, getWalletSummary } from '../../lib/endpoints'
+import { formatToman } from '../../lib/format'
 
 export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
-  const [dark, setDark] = useState(() => localStorage.getItem('cloud-server-theme') === 'dark')
+  const [dark, setDark] = useState(() => {
+    try {
+      return localStorage.getItem('cloud-server-theme') === 'dark'
+    } catch {
+      return false
+    }
+  })
   const searchRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
+  const wallet = useApiQuery(getWalletSummary)
+  const notifications = useApiQuery(getNotifications)
 
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
-    localStorage.setItem('cloud-server-theme', dark ? 'dark' : 'light')
+    try {
+      localStorage.setItem('cloud-server-theme', dark ? 'dark' : 'light')
+    } catch {
+      // ignore storage errors
+    }
   }, [dark])
 
   useEffect(() => {
@@ -38,6 +53,8 @@ export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
     setSearchOpen(false)
     setQuery('')
   }
+
+  const unreadCount = (notifications.data ?? []).filter((item) => !item.read).length
 
   return (
     <header className="topbar">
@@ -74,7 +91,7 @@ export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
 
       <Link to="/wallet" className="wallet-summary">
         <WalletCards size={19} />
-        <span><small>کیف پول پیش‌فرض</small><strong>۰ تومان</strong></span>
+        <span><small>کیف پول پیش‌فرض</small><strong>{wallet.loading ? '...' : formatToman(wallet.data?.totalBalance ?? 0)}</strong></span>
       </Link>
 
       <div className="topbar__actions">
@@ -84,12 +101,18 @@ export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
         <div className="menu-anchor">
           <button type="button" className="icon-button" onClick={() => setNotificationsOpen((value) => !value)} aria-label="اعلان‌ها">
             <Bell size={20} />
-            <span className="notification-dot" />
+            {unreadCount > 0 ? <span className="notification-dot" /> : null}
           </button>
           {notificationsOpen ? (
             <div className="popover popover--notifications">
               <strong>اعلان‌ها</strong>
-              <p>اعلان جدیدی ندارید.</p>
+              {notifications.loading ? (
+                <p>در حال دریافت...</p>
+              ) : !notifications.data?.length ? (
+                <p>اعلان جدیدی ندارید.</p>
+              ) : (
+                notifications.data.slice(0, 5).map((item) => <p key={item.id}>{item.title}</p>)
+              )}
             </div>
           ) : null}
         </div>

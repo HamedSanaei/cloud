@@ -22,12 +22,11 @@ permissions:
 
 jobs:
   # ==========================================================================
-  # JOB 1 — test-build
-  # Runs for PR, push to main, and workflow_dispatch. Validates the app and
-  # the production image. Never pushes or deploys.
+  # JOB 1 — test-build (frontend)
+  # Runs for PR, push to main, and workflow_dispatch. Never pushes or deploys.
   # ==========================================================================
   test-build:
-    name: Test, build, and smoke-test
+    name: Test, build, and smoke-test (frontend)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -83,14 +82,113 @@ jobs:
           [[ "$code" == "200" ]] || { echo "::error::SPA route did not return 200"; exit 1; }
 
   # ==========================================================================
-  # JOB 2 — build-push
+  # JOB 2 — backend-check
+  # Runs for PR, push to main, and workflow_dispatch against ephemeral
+  # PostgreSQL + Redis service containers. Never pushes or deploys, and never
+  # contacts the real Leaseweb API (mock mode only).
+  # ==========================================================================
+  backend-check:
+    name: Backend typecheck, lint, tests, migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: cloud
+          POSTGRES_PASSWORD: cloud
+          POSTGRES_DB: cloud
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cloud -d cloud"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgres://cloud:cloud@127.0.0.1:5432/cloud
+      REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: backend
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: backend
+        run: npm run lint
+
+      - name: Unit tests (pricing, money, providers, state machine)
+        working-directory: backend
+        run: npm run test:unit
+
+      - name: Migration validation (apply migrations to ephemeral PostgreSQL)
+        working-directory: backend
+        run: npm run db:migrate
+
+      - name: Integration tests (auth, wallets, orders, provisioning, permissions)
+        working-directory: backend
+        run: npm run test:integration
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image (validation)
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: false
+          load: true
+          tags: tofan-cloud-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test backend image (health endpoints)
+        run: |
+          set -euo pipefail
+          IMAGE_ID="$(docker images -q tofan-cloud-api:ci | head -n1)"
+          [[ -n "$IMAGE_ID" ]] || { echo "::error::backend image not found"; exit 1; }
+          docker rm -f tofan-cloud-api-smoke >/dev/null 2>&1 || true
+          docker run -d --rm --name tofan-cloud-api-smoke -p 127.0.0.1:8902:8000 \
+            -e NODE_ENV=test -e DATABASE_URL="$DATABASE_URL" -e REDIS_URL="$REDIS_URL" \
+            -e AUTH_SECRET=ci-smoke-secret-0123456789abcdef \
+            -e LEASEWEB_MODE=mock \
+            "${IMAGE_ID}" >/dev/null
+          trap 'docker rm -f tofan-cloud-api-smoke >/dev/null 2>&1 || true' EXIT
+          sleep 8
+          echo "--- /api/health/live ---"
+          curl -fsS http://127.0.0.1:8902/api/health/live
+          echo
+          echo "--- /api/health/ready ---"
+          curl -fsS http://127.0.0.1:8902/api/health/ready
+          echo
+
+  # ==========================================================================
+  # JOB 3 — build-push (web + api images)
   # Runs ONLY for push to main and workflow_dispatch (never for pull_request).
-  # Builds and pushes the immutable SHA image plus a convenience latest tag in
-  # one BuildKit operation. Production deploys always use the SHA tag.
+  # Both images are pushed with immutable SHA tags plus a convenience latest in
+  # the SAME BuildKit operation per image. Deploys always use the SHA tags.
   # ==========================================================================
   build-push:
-    name: Build & push image to GHCR
-    needs: test-build
+    name: Build & push images to GHCR
+    needs: [test-build, backend-check]
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
     permissions:
@@ -98,6 +196,7 @@ jobs:
       packages: write
     outputs:
       image: ${{ steps.image.outputs.ref }}
+      api_image: ${{ steps.image.outputs.api_ref }}
       sha: ${{ steps.image.outputs.sha }}
     steps:
       - name: Checkout
@@ -111,10 +210,13 @@ jobs:
           REPO_LOWER="${REPO_LOWER,,}"
           SHA="${{ github.sha }}"
           echo "ref=ghcr.io/${REPO_LOWER}:sha-${SHA}"       >>"$GITHUB_OUTPUT"
-          # convenience tag — never used as the deployment source
+          echo "api_ref=ghcr.io/${REPO_LOWER}-api:sha-${SHA}" >>"$GITHUB_OUTPUT"
+          # convenience tags — never used as the deployment source
           echo "latest=ghcr.io/${REPO_LOWER}:latest"        >>"$GITHUB_OUTPUT"
+          echo "api_latest=ghcr.io/${REPO_LOWER}-api:latest" >>"$GITHUB_OUTPUT"
           echo "sha=${SHA}"                                  >>"$GITHUB_OUTPUT"
-          echo "configured image: ghcr.io/${REPO_LOWER}:sha-${SHA}"
+          echo "configured web image: ghcr.io/${REPO_LOWER}:sha-${SHA}"
+          echo "configured api image: ghcr.io/${REPO_LOWER}-api:sha-${SHA}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -126,12 +228,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & push image to GHCR (immutable SHA + convenience latest)
-        # Pushed in ONE BuildKit operation (push: true) so BOTH tags land on
-        # GHCR. The image is NOT loaded into the runner's local daemon, so a
-        # later `docker tag`/`docker push` would fail — avoid that entirely.
-        # The sha-<commit> tag is the immutable version actually deployed; the
-        # `latest` tag is a convenience pointer only.
+      - name: Build & push web image (immutable SHA + convenience latest)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -146,8 +243,23 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build & push backend image (immutable SHA + convenience latest)
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: |
+            ${{ steps.image.outputs.api_ref }}
+            ${{ steps.image.outputs.api_latest }}
+          labels: |
+            org.opencontainers.image.title=cloud-server-backend
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   # ==========================================================================
-  # JOB 3 — deploy-production
+  # JOB 4 — deploy-production
   # Runs ONLY for push to main and workflow_dispatch (never for pull_request).
   # Bound to the 'production' GitHub Environment so its secrets are exposed.
   # ==========================================================================
@@ -262,6 +374,7 @@ jobs:
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           IMAGE: ${{ needs.build-push.outputs.image }}
+          API_IMAGE: ${{ needs.build-push.outputs.api_image }}
           SHA: ${{ needs.build-push.outputs.sha }}
           SKIP: ${{ inputs.skip_public_healthcheck }}
         run: |
@@ -276,12 +389,13 @@ jobs:
           else
             FLAG='SKIP_PUBLIC_HEALTHCHECK=0'
           fi
-          echo "Deploying image: ${IMAGE} (sha ${SHA})"
+          echo "Deploying web image: ${IMAGE} (sha ${SHA})"
+          echo "Deploying api image: ${API_IMAGE}"
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
               -o ConnectTimeout=30 -i ~/.ssh/deploy_key \
               -p "${PORT}" \
               "${TARGET}" \
               "set -a && source /opt/tofan/cloud/.ghcr.env 2>/dev/null || true; set +a; \
-               COMPOSE_DIR=/opt/tofan/cloud CLOUD_PORT=8540 ${FLAG} \
+               COMPOSE_DIR=/opt/tofan/cloud CLOUD_PORT=8540 API_IMAGE='${API_IMAGE}' ${FLAG} \
                bash /opt/tofan/cloud/scripts/deploy.sh '${IMAGE}' 'https://cloud.tofanservice.ir'; \
                rc=\$?; rm -f /opt/tofan/cloud/.ghcr.env; exit \$rc"

@@ -1,8 +1,20 @@
 import { LogOut, X } from 'lucide-react'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useNavigate } from 'react-router-dom'
 import { accountLinks, navGroups } from '../../data/navigation'
+import { useToast } from '../ui/Toast'
+import { clearAuthToken, isApiConfigured } from '../../lib/apiClient'
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { showToast } = useToast()
+  const navigate = useNavigate()
+
+  const logout = () => {
+    if (isApiConfigured()) clearAuthToken()
+    showToast('از حساب کاربری خارج شدید.')
+    onClose()
+    navigate('/dashboard')
+  }
+
   return (
     <>
       <button
@@ -54,7 +66,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               <span>{label}</span>
             </NavLink>
           ))}
-          <button type="button" className="nav-item nav-item--compact nav-item--danger">
+          <button type="button" className="nav-item nav-item--compact nav-item--danger" onClick={logout}>
             <LogOut size={18} />
             <span>خروج</span>
           </button>

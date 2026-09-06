@@ -92,10 +92,48 @@ else
   info "WARN: deploy.sh not found beside bootstrap; the GitHub Actions workflow will push it at first deploy."
 fi
 
-# --- 5) Starter metadata (empty image => first deploy has nothing to roll back to)
+# --- 5) Secrets .env template (NEVER committed; used by docker compose) --------
+# Only created when missing; existing values are never overwritten.
+ENV_FILE="${COMPOSE_DIR}/.env"
+if [[ ! -f "${ENV_FILE}" ]]; then
+  install -m 0600 -o root -g root /dev/null "${ENV_FILE}"
+  {
+    echo "# tofan-cloud production secrets — keep this file private (chmod 600)."
+    echo "# docker compose reads this file automatically from ${COMPOSE_DIR}."
+    echo
+    echo "# --- database / redis ---"
+    echo "DATABASE_URL=postgres://cloud:CHANGE_ME_DB_PASSWORD@cloud-postgres:5432/cloud"
+    echo "REDIS_URL=redis://cloud-redis:6379"
+    echo "POSTGRES_PASSWORD=CHANGE_ME_DB_PASSWORD"
+    echo
+    echo "# --- auth ---"
+    echo "AUTH_SECRET=$(openssl rand -hex 32 2>/dev/null || echo CHANGE_ME_AUTH_SECRET)"
+    echo "COOKIE_SECURE=true"
+    echo "CORS_ORIGIN="
+    echo
+    echo "# --- leaseweb (defaults are SAFE: mock mode, ordering disabled) ---"
+    echo "LEASEWEB_MODE=mock"
+    echo "LEASEWEB_API_BASE_URL=https://api.leaseweb.com"
+    echo "LEASEWEB_API_KEY="
+    echo "LEASEWEB_ORDERING_ENABLED=false"
+    echo
+    echo "# --- business ---"
+    echo "DEFAULT_PROVIDER=leaseweb"
+    echo "QUOTE_TTL_MINUTES=15"
+    echo "RENEWAL_LOOKAHEAD_DAYS=3"
+    echo "RENEWAL_GRACE_DAYS=3"
+    echo "LOG_LEVEL=info"
+  } >"${ENV_FILE}"
+  chmod 600 "${ENV_FILE}"
+  good "created secrets template: ${ENV_FILE} (EDIT IT: set POSTGRES_PASSWORD, AUTH_SECRET, LEASEWEB_API_KEY)"
+else
+  info ".env already exists — leaving it untouched."
+fi
+
+# --- 6) Starter metadata (empty images => first deploy has nothing to roll back to)
 if [[ ! -f "${COMPOSE_DIR}/deployed.version" ]]; then
   install -m 0644 -o root -g root /dev/null "${COMPOSE_DIR}/deployed.version"
-  printf 'sha=\nimage=\ndeployed_at=\npublic_url=\n' >"${COMPOSE_DIR}/deployed.version"
+  printf 'sha=\nimage=\napi_image=\ndeployed_at=\npublic_url=\n' >"${COMPOSE_DIR}/deployed.version"
   good "created empty deployed.version"
 else
   info "deployed.version already exists — leaving it untouched."
@@ -105,7 +143,13 @@ echo
 echo "=== tofan-cloud server bootstrap complete ==="
 echo "  Deployment dir  : ${COMPOSE_DIR}"
 echo "  Local port      : 127.0.0.1:${CLOUD_PORT}"
-echo "  (application port is loopback-only and never exposed publicly)"
+echo "  (application port is loopback-only; PostgreSQL/Redis/API have NO public port)"
+echo
+echo "IMPORTANT — before the first deploy:"
+echo "  1. EDIT ${COMPOSE_DIR}/.env and set:"
+echo "       POSTGRES_PASSWORD   (long random password)"
+echo "       AUTH_SECRET         (already randomized if openssl is available)"
+echo "       LEASEWEB_API_KEY   (only when going live; keep LEASEWEB_MODE=mock to start)"
 echo
 echo "Next steps:"
 echo "  1. INSPECT your existing ingress/Vendora setup, then add a dedicated"

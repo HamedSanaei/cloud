@@ -3,3 +3,15 @@ dist
 .vite
 *.local
 *.log
+
+# backend (server package)
+backend/node_modules
+backend/dist
+backend/coverage
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# local docker/dev state
+.docker/
+*.pid

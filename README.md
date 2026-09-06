@@ -52,6 +52,30 @@ npm run preview
 
 این نسخه Frontend مستقل است و برای نمایش داده‌ها از حالت‌های نمونه استفاده می‌کند. اتصال به API را می‌توان بدون تغییر ساختار صفحات در لایه داده اضافه کرد.
 
+## بک‌اند (Backend)
+
+از نسخه جدید، یک بک‌اند Production-grade در پوشه `backend/` وجود دارد:
+
+- **تکنولوژی:** Node.js 24، TypeScript، Fastify، PostgreSQL + Drizzle ORM، Redis + BullMQ، Argon2id
+- **معماری:** پلتفرم چند-پرووایدر (سرویس‌دهنده انتزاعی `CloudProvider`)، اولین پرووایدر واقعی **Leaseweb** با حالت امن `mock` به‌صورت پیش‌فرض
+- **مالی:** کیف پول + دفتر کل غیرقابل‌تغییر، فاکتور، اشتراک ماهانه، نرخ ارز و قیمت‌گذاری — همه با اعداد صحیح (ریال/سنت) و بدون float
+- **ایمنی:** عملیات خرید idempotent، پروویژن در صف پس‌زمینه، بازیابی (reconciliation) برای نتایج نامشخص، رول‌بک خودکار در دیپلوی
+
+اجرای محلی بک‌اند:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d   # Postgres + Redis (فقط 127.0.0.1)
+cd backend && npm ci && npm run db:migrate && npm run seed
+npm run dev          # API روی پورت 8000
+npm run dev:worker   # worker (ترمینال دوم)
+```
+
+مستندات:
+
+- [docs/BACKEND.md](docs/BACKEND.md) — معماری، دیتابیس، API، اجرای محلی و تست‌ها
+- [docs/LEASEWEB.md](docs/LEASEWEB.md) — یکپارچه‌سازی Leaseweb، حالت mock/live و امنیت خرید واقعی
+- [docs/BILLING.md](docs/BILLING.md) — کیف پول، دفتر کل، فاکتور، اشتراک ماهانه و قیمت‌گذاری
+
 ## استقرار Production (Deployment)
 
 پایپ‌لاین CI/CD و استقرار Docker برای محیط Production در مستند زیر شرح داده شده است:

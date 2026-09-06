@@ -19,6 +19,10 @@ import { Input, Select } from '../components/ui/FormControls'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Stepper } from '../components/ui/Stepper'
 import { useToast } from '../components/ui/Toast'
+import { isApiConfigured } from '../lib/apiClient'
+import { checkDomainAvailability, createServer, listWallets, registerDomain } from '../lib/endpoints'
+import { formatFaNumber } from '../lib/format'
+import { useApiQuery } from '../hooks/useApiQuery'
 
 const serverSteps = ['موقعیت و دیتاسنتر', 'انتخاب منابع', 'سیستم عامل', 'مالی', 'تایید نهایی']
 
@@ -28,14 +32,32 @@ export function CreateServerPage() {
   const [plan, setPlan] = useState('standard')
   const [os, setOs] = useState('ubuntu')
   const [name, setName] = useState('server-01')
+  const [walletId, setWalletId] = useState('')
+  const [billingPeriod, setBillingPeriod] = useState('ماهانه')
+  const [submitting, setSubmitting] = useState(false)
   const navigate = useNavigate()
   const { showToast } = useToast()
+  const wallets = useApiQuery(listWallets)
 
-  const next = () => {
-    if (step < serverSteps.length - 1) setStep((value) => value + 1)
-    else {
+  const next = async () => {
+    if (step < serverSteps.length - 1) {
+      setStep((value) => value + 1)
+      return
+    }
+    if (!isApiConfigured()) {
       showToast('سرور نمونه با موفقیت به صف ساخت اضافه شد.')
       navigate('/servers')
+      return
+    }
+    setSubmitting(true)
+    try {
+      await createServer({ name, region, plan, os, walletId: walletId || undefined, billingPeriod })
+      showToast('سرور با موفقیت به صف ساخت اضافه شد.')
+      navigate('/servers')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'ایجاد سرور ناموفق بود.')
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -96,9 +118,14 @@ export function CreateServerPage() {
 
           {step === 3 ? (
             <div className="wizard-form">
-              <Select label="کیف پول پرداخت"><option>کیف پول پیش‌فرض — ۰ تومان</option></Select>
-              <Select label="دوره پرداخت"><option>ماهانه</option><option>سه‌ماهه</option><option>سالانه</option></Select>
-              <div className="info-box"><WalletCards size={20} /><span>موجودی فعلی برای ثبت سفارش کافی نیست. این نسخه نمایشی از پرداخت عبور می‌کند.</span></div>
+              <Select label="کیف پول پرداخت" value={walletId} onChange={(event) => setWalletId(event.target.value)}>
+                <option value="">کیف پول پیش‌فرض — ۰ تومان</option>
+                {(wallets.data ?? []).map((wallet) => (
+                  <option key={wallet.id} value={wallet.id}>{wallet.name}</option>
+                ))}
+              </Select>
+              <Select label="دوره پرداخت" value={billingPeriod} onChange={(event) => setBillingPeriod(event.target.value)}><option>ماهانه</option><option>سه‌ماهه</option><option>سالانه</option></Select>
+              <div className="info-box"><WalletCards size={20} /><span>{isApiConfigured() ? 'مبلغ سفارش از کیف پول انتخاب‌شده کسر خواهد شد.' : 'موجودی فعلی برای ثبت سفارش کافی نیست. این نسخه نمایشی از پرداخت عبور می‌کند.'}</span></div>
             </div>
           ) : null}
 
@@ -109,14 +136,14 @@ export function CreateServerPage() {
                 <ReviewRow label="موقعیت" value={region === 'tehran' ? 'تهران' : region === 'germany' ? 'آلمان' : 'ترکیه'} />
                 <ReviewRow label="منابع" value={plan === 'standard' ? 'استاندارد — ۲ CPU / ۴ GB' : plan === 'starter' ? 'اقتصادی — ۱ CPU / ۱ GB' : 'حرفه‌ای — ۴ CPU / ۸ GB'} />
                 <ReviewRow label="سیستم عامل" value={os.toUpperCase()} />
-                <ReviewRow label="پرداخت" value="ماهانه" />
+                <ReviewRow label="پرداخت" value={billingPeriod} />
               </div>
             </div>
           ) : null}
         </div>
         <div className="wizard-card__footer">
-          <Button variant="secondary" disabled={step === 0} onClick={() => setStep((value) => Math.max(0, value - 1))}>مرحله قبل</Button>
-          <Button icon={step === serverSteps.length - 1 ? <CheckCircle2 size={18} /> : undefined} onClick={next}>{step === serverSteps.length - 1 ? 'تایید و ایجاد سرور' : 'مرحله بعد'}</Button>
+          <Button variant="secondary" disabled={step === 0 || submitting} onClick={() => setStep((value) => Math.max(0, value - 1))}>مرحله قبل</Button>
+          <Button icon={step === serverSteps.length - 1 ? <CheckCircle2 size={18} /> : undefined} disabled={submitting} onClick={next}>{submitting ? 'در حال ایجاد...' : step === serverSteps.length - 1 ? 'تایید و ایجاد سرور' : 'مرحله بعد'}</Button>
         </div>
       </Card>
     </div>
@@ -133,16 +160,53 @@ export function RegisterDomainPage() {
   const [step, setStep] = useState(0)
   const [domain, setDomain] = useState('')
   const [searched, setSearched] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [available, setAvailable] = useState(true)
+  const [price, setPrice] = useState('۹۹۰ هزار تومان')
   const [period, setPeriod] = useState('1')
+  const [submitting, setSubmitting] = useState(false)
   const navigate = useNavigate()
   const { showToast } = useToast()
   const normalizedDomain = useMemo(() => domain.trim().replace(/^https?:\/\//, '').replace(/\/$/, ''), [domain])
+  const wallets = useApiQuery(listWallets)
+  const [walletId, setWalletId] = useState('')
 
-  const finish = () => {
-    if (step < 2) setStep((value) => value + 1)
-    else {
+  const checkAvailability = async () => {
+    setChecking(true)
+    try {
+      const result = await checkDomainAvailability(normalizedDomain)
+      setAvailable(result.available)
+      setSearched(true)
+      if (result.available && result.pricePerYear > 0) {
+        setPrice(`${formatFaNumber(result.pricePerYear)} تومان / سال`)
+      }
+      if (!result.available) showToast('این دامنه برای ثبت در دسترس نیست.')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'بررسی دامنه ناموفق بود.')
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  const finish = async () => {
+    if (step < 2) {
+      setStep((value) => value + 1)
+      return
+    }
+    if (!isApiConfigured()) {
       showToast('سفارش دامنه نمونه ثبت شد.')
       navigate('/domains')
+      return
+    }
+    setSubmitting(true)
+    try {
+      await registerDomain({ domain: normalizedDomain, periodYears: Number(period), walletId: walletId || undefined })
+      showToast('سفارش دامنه با موفقیت ثبت شد.')
+      navigate('/domains')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'ثبت دامنه ناموفق بود.')
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -157,30 +221,39 @@ export function RegisterDomainPage() {
             <div className="domain-search-step">
               <div className="domain-search-row">
                 <Input label="جستجوی دامنه" value={domain} onChange={(event) => { setDomain(event.target.value); setSearched(false) }} placeholder="example.com" />
-                <Button icon={<Search size={18} />} disabled={!normalizedDomain.includes('.')} onClick={() => setSearched(true)}>بررسی</Button>
+                <Button icon={<Search size={18} />} disabled={!normalizedDomain.includes('.') || checking} onClick={checkAvailability}>{checking ? 'در حال بررسی...' : 'بررسی'}</Button>
               </div>
               {searched ? (
-                <div className="domain-result"><CheckCircle2 size={24} /><div><strong>{normalizedDomain}</strong><span>این دامنه برای ثبت در دسترس است.</span></div><strong>۹۹۰ هزار تومان / سال</strong></div>
+                available ? (
+                  <div className="domain-result"><CheckCircle2 size={24} /><div><strong>{normalizedDomain}</strong><span>این دامنه برای ثبت در دسترس است.</span></div><strong>{price}</strong></div>
+                ) : (
+                  <p className="muted-copy">این دامنه در دسترس نیست؛ نام دیگری را امتحان کنید.</p>
+                )
               ) : <p className="muted-copy">پسوند دامنه را نیز وارد کنید؛ برای نمونه example.com</p>}
             </div>
           ) : null}
           {step === 1 ? (
             <div className="wizard-form">
               <Select label="دوره ثبت" value={period} onChange={(event) => setPeriod(event.target.value)}><option value="1">یک سال</option><option value="2">دو سال</option><option value="5">پنج سال</option></Select>
-              <Select label="کیف پول پرداخت"><option>کیف پول پیش‌فرض — ۰ تومان</option></Select>
-              <div className="info-box"><WalletCards size={20} /><span>در نسخه واقعی، مبلغ از کیف پول انتخاب‌شده کسر خواهد شد.</span></div>
+              <Select label="کیف پول پرداخت" value={walletId} onChange={(event) => setWalletId(event.target.value)}>
+                <option value="">کیف پول پیش‌فرض — ۰ تومان</option>
+                {(wallets.data ?? []).map((wallet) => (
+                  <option key={wallet.id} value={wallet.id}>{wallet.name}</option>
+                ))}
+              </Select>
+              <div className="info-box"><WalletCards size={20} /><span>{isApiConfigured() ? 'مبلغ سفارش از کیف پول انتخاب‌شده کسر خواهد شد.' : 'در نسخه واقعی، مبلغ از کیف پول انتخاب‌شده کسر خواهد شد.'}</span></div>
             </div>
           ) : null}
           {step === 2 ? (
             <div className="review-list review-list--centered">
               <ReviewRow label="دامنه" value={normalizedDomain || 'example.com'} />
               <ReviewRow label="دوره ثبت" value={`${period} سال`} />
-              <ReviewRow label="هزینه نهایی" value="۹۹۰ هزار تومان" />
+              <ReviewRow label="هزینه نهایی" value={price} />
               <ReviewRow label="پرداخت" value="کیف پول پیش‌فرض" />
             </div>
           ) : null}
         </div>
-        <div className="wizard-card__footer"><Button variant="secondary" disabled={step === 0} onClick={() => setStep((value) => Math.max(0, value - 1))}>مرحله قبل</Button><Button onClick={finish} disabled={step === 0 && !searched}>{step === 2 ? 'تایید و ثبت دامنه' : 'مرحله بعد'}</Button></div>
+        <div className="wizard-card__footer"><Button variant="secondary" disabled={step === 0 || submitting} onClick={() => setStep((value) => Math.max(0, value - 1))}>مرحله قبل</Button><Button onClick={finish} disabled={(step === 0 && !searched) || submitting}>{submitting ? 'در حال ثبت...' : step === 2 ? 'تایید و ثبت دامنه' : 'مرحله بعد'}</Button></div>
       </Card>
     </div>
   )

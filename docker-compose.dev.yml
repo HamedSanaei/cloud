@@ -1,0 +1,39 @@
+name: tofan-cloud-dev
+
+# Local development infrastructure only.
+#   docker compose -f docker-compose.dev.yml up -d
+# Exposes PostgreSQL + Redis on 127.0.0.1 (loopback only) so the backend can
+# be run with tsx from the host. NEVER use this file in production.
+services:
+  cloud-postgres:
+    image: postgres:17-alpine
+    container_name: tofan-cloud-dev-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: cloud
+      POSTGRES_PASSWORD: cloud
+      POSTGRES_DB: cloud
+    volumes:
+      - cloud-dev-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloud -d cloud"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  cloud-redis:
+    image: redis:7-alpine
+    container_name: tofan-cloud-dev-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  cloud-dev-postgres-data:
