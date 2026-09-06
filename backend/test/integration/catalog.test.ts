@@ -53,7 +53,7 @@ describe.skipIf(skip)('catalog retail safety (integration)', () => {
       userId,
       offerId: offer.id,
       locationCode: 'FRA-01',
-      billingOption: { billingCycle: 'monthly', contractTerm: 0, monthly: true },
+      billingOption: { billingCycle: 'monthly', contractTerm: 0 },
       operatingSystem: 'ubuntu-24.04',
     })
   }
@@ -72,11 +72,39 @@ describe.skipIf(skip)('catalog retail safety (integration)', () => {
         userId: '00000000-0000-0000-0000-000000000001',
         offerId: fresh!.id,
         locationCode: 'FRA-01',
-        billingOption: { billingCycle: 'monthly', contractTerm: 0, monthly: true },
+        billingOption: { billingCycle: 'monthly', contractTerm: 0 },
       }),
     ).rejects.toBeInstanceOf(ValidationError)
     // Re-enable for the remaining tests.
     await enableAllOffersForSale(ctx.db)
+  })
+
+  it('catalog sync is idempotent and classifies billing options centrally', async () => {
+    const before = await ctx.db.query.providerProducts.findMany()
+    await syncProviderCatalog(ctx.db, getProvider('leaseweb'))
+    const after = await ctx.db.query.providerProducts.findMany()
+    expect(after.length).toBe(before.length)
+
+    // No duplicated product/location combinations.
+    const key = (r: { provider: string; providerProductId: string; locationId: string | null }) =>
+      `${r.provider}|${r.providerProductId}|${r.locationId}`
+    expect(new Set(after.map(key)).size).toBe(after.length)
+
+    // Classifier output attached at sync: every stored option carries a
+    // classification and the exact provider values.
+    const sample = after.find((r) => r.providerProductId === 'VPS02_4' && r.billingOptions != null)!
+    const options = sample.billingOptions as Array<{
+      classification?: string
+      billingCycle: string
+      contractTerm?: number
+    }>
+    expect(options.length).toBeGreaterThanOrEqual(2)
+    expect(options.some((o) => o.classification === 'MONTH_TO_MONTH' && o.contractTerm === 0)).toBe(true)
+    expect(options.some((o) => o.classification === 'MONTHLY_BILLING_LONG_TERM_COMMITMENT' && o.contractTerm === 12)).toBe(true)
+    // The legacy mock-only monthly flag must not exist in stored options.
+    for (const o of options) {
+      expect('monthly' in o).toBe(false)
+    }
   })
 
   it('refuses quotes when the catalog is stale (CATALOG_MAX_AGE_MINUTES)', async () => {
@@ -105,7 +133,7 @@ describe.skipIf(skip)('catalog retail safety (integration)', () => {
     // Provider raises the price in the monthly billing option.
     const newOptions = JSON.parse(JSON.stringify(offer.billingOptions)) as Array<Record<string, unknown>>
     for (const b of newOptions) {
-      if (b.monthly === true) {
+      if (b.classification === 'MONTH_TO_MONTH') {
         b.amountCents = 3000
         b.amount = '30.00'
       }
@@ -140,7 +168,7 @@ describe.skipIf(skip)('catalog retail safety (integration)', () => {
     // Change the price again — the paid order/invoice must stay frozen.
     const options2 = JSON.parse(JSON.stringify(offer.billingOptions)) as Array<Record<string, unknown>>
     for (const b of options2) {
-      if (b.monthly === true) {
+      if (b.classification === 'MONTH_TO_MONTH') {
         b.amountCents = 5000
         b.amount = '50.00'
       }

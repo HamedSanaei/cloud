@@ -313,44 +313,70 @@ export function normalizeCatalog(raw: unknown): {
   return { offers, locations: [...locations.values()], raw }
 }
 
+/**
+ * Build billing options from the raw product configuration.
+ *
+ * SAFETY: only combinations the API actually proves are exposed. In
+ * particular, an independent `billingCycles` list plus an independent
+ * `contractTerms` list does NOT prove every cycle×term pairing is orderable,
+ * so no Cartesian product is generated. Evidence we accept:
+ *  1. a cycle object that embeds its own `contractTerms` (proven pairings), or
+ *  2. cycles with their own price and NO term list at all (the cycle is an
+ *     orderable option; the contract commitment is simply unknown).
+ * Anything else yields an empty list and the product stays catalog-only.
+ *
+ * The old behavior hardcoded `periodMonths: 1` and `monthly: true` for every
+ * option — that injected the mock's semantics into live data and is removed.
+ * Monthly classification now happens in the central classifier
+ * (modules/providers/billing.ts) from the exact provider values.
+ */
 function buildBillingOptions(
   cycleList: unknown[],
   termList: unknown[],
   detail: LswOrderingProductDetail,
 ): ProviderOffer['billingOptions'] {
-  if (cycleList.length === 0 && termList.length === 0) return []
+  if (cycleList.length === 0) return []
 
   const cycles = cycleList.map((raw) => {
-    if (typeof raw === 'string') return { id: raw, label: raw, price: undefined }
-    const c = raw as { id?: unknown; label?: unknown; price?: unknown }
+    if (typeof raw === 'string') return { id: raw, label: raw, price: undefined, terms: [] as unknown[] }
+    const c = raw as { id?: unknown; label?: unknown; price?: unknown; contractTerms?: unknown }
     return {
       id: asString(c.id) ?? asString(c.label) ?? 'unknown',
       label: asString(c.label) ?? asString(c.id) ?? 'unknown',
       price: c.price as { amount?: unknown; currency?: unknown } | undefined,
+      terms: Array.isArray(c.contractTerms) ? c.contractTerms : [],
     }
   })
-  const terms = termList.map((raw) => {
-    if (typeof raw === 'number' || typeof raw === 'string') return { id: raw }
-    return { id: (raw as { id?: unknown })?.id ?? 0 }
-  })
-  const effectiveTerms = terms.length > 0 ? terms : [{ id: 0 }]
 
   const options: ProviderOffer['billingOptions'] = []
   for (const cycle of cycles) {
-    for (const term of effectiveTerms) {
-      const amountCents = toCents(cycle.price?.amount) ?? (detail.price?.amount !== undefined ? toCents(detail.price.amount) : null)
-      const amount = typeof cycle.price?.amount === 'string' ? cycle.price.amount : undefined
+    const amountCents = toCents(cycle.price?.amount) ?? (detail.price?.amount !== undefined ? toCents(detail.price.amount) : null)
+    const amount = typeof cycle.price?.amount === 'string' ? cycle.price.amount : undefined
+
+    if (cycle.terms.length > 0) {
+      // Proven pairings: the cycle embeds its own contract terms.
+      for (const t of cycle.terms) {
+        const term = typeof t === 'number' || typeof t === 'string' ? t : (t as { id?: unknown })?.id
+        options.push({
+          billingCycle: cycle.id,
+          label: cycle.label,
+          contractTerm: term === undefined ? undefined : (term as string | number),
+          amountCents: amountCents ?? 0,
+          amount,
+        })
+      }
+    } else if (termList.length === 0) {
+      // Orderable cycle with its own price and no term info at all: expose the
+      // cycle as-is; the commitment stays unknown (classifier -> UNKNOWN).
       options.push({
         billingCycle: cycle.id,
         label: cycle.label,
-        contractTerm: term.id as string | number | undefined,
-        // A contractTerm of 1 month (or absent) with a monthly cycle => monthly.
-        periodMonths: 1,
         amountCents: amountCents ?? 0,
         amount,
-        monthly: true,
       })
     }
+    // else: independent cycle + term lists exist. We do NOT combine them —
+    // the API does not prove which pairings are orderable.
   }
   return options
 }

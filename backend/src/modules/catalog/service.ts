@@ -2,9 +2,11 @@ import { and, eq, sql } from 'drizzle-orm'
 import type { DbClient } from '../../db/index.js'
 import { productSyncRuns, providerLocations, providerProducts, providers } from '../../db/schema.js'
 import { NotFoundError } from '../../lib/errors.js'
+import type { CommercialType } from '../providers/provider.interface.js'
 import { getConfig } from '../../config.js'
 import { writeAudit } from '../audit/service.js'
-import type { CloudProvider } from '../providers/provider.interface.js'
+import type { CloudProvider, ProviderBillingOption } from '../providers/provider.interface.js'
+import { classifyBillingOptions, isMonthlyInvoicing } from '../providers/billing.js'
 
 /**
  * Sync a provider's catalog into the normalized tables.
@@ -71,10 +73,14 @@ export async function syncProviderCatalog(
 
       for (const offer of result.offers) {
         const locationId = locationIdByCode.get(offer.location) ?? null
-        const billingOptions = offer.billingOptions as never
-        const monthly = Array.isArray(offer.billingOptions) && offer.billingOptions.some((b) => b.monthly === true)
+        // Classify billing options centrally: the classifier derives monthly
+        // semantics ONLY from provider-returned evidence (never the legacy
+        // mock-only `monthly` flag).
+        const source = mode === 'live' ? 'leaseweb-api' : 'mock-fixture'
+        const billingOptions = classifyBillingOptions(source, (offer.billingOptions ?? []) as ProviderBillingOption[])
+        const monthly = billingOptions.some((b) => isMonthlyInvoicing(b.classification))
         const hasPrice = offer.providerPriceCents !== null && offer.providerPriceCents !== undefined
-        const hasBilling = Array.isArray(offer.billingOptions) && offer.billingOptions.length > 0
+        const hasBilling = billingOptions.length > 0
         if (monthly) monthlyEligibleCount.value++
         if (!hasPrice) missingPriceCount.value++
         if (!hasBilling) missingBillingCount.value++
@@ -200,8 +206,8 @@ export async function listOffers(
   let out = rows
   if (opts.monthlyOnly) {
     out = rows.filter((r) => {
-      const opts2 = r.billingOptions as Array<{ monthly?: boolean }> | null
-      return Array.isArray(opts2) && opts2.some((b) => b.monthly)
+      const opts2 = r.billingOptions as Array<{ classification?: CommercialType }> | null
+      return Array.isArray(opts2) && opts2.some((b) => isMonthlyInvoicing(b.classification))
     })
   }
   return out

@@ -82,7 +82,6 @@ export function mockBillingOptionsFor(product: MockProductDef, _locationCode: st
       periodMonths: 1,
       amountCents: monthlyCents,
       amount: (product.monthlyEuros * 1.0).toFixed(2),
-      monthly: true,
       // 12-month commitment at a small discount — fixture only.
     },
     {
@@ -92,7 +91,6 @@ export function mockBillingOptionsFor(product: MockProductDef, _locationCode: st
       periodMonths: 1,
       amountCents: Math.round(monthlyCents * 0.92),
       amount: (product.monthlyEuros * 0.92).toFixed(2),
-      monthly: true,
     },
   ]
 }

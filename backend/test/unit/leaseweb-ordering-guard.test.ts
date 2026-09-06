@@ -50,7 +50,7 @@ describe('live mode ordering guard (LEASEWEB_ORDERING_ENABLED=false)', () => {
         productId: 'VPS02_4',
         location: 'FRA-01',
         operatingSystem: 'ubuntu-24.04',
-        billingOption: { billingCycle: 'monthly', contractTerm: 0, monthly: true },
+        billingOption: { billingCycle: 'monthly', contractTerm: 0 },
         hostname: 'guard-test-vps',
       }),
     ).rejects.toSatisfy((err: unknown) => {

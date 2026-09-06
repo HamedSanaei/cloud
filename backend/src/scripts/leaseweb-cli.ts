@@ -4,7 +4,8 @@
  * Commands (all read-only unless stated):
  *   doctor        connectivity/auth/catalog check against the configured mode
  *   sync-offers   sync the provider catalog into normalized tables (idempotent)
- *   list-monthly  list monthly-compatible offers (--json for machine output)
+ *   list-monthly  list monthly-invoicing options with commercial classification
+ *                 (--json for machine output)
  *   price-preview provider EUR cost -> FX -> markup -> IRR -> toman (--json)
  *
  * Safety:
@@ -12,6 +13,9 @@
  *    LEASEWEB_ORDERING_ENABLED=true, and even then this CLI never orders.
  *  - The API key is read from config only; it is never printed, logged or
  *    written anywhere by this script.
+ *  - Monthly semantics come from the central classifier
+ *    (modules/providers/billing.ts); MONTH-TO-MONTH and MONTHLY BILLING /
+ *    LONGER CONTRACT are never collapsed into a single "monthly".
  */
 import { loadConfig, getConfig } from '../config.js'
 import { createDb } from '../db/index.js'
@@ -20,7 +24,8 @@ import { registerConfiguredProviders, getProvider } from '../modules/providers/r
 import { syncProviderCatalog } from '../modules/catalog/service.js'
 import { computePriceFromRules, getActiveFxRate, getPricingRules } from '../modules/pricing/service.js'
 import { eq } from 'drizzle-orm'
-import type { ProviderBillingOption } from '../modules/providers/provider.interface.js'
+import type { CommercialType, ProviderBillingOption } from '../modules/providers/provider.interface.js'
+import { commercialTypeLabel, isMonthlyInvoicing } from '../modules/providers/billing.js'
 
 function toman(rial: number): string {
   // 1 toman = 10 rials.
@@ -31,10 +36,12 @@ function eurCentsToEur(cents: number): string {
   return (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function getMonthlyOptions(billingOptions: unknown): Array<ProviderBillingOption & { monthly: true }> {
+/** Monthly-invoicing options only (MONTH_TO_MONTH or longer commitment). */
+function getMonthlyInvoicingOptions(billingOptions: unknown): ProviderBillingOption[] {
   if (!Array.isArray(billingOptions)) return []
-  return billingOptions.filter((b): b is ProviderBillingOption & { monthly: true } =>
-    b !== null && typeof b === 'object' && (b as ProviderBillingOption).monthly === true,
+  return billingOptions.filter(
+    (b): b is ProviderBillingOption =>
+      b !== null && typeof b === 'object' && isMonthlyInvoicing((b as ProviderBillingOption).classification),
   )
 }
 
@@ -101,7 +108,23 @@ async function runSyncOffers() {
   return 0
 }
 
-async function listMonthlyRows() {
+interface MonthlyRow {
+  providerProductId: string
+  location: string | null
+  vcpu: number
+  memoryMb: number
+  diskGb: number
+  trafficGb: number | null
+  providerPrice: { minorUnits: number | null; currency: string | null }
+  billing: { billingCycle: string | null; contractTerm: number | string | null }
+  classification: string
+  monthToMonth: boolean | null
+  customerBillingInterval: 'MONTHLY' | null
+  retailEnabled: boolean
+}
+
+/** One row per product/location × monthly-invoicing billing option. */
+async function listMonthlyRows(): Promise<MonthlyRow[]> {
   const { db, pool } = createDb()
   try {
     const rows = await db.query.providerProducts.findMany({
@@ -110,24 +133,33 @@ async function listMonthlyRows() {
     })
     const locations = await db.query.providerLocations.findMany()
     const codeById = new Map(locations.map((l) => [l.id, l.code]))
-    return rows.map((r) => {
-      const options = getMonthlyOptions(r.billingOptions)
-      return {
-        providerProductId: r.providerProductId,
-        location: codeById.get(r.locationId ?? '') ?? null,
-        vcpu: r.vcpu,
-        memoryMb: r.memoryMb,
-        diskGb: r.diskGb,
-        trafficGb: r.trafficGb,
-        providerPriceCents: r.providerPriceCents,
-        currency: r.providerCurrency,
-        billingCycle: options[0]?.billingCycle ?? null,
-        contractTerm: options[0]?.contractTerm ?? null,
-        monthlyEligible: true,
-        retailEnabled: r.enabled,
-        billingOptions: r.billingOptions,
+    const out: MonthlyRow[] = []
+    for (const r of rows) {
+      const options = getMonthlyInvoicingOptions(r.billingOptions)
+      for (const o of options) {
+        out.push({
+          providerProductId: r.providerProductId,
+          location: codeById.get(r.locationId ?? '') ?? null,
+          vcpu: r.vcpu,
+          memoryMb: r.memoryMb,
+          diskGb: r.diskGb,
+          trafficGb: r.trafficGb,
+          providerPrice: {
+            minorUnits: o.amountCents ?? r.providerPriceCents,
+            currency: r.providerCurrency,
+          },
+          billing: {
+            billingCycle: o.billingCycle,
+            contractTerm: o.contractTerm ?? null,
+          },
+          classification: o.classification ?? 'UNKNOWN',
+          monthToMonth: o.monthToMonth ?? null,
+          customerBillingInterval: o.customerBillingInterval ?? null,
+          retailEnabled: r.enabled,
+        })
       }
-    })
+    }
+    return out
   } finally {
     await pool.end()
   }
@@ -136,29 +168,66 @@ async function listMonthlyRows() {
 async function runListMonthly(json: boolean) {
   const rows = await listMonthlyRows()
   if (json) {
-    console.log(JSON.stringify({ syncedAt: new Date().toISOString(), offerings: rows }, null, 2))
+    console.log(
+      JSON.stringify(
+        {
+          syncedAt: new Date().toISOString(),
+          offerings: rows.map((r) => ({
+            providerProductId: r.providerProductId,
+            location: r.location,
+            vcpu: r.vcpu,
+            memoryMb: r.memoryMb,
+            diskGb: r.diskGb,
+            trafficGb: r.trafficGb,
+            providerPrice: r.providerPrice,
+            billing: r.billing,
+            classification: r.classification,
+            retailEnabled: r.retailEnabled,
+          })),
+        },
+        null,
+        2,
+      ),
+    )
     return 0
   }
   if (rows.length === 0) {
-    console.log('No monthly-compatible offers found. Run `npm run leaseweb -- sync-offers` first.')
+    console.log('No monthly-invoicing options found. Run `npm run leaseweb -- sync-offers` first.')
     return 0
   }
-  const hdr = ['PRODUCT', 'LOCATION', 'vCPU', 'RAM MB', 'DISK GB', 'TRAFFIC GB', 'EUR/mo', 'CURRENCY', 'BILLING CYCLE', 'CONTRACT TERM', 'RETAIL']
-  const table = rows.map((r) => [
-    r.providerProductId,
-    r.location ?? '-',
-    String(r.vcpu),
-    String(r.memoryMb),
-    String(r.diskGb),
-    String(r.trafficGb ?? '-'),
-    r.providerPriceCents != null ? eurCentsToEur(r.providerPriceCents) : '-',
-    r.currency ?? '-',
-    r.billingCycle ?? '-',
-    r.contractTerm != null ? String(r.contractTerm) : '-',
-    r.retailEnabled ? 'ENABLED' : 'disabled',
-  ])
+  const hdr = [
+    'PRODUCT',
+    'LOCATION',
+    'vCPU',
+    'RAM MB',
+    'DISK GB',
+    'TRAFFIC GB',
+    'EUR/mo',
+    'CURRENCY',
+    'BILLING CYCLE',
+    'CONTRACT TERM',
+    'COMMERCIAL TYPE',
+    'RETAIL',
+  ]
   console.log(hdr.join('\t'))
-  for (const row of table) console.log(row.join('\t'))
+  for (const r of rows) {
+    console.log(
+      [
+        r.providerProductId,
+        r.location ?? '-',
+        String(r.vcpu),
+        String(r.memoryMb),
+        String(r.diskGb),
+        String(r.trafficGb ?? '-'),
+        r.providerPrice.minorUnits != null ? eurCentsToEur(r.providerPrice.minorUnits) : '-',
+        r.providerPrice.currency ?? '-',
+        r.billing.billingCycle ?? '-',
+        r.billing.contractTerm != null ? String(r.billing.contractTerm) : '-',
+        commercialTypeLabel(r.classification as CommercialType),
+        r.retailEnabled ? 'ENABLED' : 'disabled',
+      ].join('\t'),
+    )
+  }
   return 0
 }
 
@@ -176,15 +245,14 @@ async function runPricePreview(json: boolean) {
     const rules = await getPricingRules(db, 'leaseweb')
     const out = []
     for (const r of rows) {
-      const options = getMonthlyOptions(r.billingOptions)
-      const amountCents = options[0]?.amountCents ?? r.providerPriceCents
+      const amountCents = r.providerPrice.minorUnits
       if (amountCents == null || amountCents <= 0) {
         out.push({ ...r, error: 'no monthly price' })
         continue
       }
       try {
         const snap = computePriceFromRules({
-          providerCurrency: r.currency ?? 'EUR',
+          providerCurrency: r.providerPrice.currency ?? 'EUR',
           providerAmountCents: amountCents,
           fxRate,
           rules,
@@ -206,13 +274,13 @@ async function runPricePreview(json: boolean) {
       console.log(JSON.stringify({ fxRate, offerings: out }, null, 2))
       return 0
     }
-    console.log('PRODUCT\tLOCATION\tEUR/mo\tFX\tMARKUP %\tFINAL IRR\tFINAL (TOMAN)')
+    console.log('PRODUCT\tLOCATION\tEUR/mo\tFX\tMARKUP %\tFINAL IRR\tFINAL (TOMAN)\tTYPE')
     for (const o of out) {
       if ('error' in o) {
         console.log(`${o.providerProductId}\t${o.location ?? '-'}\t-\t-\t-\tERROR: ${o.error}`)
       } else {
         console.log(
-          `${o.providerProductId}\t${o.location ?? '-'}\t${o.providerCostEur}\t${o.fxRate}\t${o.markupPercent}\t${o.finalRial}\t${o.finalToman}`,
+          `${o.providerProductId}\t${o.location ?? '-'}\t${o.providerCostEur}\t${o.fxRate}\t${o.markupPercent}\t${o.finalRial}\t${o.finalToman}\t${commercialTypeLabel(o.classification as CommercialType)}`,
         )
       }
     }

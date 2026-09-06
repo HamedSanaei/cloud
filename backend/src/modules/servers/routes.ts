@@ -143,27 +143,25 @@ async function resolveOffer(db: AppContext['db'], input: z.infer<typeof wizardSc
   return { ...offer, locationCode: loc?.code ?? 'FRA-01' }
 }
 
-/** Pick the plain monthly option (no commitment) from the stored offer. */
+/** Pick the month-to-month option (or any monthly-invoicing option) from the stored offer. */
 function pickMonthlyBillingOption(offer: { billingOptions: unknown }) {
   const options = (offer.billingOptions ?? []) as Array<{
     billingCycle: string
     contractTerm?: number | string
-    monthly?: boolean
+    classification?: string
     label?: string
     amountCents: number
   }>
   const monthly =
-    options.find((o) => o.monthly && (o.contractTerm === 0 || o.contractTerm === undefined)) ??
-    options.find((o) => o.monthly) ??
+    options.find((o) => o.classification === 'MONTH_TO_MONTH') ??
+    options.find((o) => o.classification === 'MONTHLY_BILLING_LONG_TERM_COMMITMENT') ??
     options[0]
   if (!monthly) throw new ValidationError('این محصول گزینه پرداخت ماهانه ندارد')
   return {
     billingCycle: monthly.billingCycle,
     label: monthly.label,
     contractTerm: monthly.contractTerm ?? 0,
-    periodMonths: 1,
     amountCents: monthly.amountCents,
-    monthly: true,
   }
 }
 

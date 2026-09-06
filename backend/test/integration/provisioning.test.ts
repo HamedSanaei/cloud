@@ -54,7 +54,7 @@ describe.skipIf(skip)('provisioning safety + permissions (integration)', () => {
       userId,
       offerId: offer!.id,
       locationCode: 'FRA-01',
-      billingOption: { billingCycle: 'monthly', contractTerm: 0, monthly: true },
+      billingOption: { billingCycle: 'monthly', contractTerm: 0 },
       operatingSystem: 'ubuntu-24.04',
     })
   }

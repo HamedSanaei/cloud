@@ -39,21 +39,47 @@ export type ProviderCapability =
   | 'terminate'
   | 'reconcile'
 
+/**
+ * Commercial classification of a provider billing option. Never guessed:
+ * derived only from provider-returned evidence (see modules/providers/billing.ts).
+ */
+export type CommercialType =
+  | 'MONTH_TO_MONTH'
+  | 'MONTHLY_BILLING_LONG_TERM_COMMITMENT'
+  | 'NON_MONTHLY_BILLING'
+  | 'UNKNOWN'
+
+export interface BillingClassification {
+  classification: CommercialType
+  /** 'MONTHLY' only when monthly invoicing is proven. */
+  customerBillingInterval: 'MONTHLY' | null
+  /** true only when month-to-month (monthly billing AND <=1-month commitment). */
+  monthToMonth: boolean | null
+  /** Why the classifier decided this — always populated. */
+  eligibilityReason: string
+  /** Evidence origin, e.g. 'leaseweb-api' or 'mock-fixture'. */
+  source: string
+}
+
 export interface ProviderBillingOption {
-  /** Provider-defined billing cycle id, e.g. what the API returns. */
+  /** Provider-defined billing cycle id, exactly as the API returns it. */
   billingCycle: string
   /** Human label, e.g. "Monthly". */
   label?: string
-  /** Provider-defined contract term (months or id), if any. */
+  /** Provider-defined contract term (months or id), exactly as returned. */
   contractTerm?: number | string
-  /** Period this option bills for, in months. 1 = monthly. */
+  /** Period this option bills for, in months — only when provable. 1 = monthly. */
   periodMonths?: number
   /** Total provider price for this option/period, integer cents. */
   amountCents?: number
   /** Original provider amount string when the API returns a decimal. */
   amount?: string
-  /** True when the provider offers this option as monthly. */
-  monthly?: boolean
+  /** Classifier output (added at catalog sync, not by the provider adapter). */
+  classification?: CommercialType
+  customerBillingInterval?: 'MONTHLY' | null
+  monthToMonth?: boolean | null
+  eligibilityReason?: string
+  source?: string
 }
 
 export interface ProviderOsOption {

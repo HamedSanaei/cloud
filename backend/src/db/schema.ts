@@ -302,7 +302,9 @@ export const providerProducts = pgTable(
     // for sale; an admin must explicitly enable them after price/markup/FX and
     // monthly-terms review. Catalog availability != retail approval.
     enabled: boolean('enabled').notNull().default(false),
-    /** Classifier: at least one provider billing option is month-to-month. */
+    /** Classifier: at least one provider billing option invoices monthly
+     * (MONTH_TO_MONTH or MONTHLY_BILLING_LONG_TERM_COMMITMENT). The exact
+     * per-option classification lives in billingOptions[].classification. */
     monthlyEligible: boolean('monthly_eligible').notNull().default(false),
     raw: jsonb('raw'),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }).notNull().defaultNow(),

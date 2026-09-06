@@ -18,7 +18,7 @@ describe('mock Leaseweb provider', () => {
     const offer = offers.find((o) => o.providerProductId === 'VPS02_4')!
     expect(offer.vcpu).toBe(2)
     expect(offer.memoryMb).toBe(4096)
-    expect(offer.billingOptions.some((b) => b.monthly && b.periodMonths === 1)).toBe(true)
+    expect(offer.billingOptions.some((b) => b.periodMonths === 1 && b.contractTerm === 0)).toBe(true)
     expect(offer.operatingSystems.length).toBeGreaterThan(0)
   })
 

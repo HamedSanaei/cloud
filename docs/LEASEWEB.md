@@ -260,8 +260,10 @@ Operations CLI (`npm run leaseweb -- <command>`):
   diagnostics on `product_sync_runs` (monthly-eligible, missing price/billing,
   http errors). Re-running never duplicates rows; changed prices/options are
   updated in place.
-- `list-monthly [--json]` — every monthly-compatible offer with the **exact
-  provider** `billingCycle` / `contractTerm` values and provider base price.
+- `list-monthly [--json]` — every monthly-invoicing option with the **exact
+  provider** `billingCycle` / `contractTerm` values, provider base price and
+  commercial classification (MONTH-TO-MONTH vs MONTHLY BILLING / LONGER
+  CONTRACT — never collapsed into one "monthly").
 - `price-preview [--json]` — provider EUR cost → active EUR→IRR FX → markup →
   tax → final IRR + toman (all integer math).
 
@@ -283,6 +285,43 @@ before advertising "cancellable monthly".
 
 The real account returns values only for **our** sales organization/account —
 no plan price or enum is hardcoded anywhere.
+
+## Billing classification contract
+
+Every stored billing option carries a central-classifier verdict
+(`backend/src/modules/providers/billing.ts`) — applied at catalog sync, for
+mock and live alike. The classifier NEVER looks at a `monthly` flag: the
+legacy mock-only `monthly: true` field was removed and is not evidence.
+Classification is derived only from the exact provider-returned values.
+
+Categories:
+
+- `MONTH_TO_MONTH` — monthly invoicing AND ≤1-month contract commitment
+  (provider-proven values only).
+- `MONTHLY_BILLING_LONG_TERM_COMMITMENT` — monthly invoicing with a longer
+  contract commitment (e.g. billing cycle monthly + 12-month term). NOT
+  month-to-month.
+- `NON_MONTHLY_BILLING` — provably not monthly invoicing.
+- `UNKNOWN` — cycle or term unrecognized/unprovable; never assumed monthly.
+
+Recognized spellings for months: numbers (`12`), `monthly`/`1M`/`1 month`,
+and `NM`/`N months` term forms. Anything else → `UNKNOWN` until the operator
+adds the observed provider value to the parser.
+
+Each option records `classification`, `customerBillingInterval`
+(`'MONTHLY' | null`), `monthToMonth` (`true | false | null`),
+`eligibilityReason` and `source` (`leaseweb-api` for live).
+
+### No fabricated combinations
+
+The live adapter only exposes billing options the API **proves**: a cycle
+embedding its own contract terms (proven pairings), or a priced cycle with no
+term list at all (commitment unknown). An independent `billingCycles` list
+plus an independent `contractTerms` list is NOT combined into a Cartesian
+product — those products stay catalog-only until the real response shape is
+observed and mapped in `buildBillingOptions` (`live.ts`). If the real API
+uses different combination semantics, adjust that one function and keep the
+classifier untouched.
 
 ## Going live (checklist)
 

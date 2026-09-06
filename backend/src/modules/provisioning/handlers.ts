@@ -137,7 +137,7 @@ export async function handleProvision(ctx: HandlerContext, data: { orderId: stri
       productId: order.providerProductId,
       location: order.providerLocation,
       operatingSystem: order.operatingSystem,
-      billingOption: billingOption ?? { billingCycle: 'monthly', label: 'Monthly', contractTerm: 0, periodMonths: 1, amountCents: 0, monthly: true },
+      billingOption: billingOption ?? { billingCycle: 'monthly', label: 'Monthly', contractTerm: 0, periodMonths: 1, amountCents: 0 },
       hostname: order.hostname,
     })
 

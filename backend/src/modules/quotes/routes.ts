@@ -13,7 +13,6 @@ const billingOptionSchema = z.object({
   periodMonths: z.number().int().positive().optional(),
   amountCents: z.number().int().nonnegative().optional(),
   amount: z.string().optional(),
-  monthly: z.boolean().optional(),
 })
 
 const createQuoteSchema = z.object({
