@@ -39,14 +39,21 @@ export const registerCatalogRoutes: FastifyPluginAsync<{ ctx: AppContext }> = as
       z.object({
         provider: z.string().optional(),
         location: z.string().optional(),
+        // "monthly" filters to provider options whose exact billingCycle/
+        // contractTerm combo is monthly at the provider.
+        billingInterval: z.enum(['monthly', 'all']).optional(),
         monthlyOnly: z.coerce.boolean().optional(),
+        // true (default): only admin-approved offers; false: include catalog
+        // rows that are not yet approved for retail sale (admin only).
+        enabledOnly: z.coerce.boolean().optional(),
       }),
       request.query,
     )
     const rows = await listOffers(db, {
       provider: query.provider ?? 'leaseweb',
       location: query.location,
-      monthlyOnly: query.monthlyOnly ?? true,
+      monthlyOnly: query.monthlyOnly ?? (query.billingInterval === 'monthly'),
+      enabledOnly: query.enabledOnly,
     })
     const locations = await listLocations(db, query.provider ?? 'leaseweb')
     const codeById = new Map(locations.map((l) => [l.id, l.code]))

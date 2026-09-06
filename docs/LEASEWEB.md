@@ -233,6 +233,57 @@ UNKNOWN→reconciliation — all against the mock provider.
 - **404 on `/api/v1/catalog/vps`** — FX rate or pricing rules not configured
   (admin `POST /api/v1/admin/fx-rates`).
 
+## Read-only live setup (account discovery)
+
+Connect the backend to the real Leaseweb account **without placing any paid
+order**. Everything here is GET-only; the paid order endpoint is guarded
+locally.
+
+Required environment (server or local shell, **never committed**):
+
+```bash
+LEASEWEB_MODE=live
+LEASEWEB_API_KEY=...        # set via env / secret manager — never printed
+LEASEWEB_ORDERING_ENABLED=false
+```
+
+The guard: `LiveLeasewebProvider.createServer()` throws a permanent local
+safety error before any HTTP request when `LEASEWEB_ORDERING_ENABLED != true`
+(verified by `backend/test/unit/leaseweb-ordering-guard.test.ts` — provider
+HTTP POST count stays 0). Catalog GETs (`syncCatalog`) are allowed.
+
+Operations CLI (`npm run leaseweb -- <command>`):
+
+- `doctor` — connectivity/auth/catalog check (GET only), reports ordering
+  guard status; never prints the API key.
+- `sync-offers` — idempotent catalog sync into `provider_products` +
+  diagnostics on `product_sync_runs` (monthly-eligible, missing price/billing,
+  http errors). Re-running never duplicates rows; changed prices/options are
+  updated in place.
+- `list-monthly [--json]` — every monthly-compatible offer with the **exact
+  provider** `billingCycle` / `contractTerm` values and provider base price.
+- `price-preview [--json]` — provider EUR cost → active EUR→IRR FX → markup →
+  tax → final IRR + toman (all integer math).
+
+Retail safety:
+
+- Newly synced offers default to `enabled=false` — catalog availability is
+  **not** retail-sale approval. An admin must review price, FX, markup and
+  monthly terms, then enable the offer explicitly.
+- Quotes are refused when the catalog is older than `CATALOG_MAX_AGE_MINUTES`
+  (default 1440); existing quotes/orders keep their frozen snapshots.
+- Products that disappear from the provider are marked unavailable for new
+  quotes; historical orders/invoices/servers are never deleted.
+
+Billing cycle vs contract term — the two are independent provider values and
+both are stored verbatim per offer (`billingOptions[].billingCycle` /
+`contractTerm`). "Monthly invoicing" is not proof of a month-to-month
+contract. Use `list-monthly --json` and confirm the actual `contractTerm`
+before advertising "cancellable monthly".
+
+The real account returns values only for **our** sales organization/account —
+no plan price or enum is hardcoded anywhere.
+
 ## Going live (checklist)
 
 1. Complete KYC + sales organization setup at Leaseweb.

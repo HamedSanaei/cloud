@@ -46,6 +46,10 @@ const envSchema = z.object({
   // Quote lifetime (minutes).
   QUOTE_TTL_MINUTES: z.coerce.number().int().positive().default(15),
 
+  // New retail quotes are refused when the provider catalog is older than
+  // this (stale provider price data must never be sold). 0 disables the check.
+  CATALOG_MAX_AGE_MINUTES: z.coerce.number().int().min(0).default(1440),
+
   // Renewal job horizon (days ahead to look for due subscriptions).
   RENEWAL_LOOKAHEAD_DAYS: z.coerce.number().int().positive().default(3),
   // Grace period after a failed renewal (days).

@@ -26,6 +26,10 @@ export async function syncProviderCatalog(
   try {
     const result = await provider.syncCatalog()
 
+    const monthlyEligibleCount = { value: 0 }
+    const missingPriceCount = { value: 0 }
+    const missingBillingCount = { value: 0 }
+
     await db.transaction(async (tx) => {
       // Upsert provider row.
       await tx
@@ -67,6 +71,14 @@ export async function syncProviderCatalog(
 
       for (const offer of result.offers) {
         const locationId = locationIdByCode.get(offer.location) ?? null
+        const billingOptions = offer.billingOptions as never
+        const monthly = Array.isArray(offer.billingOptions) && offer.billingOptions.some((b) => b.monthly === true)
+        const hasPrice = offer.providerPriceCents !== null && offer.providerPriceCents !== undefined
+        const hasBilling = Array.isArray(offer.billingOptions) && offer.billingOptions.length > 0
+        if (monthly) monthlyEligibleCount.value++
+        if (!hasPrice) missingPriceCount.value++
+        if (!hasBilling) missingBillingCount.value++
+
         await tx
           .insert(providerProducts)
           .values({
@@ -81,13 +93,16 @@ export async function syncProviderCatalog(
             trafficGb: offer.trafficGb ?? null,
             ipv4Count: offer.ipv4Count,
             ipv6Available: offer.ipv6Available,
-            billingOptions: offer.billingOptions as never,
+            billingOptions,
             operatingSystems: offer.operatingSystems as never,
             serviceLevels: offer.serviceLevels as never,
             providerCurrency: offer.providerCurrency,
             providerPriceCents: offer.providerPriceCents ?? null,
             available: true,
-            enabled: true,
+            // SAFETY: freshly discovered offers are NOT for retail sale until
+            // an admin enables them explicitly.
+            enabled: false,
+            monthlyEligible: monthly,
             raw: offer.raw ?? null,
             lastSyncedAt: new Date(),
           })
@@ -101,12 +116,15 @@ export async function syncProviderCatalog(
               trafficGb: offer.trafficGb ?? null,
               ipv4Count: offer.ipv4Count,
               ipv6Available: offer.ipv6Available,
-              billingOptions: offer.billingOptions as never,
+              billingOptions,
               operatingSystems: offer.operatingSystems as never,
               serviceLevels: offer.serviceLevels as never,
               providerCurrency: offer.providerCurrency,
               providerPriceCents: offer.providerPriceCents ?? null,
               available: true,
+              monthlyEligible: monthly,
+              // enabled is intentionally NOT touched: admin retail approval
+              // survives re-syncs; only new inserts default to disabled.
               raw: offer.raw ?? null,
               lastSyncedAt: new Date(),
               updatedAt: new Date(),
@@ -115,18 +133,21 @@ export async function syncProviderCatalog(
       }
     })
 
-    const finished = await db
+    await db
       .update(productSyncRuns)
       .set({
         status: 'success',
         productsSeen: result.offers.length,
         locationsSeen: result.locations.length,
+        combinationsSeen: result.offers.length,
+        monthlyEligible: monthlyEligibleCount.value,
+        missingPrice: missingPriceCount.value,
+        missingBillingOptions: missingBillingCount.value,
         raw: result.raw as never,
         finishedAt: new Date(),
       })
       .where(eq(productSyncRuns.id, run.id))
       .returning()
-    void finished
 
     await writeAudit(db, {
       actorId: opts.actorId ?? null,
@@ -190,6 +211,15 @@ export async function getOffer(db: DbClient, offerId: string) {
   const row = await db.query.providerProducts.findFirst({ where: (t) => eq(t.id, offerId) })
   if (!row) throw new NotFoundError('محصول یافت نشد')
   return row
+}
+
+/**
+ * Enable every currently synced offer for retail sale. Used by the local
+ * seed script and integration tests — production flow requires per-offer
+ * admin approval instead.
+ */
+export async function enableAllOffersForSale(db: DbClient, providerId = 'leaseweb') {
+  await db.update(providerProducts).set({ enabled: true }).where(eq(providerProducts.provider, providerId))
 }
 
 export async function setOfferEnabled(db: DbClient, offerId: string, enabled: boolean, actorId?: string) {

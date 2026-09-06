@@ -17,7 +17,7 @@ import { migrate } from '../db/migrate.js'
 import { registerUser } from '../modules/auth/service.js'
 import { ensureDefaultWallet, creditWallet } from '../modules/wallets/service.js'
 import { setFxRate } from '../modules/pricing/service.js'
-import { syncProviderCatalog } from '../modules/catalog/service.js'
+import { syncProviderCatalog, enableAllOffersForSale } from '../modules/catalog/service.js'
 import { getProvider, registerConfiguredProviders } from '../modules/providers/registry.js'
 import { users } from '../db/schema.js'
 import { eq } from 'drizzle-orm'
@@ -69,6 +69,8 @@ async function main() {
   console.log(`[seed] demo wallet credited: ${creditRial} rials`)
 
   await syncProviderCatalog(db, getProvider(config.DEFAULT_PROVIDER), { actorId: admin.id })
+  // Local/dev convenience: make the mock catalog purchasable immediately.
+  await enableAllOffersForSale(db)
   console.log(`[seed] catalog synced (provider=${config.DEFAULT_PROVIDER}, mode=${config.LEASEWEB_MODE})`)
 
   console.log('\n[seed] done. Logins:')

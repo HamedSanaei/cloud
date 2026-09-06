@@ -21,6 +21,18 @@ export async function createQuote(db: DbClient, input: CreateQuoteInput) {
   if (!offer.enabled || !offer.available) throw new ValidationError('این محصول فعلاً قابل سفارش نیست')
   if (offer.provider !== 'leaseweb') throw new ValidationError('Provider not supported')
 
+  // Catalog-freshness gate: never retail-quote severely stale provider price
+  // data. Existing quotes/orders are untouched (they carry their snapshot).
+  const maxAgeMin = getConfig().CATALOG_MAX_AGE_MINUTES
+  if (maxAgeMin > 0 && offer.lastSyncedAt) {
+    const ageMs = Date.now() - new Date(offer.lastSyncedAt).getTime()
+    if (ageMs > maxAgeMin * 60_000) {
+      throw new ValidationError(
+        'اطلاعات قیمت سرویس‌دهنده به‌روز نیست؛ لطفاً بعداً دوباره تلاش کنید',
+      )
+    }
+  }
+
   const billingOptions = (offer.billingOptions ?? []) as ProviderBillingOption[]
   const matched = billingOptions.find(
     (b) =>

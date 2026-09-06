@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { getTestContext, truncateAll, dbAvailable } from '../helpers.js'
 import { registerUser } from '../../src/modules/auth/service.js'
-import { syncProviderCatalog } from '../../src/modules/catalog/service.js'
+import { syncProviderCatalog, enableAllOffersForSale } from '../../src/modules/catalog/service.js'
 import { setFxRate } from '../../src/modules/pricing/service.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
 import { createOrderFromQuote } from '../../src/modules/orders/service.js'
@@ -24,6 +24,7 @@ describe.skipIf(skip)('provisioning safety + permissions (integration)', () => {
     await truncateAll(ctx.db)
     await setFxRate(ctx.db, '620000', { note: 'test fixture' })
     await syncProviderCatalog(ctx.db, getProvider('leaseweb'))
+    await enableAllOffersForSale(ctx.db)
     mock = getProvider('leaseweb') as unknown as MockLeasewebProvider
   })
 

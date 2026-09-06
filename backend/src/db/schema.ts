@@ -298,7 +298,12 @@ export const providerProducts = pgTable(
     // Provider list price in integer cents of providerCurrency (base, no options).
     providerPriceCents: bigint('provider_price_cents', { mode: 'number' }),
     available: boolean('available').notNull().default(true),
-    enabled: boolean('enabled').notNull().default(true),
+    // Retail-sale approval gate. Catalog sync marks NEW offers as NOT enabled
+    // for sale; an admin must explicitly enable them after price/markup/FX and
+    // monthly-terms review. Catalog availability != retail approval.
+    enabled: boolean('enabled').notNull().default(false),
+    /** Classifier: at least one provider billing option is month-to-month. */
+    monthlyEligible: boolean('monthly_eligible').notNull().default(false),
     raw: jsonb('raw'),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -319,6 +324,11 @@ export const productSyncRuns = pgTable(
     status: varchar('status', { length: 20 }).notNull().default('running'),
     productsSeen: integer('products_seen').notNull().default(0),
     locationsSeen: integer('locations_seen').notNull().default(0),
+    combinationsSeen: integer('combinations_seen').notNull().default(0),
+    monthlyEligible: integer('monthly_eligible').notNull().default(0),
+    missingPrice: integer('missing_price').notNull().default(0),
+    missingBillingOptions: integer('missing_billing_options').notNull().default(0),
+    httpErrors: integer('http_errors').notNull().default(0),
     error: text('error'),
     raw: jsonb('raw'),
     startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
