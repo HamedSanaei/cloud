@@ -18,7 +18,8 @@ export async function syncProviderCatalog(
   provider: CloudProvider,
   opts: { actorId?: string | null; mode?: 'mock' | 'live' } = {},
 ) {
-  const mode = opts.mode ?? getConfig().LEASEWEB_MODE
+  const config = getConfig()
+  const mode = opts.mode ?? (provider.id === 'hetzner' || config.PROVIDERS.leaseweb.enabled ? 'live' : config.LEASEWEB_MODE)
   const [run] = await db
     .insert(productSyncRuns)
     .values({ provider: provider.id, mode, status: 'running' })
@@ -48,6 +49,11 @@ export async function syncProviderCatalog(
           set: { name: provider.name, mode, capabilities: provider.capabilities, lastSyncAt: new Date(), updatedAt: new Date() },
         })
 
+      // A successful full snapshot makes disappeared offers unavailable.
+      // The transaction restores every product actually returned below.
+      await tx.update(providerProducts).set({ available: false }).where(eq(providerProducts.provider, provider.id))
+      await tx.update(providerLocations).set({ available: false }).where(eq(providerLocations.provider, provider.id))
+
       for (const loc of result.locations) {
         await tx
           .insert(providerLocations)
@@ -72,11 +78,13 @@ export async function syncProviderCatalog(
       )
 
       for (const offer of result.offers) {
+        const policyKey = provider.id === 'leaseweb' && offer.category === 'cloud' ? 'leaseweb.hourly' : provider.id
+        const autoPublish = config.STOREFRONT_PRICING[policyKey]?.autoPublish === true
         const locationId = locationIdByCode.get(offer.location) ?? null
         // Classify billing options centrally: the classifier derives monthly
         // semantics ONLY from provider-returned evidence (never the legacy
         // mock-only `monthly` flag).
-        const source = mode === 'live' ? 'leaseweb-api' : 'mock-fixture'
+        const source = mode === 'live' ? `${provider.id}-api` : 'mock-fixture'
         const billingOptions = classifyBillingOptions(source, (offer.billingOptions ?? []) as ProviderBillingOption[])
         const monthly = billingOptions.some((b) => isMonthlyInvoicing(b.classification))
         const hasPrice = offer.providerPriceCents !== null && offer.providerPriceCents !== undefined
@@ -92,7 +100,7 @@ export async function syncProviderCatalog(
             providerProductId: offer.providerProductId,
             locationId,
             name: offer.name,
-            category: 'vps',
+            category: offer.category ?? 'vps',
             vcpu: offer.vcpu,
             memoryMb: offer.memoryMb,
             diskGb: offer.diskGb,
@@ -105,9 +113,8 @@ export async function syncProviderCatalog(
             providerCurrency: offer.providerCurrency,
             providerPriceCents: offer.providerPriceCents ?? null,
             available: true,
-            // SAFETY: freshly discovered offers are NOT for retail sale until
-            // an admin enables them explicitly.
-            enabled: false,
+            // Auto-publication requires explicit operator TOML policy.
+            enabled: autoPublish,
             monthlyEligible: monthly,
             raw: offer.raw ?? null,
             lastSyncedAt: new Date(),
@@ -116,6 +123,7 @@ export async function syncProviderCatalog(
             target: [providerProducts.provider, providerProducts.providerProductId, providerProducts.locationId],
             set: {
               name: offer.name,
+              category: offer.category ?? 'vps',
               vcpu: offer.vcpu,
               memoryMb: offer.memoryMb,
               diskGb: offer.diskGb,

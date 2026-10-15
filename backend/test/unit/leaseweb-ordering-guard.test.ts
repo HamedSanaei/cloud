@@ -24,10 +24,10 @@ afterEach(async () => {
 
 async function startCountingServer(): Promise<{ baseUrl: string; hits: () => number }> {
   let count = 0
-  server = createHttpServer((_req, res) => {
+  server = createHttpServer((req, res) => {
     count++
     res.setHeader('content-type', 'application/json')
-    res.end(JSON.stringify({ orderId: 'ord-should-never-happen' }))
+    res.end(JSON.stringify(req.method === 'GET' ? { vpss: [], _metadata: { totalCount: 0 } } : { orderId: 'ord-should-never-happen' }))
   })
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
   const address = server.address()
@@ -40,7 +40,11 @@ describe('live mode ordering guard (LEASEWEB_ORDERING_ENABLED=false)', () => {
     const { baseUrl, hits } = await startCountingServer()
     const provider = createLiveLeasewebProvider({
       baseUrl,
-      apiKey: 'test-key-that-must-never-leave-this-file',
+      enabled: true,
+      displayName: 'Leaseweb',
+      accounts: [{ id: 'primary', apiKey: 'test-key-that-must-never-leave-this-file', enabled: true, priority: 100, state: 'active', label: 'Primary' }],
+      locations: ['FRA-01'],
+      families: { vps: { enabled: true }, cloud: { enabled: false } },
       orderingEnabled: false,
       logger: silentLogger,
     })
@@ -68,7 +72,11 @@ describe('live mode ordering guard (LEASEWEB_ORDERING_ENABLED=false)', () => {
     const { baseUrl } = await startCountingServer()
     const provider = createLiveLeasewebProvider({
       baseUrl,
-      apiKey: 'test-key',
+      enabled: true,
+      displayName: 'Leaseweb',
+      accounts: [{ id: 'primary', apiKey: 'test-key', enabled: true, priority: 100, state: 'active', label: 'Primary' }],
+      locations: ['FRA-01'],
+      families: { vps: { enabled: true }, cloud: { enabled: false } },
       orderingEnabled: false,
       logger: silentLogger,
     })

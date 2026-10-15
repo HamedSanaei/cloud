@@ -4,8 +4,8 @@ import type { CloudProvider } from './provider.interface.js'
 import { createMockLeasewebProvider } from './leaseweb/mock.js'
 import { createLiveLeasewebProvider } from './leaseweb/live.js'
 import { NotFoundError } from '../../lib/errors.js'
+import { createHetznerProvider } from './hetzner/live.js'
 
-const providerLogger = createLogger('leaseweb')
 
 const registry = new Map<string, CloudProvider>()
 
@@ -23,30 +23,18 @@ export function listProviders(): CloudProvider[] {
   return [...registry.values()]
 }
 
-/**
- * Build and register providers from configuration. Mock is the default and is
- * ALWAYS available (safe); live is only registered when configured.
- */
+/** Register only configured providers; production never falls back to mock data. */
 export function registerConfiguredProviders(): CloudProvider[] {
   const config = getConfig()
-  const providers: CloudProvider[] = []
-
-  const mock = createMockLeasewebProvider()
-  registerProvider(mock)
-  providers.push(mock)
-
-  if (config.LEASEWEB_MODE === 'live') {
-    const live = createLiveLeasewebProvider({
-      baseUrl: config.LEASEWEB_API_BASE_URL,
-      apiKey: config.LEASEWEB_API_KEY,
-      orderingEnabled: config.LEASEWEB_ORDERING_ENABLED,
-      logger: providerLogger,
-    })
-    registerProvider(live)
-    providers.push(live)
+  registry.clear()
+  if (config.PROVIDERS.hetzner.enabled) registerProvider(createHetznerProvider(config.PROVIDERS.hetzner))
+  if (config.PROVIDERS.leaseweb.enabled) {
+    registerProvider(createLiveLeasewebProvider({ ...config.PROVIDERS.leaseweb, logger: createLogger('leaseweb') }))
   }
-
-  return providers
+  if (registry.size === 0 && config.NODE_ENV !== 'production' && config.LEASEWEB_MODE === 'mock') {
+    registerProvider(createMockLeasewebProvider())
+  }
+  return listProviders()
 }
 
 export function getDefaultProvider(): CloudProvider {

@@ -1,420 +1,332 @@
-/**
- * Live Leaseweb provider (LEASEWEB_MODE=live).
- *
- * Uses the official APIs:
- *   Ordering: /ordering/v1/products/vps[/{vpsId}] and .../order
- *   VPS mgmt: /vps/v1/virtualServers[...]
- *
- * Safety:
- *  - Real ordering additionally requires LEASEWEB_ORDERING_ENABLED=true.
- *  - The catalog is normalized from whatever the API returns — billing
- *    cycle/contract term enums are never hardcoded here.
- *  - The API key lives only in this module's client; it is never logged and
- *    never exposed through any endpoint.
- *
- * NOTE: the exact response shapes of the Ordering API vary by account/entity.
- * The normalizers below are defensive and read only what they can prove; if a
- * field name differs for the configured account, this single file is where it
- * is adjusted (documented in docs/LEASEWEB.md).
- */
+/** Leaseweb VPS Ordering and hourly Public Cloud, with credential-pinned ids. */
+import type { LeasewebConfig, ProviderAccount } from '../../../config.js'
+import type { Logger } from '../../../logger.js'
+import { ProviderPermanentError, ProviderUnknownError } from '../../../lib/errors.js'
 import {
   NotSupportedError,
   type CloudProvider,
   type ProviderActionResult,
-  type ProviderCapability,
   type ProviderOffer,
-  type ProviderOrderRequest,
   type ProviderOrderResult,
   type ProviderServerView,
-  type RecoveryResult,
 } from '../provider.interface.js'
-import { ProviderPermanentError, ProviderUnknownError } from '../../../lib/errors.js'
 import { LeasewebClient } from './client.js'
-import type {
-  LswOrderingProductDetail,
-  LswOrderingProductsResponse,
-  LswOrderResponse,
-  LswVirtualServer,
-  LswVirtualServersResponse,
-} from './types.js'
-import type { Logger } from '../../../logger.js'
+import { items, normalizeVpsDetail, numeric, record, sameDecimal, text, type LeasewebRecord } from './catalog.js'
+import { cloudCreateBody, cloudLocationAllowed, isCatalogExclusion, readCloudCatalog } from './cloud.js'
+import { requireMutationSuccess } from './safety.js'
 
-export interface LiveLeasewebOptions {
-  baseUrl: string
-  apiKey: string
-  orderingEnabled: boolean
-  logger: Logger
+export { normalizeCatalog } from './catalog.js'
+export type LiveLeasewebOptions = LeasewebConfig & { logger: Logger }
+type Family = 'vps' | 'cloud'
+type AccountClient = { account: ProviderAccount; client: LeasewebClient }
+
+function compositeId(accountId: string, family: Family, nativeId: string): string {
+  return `lsw:${encodeURIComponent(accountId)}:${family}:${encodeURIComponent(nativeId)}`
+}
+
+/** Consume every page or fail the entire census, never a silently truncated list. */
+async function readPages(client: LeasewebClient, path: string, keys: string[]): Promise<LeasewebRecord[]> {
+  const result: LeasewebRecord[] = []
+  let offset = 0
+  for (let page = 0; page < 100; page++) {
+    const payload = await client.get<unknown>(`${path}${path.includes('?') ? '&' : '?'}limit=100&offset=${offset}`)
+    if (!Array.isArray(payload) && !keys.some((key) => Array.isArray(record(payload)[key]))) throw new ProviderPermanentError('Leaseweb collection response has an unrecognized shape; refusing an incomplete census')
+    const rows = items(payload, ...keys)
+    result.push(...rows)
+    const total = record(record(payload)._metadata).totalCount
+    if (!rows.length && typeof total === 'number' && result.length < total) throw new ProviderPermanentError('Leaseweb collection ended before its declared total; refusing an incomplete census')
+    if (!rows.length || (typeof total === 'number' ? result.length >= total : rows.length < 100)) return result
+    offset += rows.length
+  }
+  throw new ProviderPermanentError('Leaseweb collection exceeded the pagination safety bound; catalog/inventory is incomplete')
+}
+
+async function vpsCatalog(client: LeasewebClient, configured: string[]): Promise<ProviderOffer[]> {
+  const offers: ProviderOffer[] = []
+  const locations = new Set(configured)
+  if (!locations.size) {
+    // Ordering has no location-list endpoint: discover only provider-returned
+    // locations; never publish a configured seed without a successful read.
+    for (const row of await readPages(client, '/ordering/v1/products/vps', ['vpss', 'products', 'data', 'items'])) {
+      const declared = Array.isArray(row.location) ? row.location : [row.location]
+      for (const location of declared) if (text(location)) locations.add(text(location)!)
+    }
+  }
+  for (const location of locations) {
+    try {
+      const products = await readPages(client, `/ordering/v1/products/vps?location=${encodeURIComponent(location)}`, ['vpss', 'products', 'data', 'items'])
+      for (const product of products) {
+        const id = text(product.id)
+        if (!id) throw new ProviderPermanentError('Leaseweb product list omitted a product identity')
+        try {
+          // The explicit requested pair is proved by this successful detail
+          // query. Independent contractTerms/billingCycles lists are NOT paired.
+          const selected = { contractTerm: '1_MONTH', billingCycle: '1_MONTH' }
+          const detail = await client.get<unknown>(`/ordering/v1/products/vps/${encodeURIComponent(id)}?${new URLSearchParams({ location, ...selected })}`)
+          const offer = normalizeVpsDetail(detail, location, selected)
+          if (offer && offer.providerCurrency && offer.billingOptions.length && offer.operatingSystems.length) offers.push(offer)
+        } catch (error) {
+          if (!isCatalogExclusion(error)) throw error
+        }
+      }
+    } catch (error) {
+      // Account/site exclusions are authoritative; a timeout/429/5xx is NOT an
+      // empty catalog and must fail sync so existing scopes are not retired.
+      if (!isCatalogExclusion(error)) throw error
+    }
+  }
+  return offers
+}
+
+function mapServer(raw: unknown, providerServerId: string): ProviderServerView {
+  const envelope = record(raw)
+  const server = record(envelope.instance ?? envelope.vps ?? raw)
+  const state = String(server.state ?? server.status ?? '').toLowerCase()
+  let mapped: ProviderServerView['state'] = 'unknown'
+  if (['running', 'active', 'started', 'available'].includes(state)) mapped = 'active'
+  else if (['stopped', 'suspended', 'off', 'powered-off'].includes(state)) mapped = 'suspended'
+  else if (/provision|creat|install|build|starting|reboot/.test(state)) mapped = 'provisioning'
+  else if (/terminat|delet/.test(state)) mapped = 'terminated'
+  else if (/fail|error/.test(state)) mapped = 'failed'
+  const addresses = items(server.ipAddresses ?? server.ips)
+  let ipv4: string | undefined
+  let ipv6: string | undefined
+  for (const address of addresses) {
+    const ip = text(address.ip ?? address.address)
+    if (!ip || (address.networkType !== undefined && !/public/i.test(String(address.networkType)))) continue
+    if (ip.includes(':')) ipv6 ??= ip
+    else ipv4 ??= ip
+  }
+  const resources = record(server.resources)
+  return {
+    providerServerId,
+    state: mapped,
+    hostname: text(server.reference ?? server.name),
+    ipv4,
+    ipv6,
+    vcpu: numeric(record(resources.cpu).value) || undefined,
+    memoryMb: numeric(record(resources.memory).value) ? numeric(record(resources.memory).value) * 1024 : undefined,
+    diskGb: numeric(server.rootDiskSize) || undefined,
+    metadata: { raw: server },
+  }
 }
 
 export function createLiveLeasewebProvider(opts: LiveLeasewebOptions): CloudProvider {
-  const client = new LeasewebClient({ baseUrl: opts.baseUrl, apiKey: opts.apiKey, logger: opts.logger })
+  const primaryId = opts.accounts[0]?.id
+  const clients = new Map<string, AccountClient>()
+  for (const account of opts.accounts) {
+    if (!account.apiKey) continue
+    if (clients.has(account.id)) throw new ProviderPermanentError('Duplicate Leaseweb account id')
+    clients.set(account.id, { account, client: new LeasewebClient({ baseUrl: opts.baseUrl, apiKey: account.apiKey, logger: opts.logger }) })
+  }
+  const ranked = [...clients.values()].filter(({ account }) => account.enabled && account.state.toLowerCase() === 'active')
+    .sort((a, b) => a.account.priority - b.account.priority || a.account.id.localeCompare(b.account.id))
+
+  function owner(id: string): AccountClient & { family: Family; nativeId: string } {
+    let accountId = primaryId
+    let family: Family = 'vps'
+    let nativeId = id
+    const qualified = id.startsWith('lsw:')
+    if (qualified) {
+      const parts = id.split(':')
+      if (parts.length !== 4 || !['vps', 'cloud'].includes(parts[2]!)) throw new ProviderPermanentError('Invalid Leaseweb resource identity')
+      try {
+        accountId = decodeURIComponent(parts[1]!)
+        nativeId = decodeURIComponent(parts[3]!)
+      } catch {
+        throw new ProviderPermanentError('Invalid Leaseweb resource identity encoding')
+      }
+      family = parts[2] as Family
+    }
+    const accountClient = accountId ? clients.get(accountId) : undefined
+    if (!accountClient || !nativeId) throw new ProviderPermanentError('The owning Leaseweb credential is unavailable; refusing account fallback')
+    return { ...accountClient, family, nativeId }
+  }
+
+  async function action(id: string, operation: 'start' | 'stop' | 'reboot'): Promise<ProviderActionResult> {
+    const selected = owner(id)
+    const collection = selected.family === 'cloud' ? 'instances' : 'vps'
+    const outcome = await selected.client.postMutating(`/publicCloud/v1/${collection}/${encodeURIComponent(selected.nativeId)}/${operation}`, undefined)
+    requireMutationSuccess(outcome)
+    return { ok: true, metadata: { providerCorrelationId: outcome.correlationId, requestId: outcome.requestId } }
+  }
 
   const provider: CloudProvider = {
     id: 'leaseweb',
-    name: 'Leaseweb (live)',
-    capabilities: [
-      'catalog',
-      'provision',
-      'power_on',
-      'power_off',
-      'reboot',
-      'reinstall',
-      'reconcile',
-      'traffic',
-    ] as ProviderCapability[],
-
-    supports(cap) {
-      return this.capabilities.includes(cap)
+    name: opts.displayName,
+    capabilities: ['catalog', 'provision', 'power_on', 'power_off', 'reboot', 'reconcile'],
+    supports(capability) {
+      return this.capabilities.includes(capability)
     },
-    require(cap) {
-      if (!this.supports(cap)) throw new NotSupportedError(cap)
+    require(capability) {
+      if (!this.supports(capability)) throw new NotSupportedError(capability)
     },
 
     async syncCatalog() {
-      const raw: unknown = await client.get<LswOrderingProductsResponse>('/ordering/v1/products/vps')
-      return normalizeCatalog(raw)
+      const offers = new Map<string, ProviderOffer>()
+      const locations = new Map<string, { code: string; country?: string; city?: string }>()
+      for (const { account, client } of ranked) {
+        const discovered: ProviderOffer[] = []
+        if (opts.families.vps.enabled) {
+          try {
+            discovered.push(...await vpsCatalog(client, opts.locations))
+          } catch (error) {
+            if (!isCatalogExclusion(error)) throw error
+          }
+        }
+        if (opts.families.cloud.enabled) {
+          try {
+            const cloud = await readCloudCatalog(client, opts.locations)
+            discovered.push(...cloud.offers)
+            for (const location of cloud.locations) if (!locations.has(location.code)) locations.set(location.code, location)
+          } catch (error) {
+            if (!isCatalogExclusion(error)) throw error
+          }
+        }
+        for (const offer of discovered) {
+          const family = offer.category === 'cloud' ? 'cloud' : 'vps'
+          const key = `${family}:${offer.providerProductId}:${offer.location}`
+          if (offers.has(key)) continue
+          offers.set(key, { ...offer, providerProductId: compositeId(account.id, family, offer.providerProductId) })
+          if (!locations.has(offer.location)) locations.set(offer.location, { code: offer.location })
+        }
+      }
+      return { offers: [...offers.values()], locations: [...locations.values()], raw: { offerCount: offers.size, locationCount: locations.size } }
     },
 
-    async createServer(req: ProviderOrderRequest): Promise<ProviderOrderResult> {
-      this.require('provision')
-      if (!opts.orderingEnabled) {
-        throw new ProviderPermanentError(
-          'Real Leaseweb ordering is disabled. Set LEASEWEB_MODE=live AND LEASEWEB_ORDERING_ENABLED=true to enable it.',
-        )
+    async createServer(req): Promise<ProviderOrderResult> {
+      // Local guard precedes every provider read as well as the paid POST.
+      if (!opts.enabled || !opts.orderingEnabled) throw new ProviderPermanentError('Real Leaseweb ordering is disabled by provider configuration')
+      if (req.quantity !== undefined && req.quantity !== 1) throw new ProviderPermanentError('Leaseweb ordering supports one server per operation')
+      const selected = owner(req.productId)
+      if (!selected.account.enabled || selected.account.state.toLowerCase() !== 'active') throw new ProviderPermanentError('The owning Leaseweb account is not accepting new orders')
+      if (!opts.families[selected.family].enabled) throw new ProviderPermanentError('This Leaseweb product family is disabled')
+      if (selected.family === 'cloud' ? !cloudLocationAllowed(req.location, opts.locations) : opts.locations.length && !opts.locations.includes(req.location)) throw new ProviderPermanentError('This Leaseweb location is not enabled')
+      const nativeRequest = { ...req, productId: selected.nativeId }
+      let path: string
+      let body: LeasewebRecord
+      if (selected.family === 'cloud') {
+        body = await cloudCreateBody(selected.client, nativeRequest)
+        path = '/publicCloud/v1/instances'
+      } else {
+        const query = new URLSearchParams({ location: req.location, billingCycle: req.billingOption.billingCycle, operatingSystem: req.operatingSystem })
+        if (req.billingOption.contractTerm !== undefined) query.set('contractTerm', String(req.billingOption.contractTerm))
+        if (req.serviceLevel?.id) query.set('serviceLevelAgreement', req.serviceLevel.id)
+        const detail = await selected.client.get<unknown>(`/ordering/v1/products/vps/${encodeURIComponent(selected.nativeId)}?${query}`)
+        const live = normalizeVpsDetail(detail, req.location, req.billingOption)
+        if (!live || !live.operatingSystems.some((os) => os.id === req.operatingSystem)) throw new ProviderPermanentError('Leaseweb VPS product or free operating system is no longer available')
+        const liveOption = live.billingOptions.find((option) => option.billingCycle === req.billingOption.billingCycle && String(option.contractTerm) === String(req.billingOption.contractTerm))
+        const requestedAmount = req.billingOption.amount ?? (req.billingOption.amountCents === undefined ? undefined : String(req.billingOption.amountCents / 100))
+        if (!liveOption || !sameDecimal(liveOption.amount, requestedAmount)) throw new ProviderPermanentError('Leaseweb VPS price or contract changed; select the current offer')
+        if (req.serviceLevel && !live.serviceLevels.some((sla) => sla.id === req.serviceLevel!.id)) throw new ProviderPermanentError('Leaseweb VPS service level is unavailable at this price')
+        body = { location: req.location, operatingSystem: req.operatingSystem, billingCycle: req.billingOption.billingCycle }
+        if (req.billingOption.contractTerm !== undefined) body.contractTerm = req.billingOption.contractTerm
+        if (req.serviceLevel?.id) body.serviceLevelAgreement = req.serviceLevel.id
+        path = `/ordering/v1/products/vps/${encodeURIComponent(selected.nativeId)}/order`
       }
-
-      const body: Record<string, unknown> = {
-        operatingSystem: req.operatingSystem,
-        location: req.location,
-      }
-      // Pass through the exact billing option the customer selected — the
-      // values came from the provider's own product schema, never hardcoded.
-      if (req.billingOption.billingCycle) body.billingCycle = req.billingOption.billingCycle
-      if (req.billingOption.contractTerm !== undefined && req.billingOption.contractTerm !== null) {
-        body.contractTerm = req.billingOption.contractTerm
-      }
-      if (req.serviceLevel?.id) body.serviceLevelAgreement = req.serviceLevel.id
-      if (req.quantity && req.quantity > 1) body.quantity = req.quantity
-
-      // One attempt, classified conservatively. `unknown` (timeout after
-      // transmission, connection drop, 5xx, 429) means Leaseweb may have
-      // processed the order: the caller marks the operation UNKNOWN and
-      // reconciles. Only definitive rejections become permanent failures.
-      const outcome = await client.postMutating(`/ordering/v1/products/vps/${encodeURIComponent(req.productId)}/order`, body)
-
-      if (outcome.kind === 'definitive_rejection') {
-        throw new ProviderPermanentError(outcome.message, {
-          status: outcome.status,
-          providerCorrelationId: outcome.correlationId,
-          requestId: outcome.requestId,
-        })
-      }
-      if (outcome.kind === 'unknown') {
-        throw new ProviderUnknownError(outcome.message, {
-          httpStatus: outcome.status,
-          providerCorrelationId: outcome.correlationId,
-          requestId: outcome.requestId,
-        })
-      }
-
-      const res = outcome.data as LswOrderResponse
-      const providerOrderId = res.orderId ?? res.id
-      if (!providerOrderId) {
-        throw new ProviderUnknownError('Leaseweb order response did not include an order id', {
-          res,
-          providerCorrelationId: outcome.correlationId,
-          requestId: outcome.requestId,
-        })
-      }
+      // Never change credentials after any mutation, including ambiguous
+      // timeout/5xx/429 outcomes. A composite id has exactly one owner.
+      const outcome = await selected.client.postMutating(path, body)
+      const raw = requireMutationSuccess(outcome)
+      const response = record(raw)
+      const result = record(response.instance ?? response)
+      const nativeOrderId = selected.family === 'cloud' ? text(result.id) : text(result.orderId)
+      if (!nativeOrderId) throw new ProviderUnknownError('Leaseweb accepted the request without an identifiable result', { providerCorrelationId: outcome.correlationId, requestId: outcome.requestId })
       return {
-        providerOrderId,
-        state: mapOrderState(res.state ?? res.status),
-        providerServerId: typeof res.productId === 'string' ? res.productId : undefined,
-        metadata: {
-          raw: res,
-          providerCorrelationId: outcome.correlationId,
-          requestId: outcome.requestId,
-        },
+        providerOrderId: compositeId(selected.account.id, selected.family, nativeOrderId),
+        providerServerId: selected.family === 'cloud' ? compositeId(selected.account.id, 'cloud', nativeOrderId) : undefined,
+        state: selected.family === 'cloud' && mapServer(result, nativeOrderId).state === 'active' ? 'active' : 'pending',
+        metadata: { raw, providerCorrelationId: outcome.correlationId, requestId: outcome.requestId },
       }
     },
 
-    /**
-     * Leaseweb VPS Ordering has no reliable client-supplied idempotency key
-     * that survives to the VPS inventory. Automatic MATCHED is therefore only
-     * possible with an id captured from the ORIGINAL order response before
-     * the ambiguity. Everything else is AMBIGUOUS (candidate evidence only).
-     */
-    async reconcileOrder(input: {
-      knownProviderOrderId?: string
-      knownProviderServerId?: string
-      requested?: ProviderOrderRequest
-    }): Promise<RecoveryResult> {
-      this.require('reconcile')
-      // Conclusive: we captured this id from the original response. Verify it
-      // still exists at the provider.
+    async getServer(id) {
+      const selected = owner(id)
+      const collection = selected.family === 'cloud' ? 'instances' : 'vps'
+      const response = await selected.client.get<unknown>(`/publicCloud/v1/${collection}/${encodeURIComponent(selected.nativeId)}`)
+      const server = record(record(response).instance ?? record(response).vps ?? response)
+      if (text(server.id) !== selected.nativeId) throw new ProviderPermanentError('Leaseweb returned a different or missing server identity')
+      // Preserve bare resource identity for existing primary-account rows.
+      return mapServer(server, id)
+    },
+
+    async listServers() {
+      const servers: ProviderServerView[] = []
+      for (const { account, client } of clients.values()) {
+        // Disabled accounts are still the owners of existing resources.
+        for (const family of ['vps', 'cloud'] as const) {
+          try {
+            const collection = family === 'cloud' ? 'instances' : 'vps'
+            const rows = await readPages(client, `/publicCloud/v1/${collection}`, [collection, 'virtualServers', 'data', 'items'])
+            for (const row of rows) {
+              const id = text(row.id)
+              if (id) servers.push(mapServer(row, compositeId(account.id, family, id)))
+            }
+          } catch (error) {
+            if (!isCatalogExclusion(error)) throw error
+          }
+        }
+      }
+      return servers
+    },
+
+    async powerOn(id) { return action(id, 'start') },
+    async powerOff(id) { return action(id, 'stop') },
+    async reboot(id) { return action(id, 'reboot') },
+
+    async reconcileOrder(input) {
       if (input.knownProviderServerId) {
         try {
-          const vps = await this.getServer(input.knownProviderServerId)
-          if (vps && vps.providerServerId !== 'unknown') {
-            return {
-              resolution: 'MATCHED',
-              providerServerId: vps.providerServerId,
-              reason: 'provider server id captured from the original order response, verified via /vps/v1/virtualServers/{id}',
+          const server = await this.getServer(input.knownProviderServerId)
+          return { resolution: 'MATCHED', providerServerId: server.providerServerId, reason: 'Original response server identity verified with its owning account' }
+        } catch {
+          return { resolution: 'AMBIGUOUS', reason: 'Original server identity cannot currently be verified; absence is not proof of non-creation' }
+        }
+      }
+      const identity = input.knownProviderOrderId ?? input.requested?.productId
+      if (!identity) return { resolution: 'AMBIGUOUS', reason: 'No account-pinned operation identity is available' }
+      const selected = owner(identity)
+      if (selected.family === 'cloud') {
+        if (input.knownProviderOrderId) {
+          try {
+            const serverId = compositeId(selected.account.id, 'cloud', selected.nativeId)
+            await this.getServer(serverId)
+            return { resolution: 'MATCHED', providerServerId: serverId, providerOrderId: input.knownProviderOrderId, reason: 'Original Cloud response instance identity verified' }
+          } catch {
+            return { resolution: 'AMBIGUOUS', reason: 'Cloud response identity could not be verified' }
+          }
+        }
+        const reference = input.requested?.clientReference
+        const region = input.requested?.location
+        if (reference && reference.length <= 64 && region) {
+          try {
+            const rows = await readPages(selected.client, `/publicCloud/v1/instances?region=${encodeURIComponent(region)}`, ['instances', 'data', 'items'])
+            const matches = rows.filter((server) => text(server.reference) === reference && text(server.region) === region && text(server.type ?? server.instanceType) === selected.nativeId && text(server.imageId ?? server.image) === input.requested?.operatingSystem && text(server.id))
+            if (matches.length === 1) {
+              const id = compositeId(selected.account.id, 'cloud', text(matches[0]!.id)!)
+              return { resolution: 'MATCHED', providerServerId: id, providerOrderId: id, reason: 'Unique deterministic client reference and launch facts verified on the owning credential' }
             }
+          } catch {
+            return { resolution: 'AMBIGUOUS', reason: 'Cloud reference lookup was inconclusive; do not re-order' }
           }
-          return { resolution: 'NO_MATCH', reason: `known provider server id ${input.knownProviderServerId} not found at the provider` }
-        } catch {
-          return { resolution: 'NO_MATCH', reason: `known provider server id ${input.knownProviderServerId} could not be verified at the provider` }
         }
-      }
-      if (input.knownProviderOrderId) {
+      } else if (input.knownProviderOrderId) {
         try {
-          const servers = await this.listServers()
-          const byOrderId = servers.filter((s) => (s.metadata as Record<string, unknown> | undefined)?.orderId === input.knownProviderOrderId)
-          // Only when the provider itself exposes the order id on the server
-          // record is this conclusive. Currently Leaseweb VPS does not expose
-          // a client-referenceable order id — keep conservative.
-          if (byOrderId.length === 1 && byOrderId[0]) {
-            return { resolution: 'MATCHED', providerServerId: byOrderId[0].providerServerId, providerOrderId: input.knownProviderOrderId, reason: 'provider returned server record carrying the known order id' }
+          const response = await selected.client.get<unknown>(`/account/v1/orders/${encodeURIComponent(selected.nativeId)}`)
+          const order = record(record(response).order ?? response)
+          const services = items(order, 'services').filter((service) => service.productId === 'VIRTUAL_SERVER')
+          const equipmentIds = new Set(services.flatMap((service) => text(service.equipmentId) ? [text(service.equipmentId)!] : []))
+          if (equipmentIds.size === 1) {
+            const id = compositeId(selected.account.id, 'vps', [...equipmentIds][0]!)
+            await this.getServer(id)
+            return { resolution: 'MATCHED', providerServerId: id, providerOrderId: input.knownProviderOrderId, reason: 'Exact equipment identity from the original account order verified in VPS inventory' }
           }
         } catch {
-          /* fall through to AMBIGUOUS */
+          return { resolution: 'AMBIGUOUS', reason: 'Original order equipment identity could not be verified' }
         }
       }
-      // Evidence only — never proof.
-      const candidates = await this.listServers().catch(() => [])
-      return {
-        resolution: 'AMBIGUOUS',
-        candidates: candidates.map((s) => ({
-          providerServerId: s.providerServerId,
-          hostname: s.hostname,
-          state: s.state,
-          createdAt: (s.metadata as Record<string, unknown> | undefined)?.createdAt as string | undefined,
-        })),
-        reason: 'no conclusive provider-side identifier links a discovered VPS to this operation; possible candidates listed for operator review only',
-      }
-    },
-
-    async getServer(providerServerId: string): Promise<ProviderServerView> {
-      const vps = await client.get<LswVirtualServer>(`/vps/v1/virtualServers/${encodeURIComponent(providerServerId)}`)
-      return mapVirtualServer(vps)
-    },
-
-    async listServers(): Promise<ProviderServerView[]> {
-      const res = await client.get<LswVirtualServersResponse>('/vps/v1/virtualServers')
-      return (res.virtualServers ?? []).map(mapVirtualServer)
-    },
-
-    async powerOn(providerServerId: string): Promise<ProviderActionResult> {
-      this.require('power_on')
-      await client.post(`/vps/v1/virtualServers/${encodeURIComponent(providerServerId)}/power-on`)
-      return { ok: true }
-    },
-    async powerOff(providerServerId: string): Promise<ProviderActionResult> {
-      this.require('power_off')
-      await client.post(`/vps/v1/virtualServers/${encodeURIComponent(providerServerId)}/power-off`)
-      return { ok: true }
-    },
-    async reboot(providerServerId: string): Promise<ProviderActionResult> {
-      this.require('reboot')
-      await client.post(`/vps/v1/virtualServers/${encodeURIComponent(providerServerId)}/reboot`)
-      return { ok: true }
+      return { resolution: 'AMBIGUOUS', reason: 'No conclusive account-pinned provider identity links inventory to this operation; manual review required' }
     },
   }
-
   return provider
-}
-
-// ---------------------------------------------------------------------------
-// Normalizers — defensive; see note at the top of this file.
-// ---------------------------------------------------------------------------
-
-function asString(value: unknown): string | undefined {
-  return typeof value === 'string' && value ? value : undefined
-}
-
-function asNumber(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string' && value.trim() !== '') {
-    const n = Number(value)
-    return Number.isFinite(n) ? n : undefined
-  }
-  return undefined
-}
-
-export function normalizeCatalog(raw: unknown): {
-  offers: ProviderOffer[]
-  locations: Array<{ code: string; country?: string; city?: string }>
-  raw: unknown
-} {
-  const root = (raw ?? {}) as LswOrderingProductsResponse
-  const products = root.products ?? []
-  const offers: ProviderOffer[] = []
-  const locations = new Map<string, { code: string; country?: string; city?: string }>()
-
-  for (const product of products) {
-    const id = asString(product.id)
-    if (!id) continue
-    const detail = product as LswOrderingProductDetail
-    const cfg = detail.configuration ?? {}
-
-    const locationList = Array.isArray(cfg.locations) ? cfg.locations : []
-    const osList = Array.isArray(cfg.operatingSystems) ? cfg.operatingSystems : []
-    const slaList = Array.isArray(cfg.serviceLevels) ? cfg.serviceLevels : []
-    const cycleList = Array.isArray(cfg.billingCycles) ? cfg.billingCycles : []
-    const termList = Array.isArray(cfg.contractTerms) ? cfg.contractTerms : []
-
-    const osOptions = osList.map((os) => {
-      if (typeof os === 'string') return { id: os, label: os }
-      return { id: asString(os.id) ?? asString(os.label) ?? 'unknown', label: asString(os.label) ?? asString(os.id) }
-    })
-
-    const slaOptions = slaList.map((sla) => {
-      if (typeof sla === 'string') return { id: sla, label: sla }
-      return { id: asString(sla.id) ?? asString(sla.label) ?? 'unknown', label: asString(sla.label) ?? asString(sla.id) }
-    })
-
-    // Billing options: billingCycle × contractTerm, priced per the API when
-    // provided. When the API gives no explicit option lists, we expose the
-    // product as catalog-only (available=false for ordering) rather than
-    // inventing billing enums.
-    const billingOptions = buildBillingOptions(cycleList, termList, detail)
-
-    const priceCents = toCents(detail.price?.amount)
-    const currency = asString(detail.price?.currency) ?? 'EUR'
-
-    const locationsForProduct = locationList.length > 0 ? locationList : [undefined]
-    for (const loc of locationsForProduct) {
-      const locationCode = typeof loc === 'string' ? loc : asString(loc?.id) ?? asString(loc?.label)
-      if (!locationCode) continue
-      const locationLabel = typeof loc === 'object' && loc ? asString(loc.label) : undefined
-      locations.set(locationCode, { code: locationCode, country: locationLabel })
-      offers.push({
-        provider: 'leaseweb',
-        providerProductId: id,
-        location: locationCode,
-        name: asString(detail.name) ?? asString(detail.description) ?? id,
-        vcpu: asNumber(cfg.vcpu ?? detail.vcpu) ?? 0,
-        memoryMb: asNumber(cfg.memoryMb ?? detail.memoryMb) ?? 0,
-        diskGb: asNumber(cfg.diskGb ?? detail.diskGb) ?? 0,
-        trafficGb: asNumber(cfg.trafficGb ?? detail.trafficGb) ?? null,
-        ipv4Count: asNumber(cfg.ipv4Count ?? detail.ipv4Count) ?? 1,
-        ipv6Available: Boolean(cfg.ipv6 ?? detail.ipv6 ?? true),
-        providerCurrency: currency,
-        providerPriceCents: priceCents,
-        billingOptions,
-        operatingSystems: osOptions,
-        serviceLevels: slaOptions,
-        raw: detail,
-      })
-    }
-  }
-
-  return { offers, locations: [...locations.values()], raw }
-}
-
-/**
- * Build billing options from the raw product configuration.
- *
- * SAFETY: only combinations the API actually proves are exposed. In
- * particular, an independent `billingCycles` list plus an independent
- * `contractTerms` list does NOT prove every cycle×term pairing is orderable,
- * so no Cartesian product is generated. Evidence we accept:
- *  1. a cycle object that embeds its own `contractTerms` (proven pairings), or
- *  2. cycles with their own price and NO term list at all (the cycle is an
- *     orderable option; the contract commitment is simply unknown).
- * Anything else yields an empty list and the product stays catalog-only.
- *
- * The old behavior hardcoded `periodMonths: 1` and `monthly: true` for every
- * option — that injected the mock's semantics into live data and is removed.
- * Monthly classification now happens in the central classifier
- * (modules/providers/billing.ts) from the exact provider values.
- */
-function buildBillingOptions(
-  cycleList: unknown[],
-  termList: unknown[],
-  detail: LswOrderingProductDetail,
-): ProviderOffer['billingOptions'] {
-  if (cycleList.length === 0) return []
-
-  const cycles = cycleList.map((raw) => {
-    if (typeof raw === 'string') return { id: raw, label: raw, price: undefined, terms: [] as unknown[] }
-    const c = raw as { id?: unknown; label?: unknown; price?: unknown; contractTerms?: unknown }
-    return {
-      id: asString(c.id) ?? asString(c.label) ?? 'unknown',
-      label: asString(c.label) ?? asString(c.id) ?? 'unknown',
-      price: c.price as { amount?: unknown; currency?: unknown } | undefined,
-      terms: Array.isArray(c.contractTerms) ? c.contractTerms : [],
-    }
-  })
-
-  const options: ProviderOffer['billingOptions'] = []
-  for (const cycle of cycles) {
-    const amountCents = toCents(cycle.price?.amount) ?? (detail.price?.amount !== undefined ? toCents(detail.price.amount) : null)
-    const amount = typeof cycle.price?.amount === 'string' ? cycle.price.amount : undefined
-
-    if (cycle.terms.length > 0) {
-      // Proven pairings: the cycle embeds its own contract terms.
-      for (const t of cycle.terms) {
-        const term = typeof t === 'number' || typeof t === 'string' ? t : (t as { id?: unknown })?.id
-        options.push({
-          billingCycle: cycle.id,
-          label: cycle.label,
-          contractTerm: term === undefined ? undefined : (term as string | number),
-          amountCents: amountCents ?? 0,
-          amount,
-        })
-      }
-    } else if (termList.length === 0) {
-      // Orderable cycle with its own price and no term info at all: expose the
-      // cycle as-is; the commitment stays unknown (classifier -> UNKNOWN).
-      options.push({
-        billingCycle: cycle.id,
-        label: cycle.label,
-        amountCents: amountCents ?? 0,
-        amount,
-      })
-    }
-    // else: independent cycle + term lists exist. We do NOT combine them —
-    // the API does not prove which pairings are orderable.
-  }
-  return options
-}
-
-function toCents(amount: unknown): number | null {
-  const n = asNumber(amount)
-  if (n === undefined) return null
-  return Math.round(n * 100)
-}
-
-function mapOrderState(state: string | undefined): ProviderOrderResult['state'] {
-  const s = (state ?? '').toLowerCase()
-  if (s.includes('active') || s.includes('provision')) return 'active'
-  if (s.includes('fail') || s.includes('cancel') || s.includes('error')) return 'failed'
-  if (s.includes('pending') || s.includes('new')) return 'pending'
-  return 'pending'
-}
-
-function mapVirtualServer(vps: LswVirtualServer): ProviderServerView {
-  const ips = Array.isArray(vps.ipAddresses) ? vps.ipAddresses : Array.isArray(vps.ips) ? vps.ips : []
-  const ipv4 = ips.find((i) => String(i.version ?? '').includes('4'))
-  const ipv6 = ips.find((i) => String(i.version ?? '').includes('6'))
-  return {
-    providerServerId: asString(vps.id) ?? 'unknown',
-    state: mapServerState(vps.state),
-    hostname: asString(vps.name),
-    ipv4: asString(ipv4?.ip),
-    ipv6: asString(ipv6?.ip),
-    metadata: { raw: vps },
-  }
-}
-
-function mapServerState(state: string | undefined): ProviderServerView['state'] {
-  const s = (state ?? '').toLowerCase()
-  if (s.includes('run')) return 'active'
-  if (s.includes('stop') || s.includes('suspend')) return 'suspended'
-  if (s.includes('provision') || s.includes('instal')) return 'provisioning'
-  if (s.includes('terminat') || s.includes('delet')) return 'terminated'
-  if (s.includes('fail') || s.includes('error')) return 'failed'
-  return 'unknown'
 }

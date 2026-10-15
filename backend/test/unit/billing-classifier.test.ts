@@ -49,6 +49,11 @@ describe('billing classifier', () => {
     expect(m2m.eligibilityReason).toContain('monthly')
   })
 
+  it('recognizes the actual Leaseweb monthly contract key without confusing longer commitments', () => {
+    expect(classifyBillingOption({ billingCycle: '1_MONTH', contractTerm: '1_MONTH', source: 'leaseweb-api' }).classification).toBe('MONTH_TO_MONTH')
+    expect(classifyBillingOption({ billingCycle: '1_MONTH', contractTerm: '12_MONTHS', source: 'leaseweb-api' }).classification).toBe('MONTHLY_BILLING_LONG_TERM_COMMITMENT')
+  })
+
   it('monthly billing with unprovable contract term is UNKNOWN, not month-to-month', () => {
     const c = classifyBillingOption({ billingCycle: 'monthly', contractTerm: 'CUSTOM', source: 'leaseweb-api' })
     expect(c.classification).toBe('UNKNOWN')

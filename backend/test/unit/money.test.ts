@@ -39,18 +39,17 @@ describe('money (integer math only)', () => {
     expect(roundTo(-5, 1_000)).toBe(-1_000)
   })
 
+  it('does not add a rial to exact prices and rounds odd units at the correct boundary', () => {
+    expect(roundTo(4262, 1)).toBe(4262)
+    expect(roundTo(10, 3)).toBe(9)
+    expect(roundTo(11, 3)).toBe(12)
+    expect(roundTo(-10, 3)).toBe(-9)
+  })
+
   it('converts rials <-> toman for display only', () => {
     expect(tomanToRial(1_123_800)).toBe(11_238_000)
     expect(rialToToman(11_238_000)).toBe(1_123_800)
     expect(rialToToman(11_238_999)).toBe(1_123_899) // truncation, never rounding for money math
   })
 
-  it('never uses floating point arithmetic for money', () => {
-    // Classic float trap: 0.1 + 0.2 !== 0.3 — our helpers must be immune.
-    const a = toCents('0.1')
-    const b = toCents('0.2')
-    const sum = (a + b) / 10
-    expect(sum).toBe(3) // 3 tenths of a euro, exactly
-    expect(Number.isInteger(applyRateDivisor(1, '3.14', 1))).toBe(true)
-  })
 })

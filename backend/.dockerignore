@@ -11,3 +11,4 @@ coverage
 .gitignore
 test
 drizzle/meta/_journal.json.tmp
+configuration.toml

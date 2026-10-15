@@ -2,49 +2,51 @@ import { and, eq } from 'drizzle-orm'
 import type { DbClient } from '../../db/index.js'
 import { fxRates, pricingRules } from '../../db/schema.js'
 import { NotFoundError, ValidationError } from '../../lib/errors.js'
-import { applyRateDivisor, percentOf, roundTo } from '../../lib/money.js'
+import { percentOf, roundTo } from '../../lib/money.js'
 import { writeAudit } from '../audit/service.js'
 import type { ProviderBillingOption } from '../providers/provider.interface.js'
+import { exactProviderCents, providerCentsToRial } from './periods.js'
+import { getConfig } from '../../config.js'
 
-export const FX_PAIR = { from: 'EUR', to: 'IRR' } as const
 
 // ---------------------------------------------------------------------------
 // FX rates (history rows; the latest per pair is active)
 // ---------------------------------------------------------------------------
-export async function getActiveFxRate(db: DbClient): Promise<{ rate: string; from: string; to: string; createdAt: Date }> {
+export async function getActiveFxRate(db: DbClient, currency = 'EUR'): Promise<{ rate: string; from: string; to: string; createdAt: Date }> {
+  if (currency === 'IRR') return { rate: '1', from: 'IRR', to: 'IRR', createdAt: new Date() }
   const row = await db.query.fxRates.findFirst({
-    where: (t) => and(eq(t.fromCurrency, FX_PAIR.from), eq(t.toCurrency, FX_PAIR.to)),
+    where: (t) => and(eq(t.fromCurrency, currency), eq(t.toCurrency, 'IRR')),
     orderBy: (t, { desc }) => [desc(t.createdAt)],
   })
   if (!row) {
     throw new NotFoundError(
-      'نرخ ارز تنظیم نشده است. ادمین باید ابتدا نرخ EUR به IRR را تنظیم کند (POST /api/v1/admin/fx-rates).',
+      `نرخ ارز ${currency} به IRR تنظیم نشده است؛ ادمین باید نرخ این ارز را ثبت کند.`,
     )
   }
   return { rate: row.rate, from: row.fromCurrency, to: row.toCurrency, createdAt: row.createdAt }
 }
 
-export async function setFxRate(db: DbClient, rate: string, opts: { actorId?: string | null; note?: string } = {}) {
+export async function setFxRate(db: DbClient, rate: string, opts: { actorId?: string | null; note?: string; currency?: string } = {}) {
   const numeric = Number(rate)
   if (!Number.isFinite(numeric) || numeric <= 0) {
     throw new ValidationError('نرخ ارز باید عددی مثبت باشد')
   }
   const [row] = await db
     .insert(fxRates)
-    .values({ fromCurrency: FX_PAIR.from, toCurrency: FX_PAIR.to, rate, setBy: opts.actorId ?? null, note: opts.note ?? null })
+    .values({ fromCurrency: opts.currency ?? 'EUR', toCurrency: 'IRR', rate, setBy: opts.actorId ?? null, note: opts.note ?? null })
     .returning()
   if (!row) throw new Error('failed to set fx rate')
   await writeAudit(db, {
     actorId: opts.actorId ?? null,
     action: 'admin.fx_rate.changed',
-    metadata: { rate, from: FX_PAIR.from, to: FX_PAIR.to },
+    metadata: { rate, from: opts.currency ?? 'EUR', to: 'IRR' },
   })
   return row
 }
 
-export async function listFxRateHistory(db: DbClient, limit = 20) {
+export async function listFxRateHistory(db: DbClient, limit = 20, currency = 'EUR') {
   return db.query.fxRates.findMany({
-    where: (t) => and(eq(t.fromCurrency, FX_PAIR.from), eq(t.toCurrency, FX_PAIR.to)),
+    where: (t) => and(eq(t.fromCurrency, currency), eq(t.toCurrency, 'IRR')),
     orderBy: (t, { desc }) => [desc(t.createdAt)],
     limit,
   })
@@ -58,10 +60,13 @@ export async function getPricingRules(db: DbClient, provider = 'leaseweb') {
   if (existing) return existing
   const [created] = await db
     .insert(pricingRules)
-    .values({ provider, markupPercent: '25', markupFixedRial: 0, taxPercent: '0', roundingToRial: 1000 })
+    .values({ provider, markupPercent: String(getConfig().STOREFRONT_PRICING[provider]?.markupPercent ?? 25), markupFixedRial: 0, taxPercent: '0', roundingToRial: 1000 })
+    .onConflictDoNothing()
     .returning()
-  if (!created) throw new Error('failed to load pricing rules')
-  return created
+  if (created) return created
+  const concurrent = await db.query.pricingRules.findFirst({ where: (t) => eq(t.provider, provider) })
+  if (!concurrent) throw new Error('failed to load pricing rules')
+  return concurrent
 }
 
 export async function updatePricingRules(
@@ -125,11 +130,11 @@ export function computePriceFromRules(input: {
 }): PriceSnapshot {
   const { rules } = input
   if (!rules.enabled) throw new ValidationError('قیمت‌گذاری این سرویس‌دهنده غیرفعال است')
-  if (!Number.isInteger(input.providerAmountCents) || input.providerAmountCents <= 0) {
+  if (!Number.isFinite(input.providerAmountCents) || input.providerAmountCents <= 0) {
     throw new ValidationError('محصول انتخابی قیمت معتبری ندارد')
   }
 
-  const providerRial = applyRateDivisor(input.providerAmountCents, input.fxRate, 100)
+  const providerRial = providerCentsToRial(input.providerAmountCents, input.fxRate)
   const base = providerRial + rules.markupFixedRial
   const subtotal = base + percentOf(base, rules.markupPercent)
   const tax = percentOf(subtotal, rules.taxPercent)
@@ -158,11 +163,8 @@ export async function computePriceSnapshot(
   },
 ): Promise<PriceSnapshot> {
   const rules = await getPricingRules(db, input.provider)
-  const fx = input.fxRate ? { rate: input.fxRate } : await getActiveFxRate(db)
-  const providerAmountCents = input.billingOption.amountCents
-  if (providerAmountCents === undefined) {
-    throw new ValidationError('محصول انتخابی قیمت معتبری ندارد')
-  }
+  const fx = input.fxRate ? { rate: input.fxRate } : await getActiveFxRate(db, input.providerCurrency)
+  const providerAmountCents = exactProviderCents(input.billingOption)
   return computePriceFromRules({
     providerCurrency: input.providerCurrency,
     providerAmountCents,

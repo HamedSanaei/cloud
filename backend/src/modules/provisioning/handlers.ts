@@ -12,8 +12,7 @@
  */
 import { and, eq, inArray } from 'drizzle-orm'
 import type { DbClient } from '../../db/index.js'
-import { invoices, invoiceItems, notifications, orders, providerOperations, renewalAttempts, servers, subscriptions } from '../../db/schema.js'
-import { getConfig } from '../../config.js'
+import { invoices, invoiceItems, notifications, orderEvents, orders, providerOperations, renewalAttempts, servers, subscriptions } from '../../db/schema.js'
 import {
   AppError,
   ProviderPermanentError,
@@ -26,9 +25,9 @@ import { generateNumber, transitionOrder } from '../orders/service.js'
 import { createServerRecord, activateServer, updateServerFromView } from '../servers/service.js'
 import { createSubscription, enterGracePeriod, extendSubscriptionPeriod, findGraceExpiredSubscriptions, findSubscriptionsDueForRenewal, suspendSubscription } from '../subscriptions/service.js'
 import { getProvider } from '../providers/registry.js'
-import { applyWalletTransaction, ensureDefaultWallet } from '../wallets/service.js'
+import { applyWalletTransaction } from '../wallets/service.js'
 import type { CloudQueues } from '../../jobs/queue.js'
-import type { ProviderBillingOption, RecoveryResult } from '../providers/provider.interface.js'
+import type { ProviderBillingOption, ProviderServerView, RecoveryResult } from '../providers/provider.interface.js'
 
 export interface HandlerContext {
   db: DbClient
@@ -42,7 +41,7 @@ const MAX_PROVISION_ATTEMPTS = 5
 // ---------------------------------------------------------------------------
 export async function handleCatalogSync(ctx: HandlerContext, data: { provider: string; actorId?: string | null }) {
   const provider = getProvider(data.provider)
-  return syncProviderCatalog(ctx.db, provider, { actorId: data.actorId ?? null, mode: getConfig().LEASEWEB_MODE })
+  return syncProviderCatalog(ctx.db, provider, { actorId: data.actorId ?? null })
 }
 
 // ---------------------------------------------------------------------------
@@ -53,7 +52,7 @@ export async function handleProvision(ctx: HandlerContext, data: { orderId: stri
   const order = await db.query.orders.findFirst({ where: (t) => eq(t.id, data.orderId) })
   if (!order) return { status: 'order_not_found', skipped: true }
 
-  const businessKey = `leaseweb:provision:order:${order.id}`
+  const businessKey = `${order.provider}:provision:order:${order.id}`
   let op = await db.query.providerOperations.findFirst({ where: (t) => eq(t.businessKey, businessKey) })
 
   // Terminal op states are decided by the operation record, not the order row:
@@ -84,7 +83,7 @@ export async function handleProvision(ctx: HandlerContext, data: { orderId: stri
     const [created] = await db
       .insert(providerOperations)
       .values({
-        provider: 'leaseweb',
+        provider: order.provider,
         kind: 'provision',
         referenceType: 'order',
         referenceId: order.id,
@@ -95,6 +94,7 @@ export async function handleProvision(ctx: HandlerContext, data: { orderId: stri
           location: order.providerLocation,
           operatingSystem: order.operatingSystem,
           hostname: order.hostname,
+          clientReference: order.id,
         },
       })
       .onConflictDoNothing()
@@ -139,18 +139,24 @@ export async function handleProvision(ctx: HandlerContext, data: { orderId: stri
       operatingSystem: order.operatingSystem,
       billingOption: billingOption ?? { billingCycle: 'monthly', label: 'Monthly', contractTerm: 0, periodMonths: 1, amountCents: 0 },
       hostname: order.hostname,
+      clientReference: order.id,
     })
 
     // --- provider accepted the order ---------------------------------------
     const meta = (result.metadata ?? {}) as Record<string, unknown>
     const correlationId = asString(meta.providerCorrelationId)
     const requestId = asString(meta.requestId)
-    const offer = await findOfferByProductAndLocation(db, 'leaseweb', order.providerProductId, order.providerLocation)
+    if (!result.providerServerId) {
+      throw new ProviderUnknownError('Provider accepted the order but has not returned a server id', {
+        providerOrderId: result.providerOrderId, providerCorrelationId: correlationId, requestId,
+      })
+    }
+    const offer = await findOfferByProductAndLocation(db, order.provider, order.providerProductId, order.providerLocation)
 
     const server = await createServerRecord(db, {
       userId: order.userId,
       orderId: order.id,
-      provider: 'leaseweb',
+      provider: order.provider,
       providerOrderId: result.providerOrderId,
       providerServerId: result.providerServerId,
       providerProductId: order.providerProductId,
@@ -172,19 +178,9 @@ export async function handleProvision(ctx: HandlerContext, data: { orderId: stri
         view = undefined
       }
     }
-    await activateServer(db, server.id, view)
-
-    // Subscription (MONTHLY) tied to this server.
-    const sub = await createSubscription(db, {
-      userId: order.userId,
-      serverId: server.id,
-      orderId: order.id,
-      priceRial: order.totalRial,
-      billingInterval: 'MONTHLY',
-    })
-    await db.update(servers).set({ subscriptionId: sub.id }).where(eq(servers.id, server.id))
-
-    await transitionOrder(db, order.id, 'active', { actorId: null, reason: 'server provisioned' })
+    const ready = view?.state === 'active'
+    if (view && ready) await finishServerActivation(db, server.id, view)
+    else await queues.addServerSync(server.id, 15_000)
     await db
       .update(providerOperations)
       .set({
@@ -197,12 +193,6 @@ export async function handleProvision(ctx: HandlerContext, data: { orderId: stri
       })
       .where(eq(providerOperations.id, op.id))
 
-    await db.insert(notifications).values({
-      userId: order.userId,
-      title: 'سرور شما آماده است',
-      body: `سرور ${order.hostname} با موفقیت ساخته شد.`,
-      type: 'success',
-    })
     await writeAudit(db, {
       actorId: order.userId,
       action: 'provider.order.completed',
@@ -210,11 +200,10 @@ export async function handleProvision(ctx: HandlerContext, data: { orderId: stri
       targetId: order.id,
       metadata: { providerServerId: result.providerServerId, providerOrderId: result.providerOrderId },
     })
-    return { status: 'provisioned' }
+    return { status: ready ? 'provisioned' : 'provisioning' }
   } catch (err) {
     if (err instanceof ProviderUnknownError) {
-      // The request may have been accepted by Leaseweb. DO NOT re-order, DO
-      // NOT auto-refund. Mark UNKNOWN and reconcile.
+      // A dispatched request may have been accepted. Never re-order or auto-refund.
       const details = (err as AppError).details as Record<string, unknown> | undefined
       const correlationId = asString(details?.providerCorrelationId) ?? asString(details?.simulatedProviderCorrelationId)
       const requestId = asString(details?.requestId)
@@ -225,7 +214,7 @@ export async function handleProvision(ctx: HandlerContext, data: { orderId: stri
           lastError: err.message,
           providerCorrelationId: correlationId,
           providerRequestId: requestId,
-          responseMetadata: { ...((op.responseMetadata ?? {}) as object), providerCorrelationId: correlationId, requestId, outcome: 'unknown' },
+          responseMetadata: { ...((op.responseMetadata ?? {}) as object), providerOrderId: asString(details?.providerOrderId), providerCorrelationId: correlationId, requestId, outcome: 'unknown' },
           updatedAt: new Date(),
         })
         .where(eq(providerOperations.id, op.id))
@@ -356,6 +345,7 @@ export async function handleReconcile(ctx: HandlerContext, data: { operationId?:
           operatingSystem: asString(requestMeta.operatingSystem),
           hostname: asString(requestMeta.hostname),
           billingOption: requestMeta.billingOption as never,
+          clientReference: asString(requestMeta.clientReference),
         },
       })
     } catch (err) {
@@ -498,7 +488,7 @@ export async function completeOrderFromRecovery(db: DbClient, op: typeof provide
   const serverId = result.providerServerId!
 
   if (order && order.status === 'requires_review') {
-    const offer = await findOfferByProductAndLocation(db, 'leaseweb', order.providerProductId, order.providerLocation)
+    const offer = await findOfferByProductAndLocation(db, order.provider, order.providerProductId, order.providerLocation)
     const server = await createServerRecord(db, {
       userId: order.userId,
       orderId: order.id,
@@ -521,26 +511,11 @@ export async function completeOrderFromRecovery(db: DbClient, op: typeof provide
     } catch {
       view = undefined
     }
-    await activateServer(db, server.id, view)
-    const sub = await createSubscription(db, {
-      userId: order.userId,
-      serverId: server.id,
-      orderId: order.id,
-      priceRial: order.totalRial,
-      billingInterval: 'MONTHLY',
-    })
-    await db.update(servers).set({ subscriptionId: sub.id }).where(eq(servers.id, server.id))
-    await transitionOrder(db, order.id, 'active', { actorId: null, reason: 'resolved by conclusive provider match' })
+    if (view?.state === 'active') await finishServerActivation(db, server.id, view)
     await db
       .update(providerOperations)
       .set({ status: 'succeeded', lastError: null, responseMetadata: { ...((op.responseMetadata ?? {}) as object), reconciled: true, providerServerId: serverId, providerOrderId: result.providerOrderId }, completedAt: new Date(), updatedAt: new Date() })
       .where(eq(providerOperations.id, op.id))
-    await db.insert(notifications).values({
-      userId: order.userId,
-      title: 'سرور شما آماده است',
-      body: `سرور ${order.hostname} با موفقیت ساخته شد (پس از بررسی نهایی).`,
-      type: 'success',
-    })
     await writeAudit(db, {
       action: 'provider.order.completed',
       targetType: 'order',
@@ -561,14 +536,38 @@ export async function completeOrderFromRecovery(db: DbClient, op: typeof provide
 // ---------------------------------------------------------------------------
 // Server sync + actions
 // ---------------------------------------------------------------------------
-export async function handleServerSync(ctx: HandlerContext, data: { serverId: string }) {
-  const { db } = ctx
-  const server = await db.query.servers.findFirst({ where: (t) => eq(t.id, data.serverId) })
-  if (!server || !server.providerServerId) return { status: 'skipped' }
-  const provider = getProvider(server.provider)
-  const view = await provider.getServer(server.providerServerId)
+export async function handleServerSync(ctx: HandlerContext, data: { serverId?: string }) {
+  const { db, queues } = ctx
+  if (!data.serverId) {
+    const pending = await db.query.servers.findMany({ where: (t) => eq(t.status, 'provisioning') })
+    for (const server of pending) await queues.addServerSync(server.id)
+    return { status: 'queued' }
+  }
+  const server = await db.query.servers.findFirst({ where: (t) => eq(t.id, data.serverId!) })
+  if (!server?.providerServerId) return { status: 'skipped' }
+  const view = await getProvider(server.provider).getServer(server.providerServerId)
+  if (view.state === 'active' && !server.subscriptionId) await finishServerActivation(db, server.id, view)
   await updateServerFromView(db, server.id, view)
   return { status: 'synced' }
+}
+
+/** Start the purchased period only after the provider proves the server is running. */
+async function finishServerActivation(db: DbClient, serverId: string, view: ProviderServerView) {
+  await db.transaction(async (tx) => {
+    const [server] = await tx.select().from(servers).where(eq(servers.id, serverId)).for('update').limit(1)
+    if (!server || server.subscriptionId) return
+    const order = await tx.query.orders.findFirst({ where: (t) => eq(t.id, server.orderId) })
+    if (!order || (order.status !== 'provisioning' && order.status !== 'requires_review')) return
+    await activateServer(tx, server.id, view)
+    const sub = await createSubscription(tx, {
+      userId: order.userId, serverId: server.id, orderId: order.id,
+      priceRial: order.totalRial, billingInterval: order.billingInterval,
+    })
+    await tx.update(servers).set({ subscriptionId: sub.id }).where(eq(servers.id, server.id))
+    await tx.update(orders).set({ status: 'active', updatedAt: new Date() }).where(eq(orders.id, order.id))
+    await tx.insert(orderEvents).values({ orderId: order.id, fromStatus: order.status, toStatus: 'active', reason: 'provider server is running' })
+    await tx.insert(notifications).values({ userId: order.userId, title: 'سرور شما آماده است', body: `سرور ${order.hostname} با موفقیت ساخته شد.`, type: 'success' })
+  })
 }
 
 export async function handleServerAction(
@@ -608,106 +607,104 @@ export async function handleServerAction(
 }
 
 // ---------------------------------------------------------------------------
-// Billing: monthly renewal sweep + grace expiry
+// Billing: renew only at the purchased hourly/daily/monthly boundary.
 // ---------------------------------------------------------------------------
 export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed: number; failed: number; suspended: number }> {
   const { db, queues } = ctx
-  const horizonMs = getConfig().RENEWAL_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000
-  const subs = await findSubscriptionsDueForRenewal(db, horizonMs)
+  const subs = await findSubscriptionsDueForRenewal(db, 0)
   let renewed = 0
   let failed = 0
 
   for (const sub of subs) {
-    // Row lock — two workers cannot double-invoice the same subscription.
-    const locked = await db
-      .select()
-      .from(subscriptions)
-      .where(eq(subscriptions.id, sub.id))
-      .for('update')
-      .limit(1)
-    const current = locked[0]
-    if (!current) continue
-    if (current.nextInvoiceAt > new Date(Date.now() + horizonMs)) continue
-    if (current.status !== 'active' && current.status !== 'grace') continue
-
-    const order = current.orderId ? await db.query.orders.findFirst({ where: (t) => eq(t.id, current.orderId ?? '') }) : null
-    const invoiceNumber = await generateNumber(db, 'INV', invoices, invoices.invoiceNumber)
-    const [invoice] = await db
-      .insert(invoices)
-      .values({
-        invoiceNumber,
-        userId: current.userId,
-        orderId: current.orderId ?? null,
+    const outcome = await db.transaction(async (tx) => {
+      const [current] = await tx.select().from(subscriptions).where(eq(subscriptions.id, sub.id)).for('update').limit(1)
+      if (!current || current.nextInvoiceAt > new Date()) return 'skipped'
+      if (current.status !== 'active' && current.status !== 'grace') return 'skipped'
+      const order = current.orderId ? await tx.query.orders.findFirst({ where: (t) => eq(t.id, current.orderId!) }) : null
+      // An unpaid period reuses its existing invoice on every sweep.
+      let invoice = await tx.query.invoices.findFirst({
+        where: (t) => and(eq(t.subscriptionId, current.id), eq(t.status, 'open')),
+        orderBy: (t, { asc }) => [asc(t.createdAt)],
+      })
+      if (!invoice) {
+        const invoiceNumber = await generateNumber(tx, 'INV', invoices, invoices.invoiceNumber)
+        const [created] = await tx.insert(invoices).values({
+          invoiceNumber,
+          userId: current.userId,
+          orderId: current.orderId,
+          subscriptionId: current.id,
+          status: 'open',
+          subtotalRial: current.priceRial,
+          taxRial: 0,
+          discountRial: 0,
+          totalRial: current.priceRial,
+          description: `تمدید اشتراک ${order?.hostname ?? 'سرور'} — ${current.billingInterval}`,
+          snapshot: { priceRial: current.priceRial, billingInterval: current.billingInterval, periodStart: current.currentPeriodEnd.toISOString() },
+          issuedAt: new Date(),
+          dueAt: current.currentPeriodEnd,
+        }).returning()
+        if (!created) throw new Error('failed to create renewal invoice')
+        invoice = created
+        await tx.insert(invoiceItems).values({
+          invoiceId: invoice.id,
+          description: `تمدید ${current.billingInterval} — ${order?.hostname ?? 'سرور'}`,
+          quantity: 1,
+          unitAmountRial: current.priceRial,
+          totalRial: current.priceRial,
+          referenceType: 'subscription',
+          referenceId: current.id,
+        })
+        if (!current.autoRenew) {
+          await tx.insert(notifications).values({
+            userId: current.userId,
+            title: 'فاکتور تمدید صادر شد',
+            body: `فاکتور ${invoice.invoiceNumber} به مبلغ ${current.priceRial} ریال صادر شد.`,
+            type: 'info',
+          })
+        }
+      }
+      if (!current.autoRenew) return 'skipped'
+      const [attempt] = await tx.insert(renewalAttempts).values({
         subscriptionId: current.id,
-        status: 'open',
-        subtotalRial: current.priceRial,
-        taxRial: 0,
-        discountRial: 0,
-        totalRial: current.priceRial,
-        description: `تمدید اشتراک ${order?.hostname ?? 'سرور'} — ${current.billingInterval}`,
-        snapshot: { priceRial: current.priceRial, billingInterval: current.billingInterval, periodStart: current.currentPeriodEnd.toISOString() },
-        issuedAt: new Date(),
-        dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      })
-      .returning()
-    if (!invoice) throw new Error('failed to create renewal invoice')
-    await db.insert(invoiceItems).values({
-      invoiceId: invoice.id,
-      description: `تمدید ${current.billingInterval} — ${order?.hostname ?? 'سرور'}`,
-      quantity: 1,
-      unitAmountRial: current.priceRial,
-      totalRial: current.priceRial,
-      referenceType: 'subscription',
-      referenceId: current.id,
-    })
-
-    await db.insert(renewalAttempts).values({
-      subscriptionId: current.id,
-      invoiceId: invoice.id,
-      status: 'pending',
-      amountRial: current.priceRial,
-    })
-
-    if (!current.autoRenew) {
-      await db.insert(notifications).values({
-        userId: current.userId,
-        title: 'فاکتور تمدید صادر شد',
-        body: `فاکتور ${invoiceNumber} به مبلغ ${current.priceRial} ریال صادر شد.`,
-        type: 'info',
-      })
-      continue
-    }
-
-    // Autopay from the user's default wallet (idempotent per invoice).
-    try {
-      const wallet = await ensureDefaultWallet(db, current.userId)
-      await applyWalletTransaction(db, current.userId, wallet.id, {
+        invoiceId: invoice.id,
+        status: 'pending',
         amountRial: current.priceRial,
-        type: 'renewal',
-        referenceType: 'subscription',
-        referenceId: current.id,
-        idempotencyKey: `renewal:${invoice.id}`,
-        description: `پرداخت خودکار تمدید ${invoiceNumber}`,
-      })
-      await db.update(invoices).set({ status: 'paid', paidAt: new Date() }).where(eq(invoices.id, invoice.id))
-      await db.update(renewalAttempts).set({ status: 'succeeded' }).where(eq(renewalAttempts.invoiceId, invoice.id))
-      await extendSubscriptionPeriod(db, current.id)
-      renewed++
-    } catch (err) {
-      const insufficient = (err as { code?: string }).code === 'insufficient_funds'
-      await db
-        .update(renewalAttempts)
-        .set({ status: insufficient ? 'insufficient_funds' : 'failed', error: (err as Error).message })
-        .where(eq(renewalAttempts.invoiceId, invoice.id))
-      await enterGracePeriod(db, current.id)
-      await db.insert(notifications).values({
-        userId: current.userId,
-        title: 'تمدید ناموفق بود',
-        body: `پرداخت خودکار فاکتور ${invoiceNumber} ناموفق بود. سرویس تا پایان مهلت قانونی (${getConfig().RENEWAL_GRACE_DAYS} روز) فعال می‌ماند.`,
-        type: 'warning',
-      })
-      failed++
-    }
+      }).returning()
+      if (!attempt) throw new Error('failed to create renewal attempt')
+      const wallet = order?.walletId
+        ? await tx.query.wallets.findFirst({ where: (t) => and(eq(t.id, order.walletId!), eq(t.userId, current.userId)) })
+        : await tx.query.wallets.findFirst({ where: (t) => and(eq(t.userId, current.userId), eq(t.isDefault, true)) })
+      try {
+        if (!wallet) throw new AppError(422, 'insufficient_funds', 'کیف پول پرداخت یافت نشد')
+        await applyWalletTransaction(tx, current.userId, wallet.id, {
+          amountRial: current.priceRial,
+          type: 'renewal',
+          referenceType: 'subscription',
+          referenceId: current.id,
+          idempotencyKey: `renewal:${invoice.id}`,
+          description: `پرداخت خودکار تمدید ${invoice.invoiceNumber}`,
+        })
+      } catch (err) {
+        if (!(err instanceof AppError) || err.code !== 'insufficient_funds') throw err
+        await tx.update(renewalAttempts).set({ status: 'insufficient_funds', error: (err as Error).message }).where(eq(renewalAttempts.id, attempt.id))
+        if (current.status !== 'grace') {
+          await enterGracePeriod(tx, current.id)
+          await tx.insert(notifications).values({
+            userId: current.userId,
+            title: 'تمدید ناموفق بود',
+            body: `موجودی برای پرداخت فاکتور ${invoice.invoiceNumber} کافی نیست.`,
+            type: 'warning',
+          })
+        }
+        return 'failed'
+      }
+      await tx.update(invoices).set({ status: 'paid', paidAt: new Date() }).where(eq(invoices.id, invoice.id))
+      await tx.update(renewalAttempts).set({ status: 'succeeded' }).where(eq(renewalAttempts.id, attempt.id))
+      await extendSubscriptionPeriod(tx, current.id)
+      return 'renewed'
+    })
+    if (outcome === 'renewed') renewed++
+    if (outcome === 'failed') failed++
   }
 
   // Grace expiry: suspend services past their grace period.

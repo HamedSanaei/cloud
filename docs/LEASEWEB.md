@@ -1,7 +1,7 @@
 # Leaseweb Provider Integration
 
-Leaseweb is the **first** provider behind the platform's `CloudProvider`
-abstraction (see `backend/src/modules/providers/provider.interface.ts`).
+Leaseweb VPS and hourly Public Cloud implement the platform's `CloudProvider`
+abstraction alongside Hetzner Cloud.
 The platform's customers never talk to Leaseweb directly:
 
 ```
@@ -34,16 +34,17 @@ recorded as a permanent failure — the platform never pretends an offer exists.
 
 ## Configuration
 
-| Env var                     | Default                  | Meaning                                      |
-| --------------------------- | ------------------------ | -------------------------------------------- |
-| `LEASEWEB_MODE`             | `mock`                   | `mock` (safe) or `live`                      |
-| `LEASEWEB_API_BASE_URL`     | `https://api.leaseweb.com` | API base URL                               |
-| `LEASEWEB_API_KEY`          | *(empty)*                | Live API key (never committed, never logged) |
-| `LEASEWEB_ORDERING_ENABLED` | `false`                  | Must be `true` to place real paid orders     |
+Use the private `configuration.toml` schema in `configuration.example.toml`:
 
-Live ordering requires **both** `LEASEWEB_MODE=live` **and**
-`LEASEWEB_ORDERING_ENABLED=true`. Catalog reads may work in live mode while
-ordering stays disabled.
+- `[providers.leaseweb]`: `enabled`, `base_url`, `display_name`, `ordering_enabled`, `locations`.
+- `[providers.leaseweb.accounts.<id>]`: `api_key`, `enabled`, `state`, `priority`, `label`.
+- `[providers.leaseweb.families.vps]` and `.cloud`: independent `enabled` gates.
+- `[storefront.pricing.leaseweb]` and `[storefront.pricing."leaseweb.hourly"]`:
+  markup and explicit auto-publication policy.
+
+Keep `ordering_enabled=false` for read-only discovery. Production requires TOML
+and never silently registers the mock provider. Explicit non-empty environment
+credential overrides remain available; optional empty values do not erase accounts.
 
 ## Modes
 
@@ -75,7 +76,9 @@ Implemented against the official endpoints:
   billing cycles, contract terms, OS options (the source of allowed values —
   **never guess enums**)
 - `POST /ordering/v1/products/vps/{vpsId}/order` — place order
-- VPS management APIs for list/get/power/reboot (capability-checked)
+- `/publicCloud/v1/vps` and `/publicCloud/v1/instances` — account-pinned management
+- `/publicCloud/v1/regions`, `/instanceTypes?region=...`, `/images?region=...` — actual regional hourly offers
+- `POST /publicCloud/v1/instances` — hourly cloud orders with real root-disk requirements
 
 ## Ordering workflow (safe)
 
@@ -103,11 +106,10 @@ them, otherwise a clear availability reason is returned.
 `handleReconcile` (worker) asks the provider through `reconcileOrder()`, which
 returns one of:
 
-- `MATCHED` — the provider supplied **conclusive** evidence linking the
-  external resource to THIS internal operation. Today this only happens when
-  a provider-issued id was captured from the original order response BEFORE
-  the ambiguity and is then verified to exist at the provider
-  (`/vps/v1/virtualServers/{id}`). Safe to attach.
+- `MATCHED` — exact captured server ID verified against inventory, or the
+  original `/account/v1/orders/{id}` returning a `VIRTUAL_SERVER.equipmentId`
+  subsequently verified on `/publicCloud/v1/vps/{id}` using the same credential.
+  Hostname/product resemblance is never proof.
 - `NO_MATCH` — exact-id lookup proves the resource does not exist.
 - `AMBIGUOUS` — ownership cannot be proven. Candidate evidence
   (server ids, hostnames, timestamps) is recorded on the operation for the
@@ -235,50 +237,22 @@ UNKNOWN→reconciliation — all against the mock provider.
 
 ## Local persistent configuration
 
-For local backend development, keep secrets in `backend/.env.local` (git-ignored,
-loaded automatically — never committed):
+Copy `configuration.example.toml` to the repository-root `configuration.toml`.
+Configure provider accounts there; keep infrastructure/auth in `backend/.env.local`.
+Never copy another application's database, bot or payment credentials.
 
-```env
-LEASEWEB_API_KEY=YOUR_LOCAL_SECRET
-LEASEWEB_MODE=live
-LEASEWEB_ORDERING_ENABLED=false
-```
-
-Loading is centralized in `backend/src/lib/env-loader.ts`, invoked once from
-`loadConfig()` before any config is read. Precedence:
-
-1. existing process environment variables (always win)
-2. `backend/.env.local`
-3. `backend/.env`
-4. application defaults
-
-All local commands see the file automatically, from any working directory:
+The bootstrap variable `CLOUD_PLATFORM_CONFIG_FILE` chooses an explicit file;
+otherwise local execution discovers the root TOML and production reads
+`/etc/tofan-cloud/configuration.toml`. All entrypoints share `loadConfig()`.
 
 ```bash
-npm --prefix backend run dev
-npm --prefix backend run db:migrate
+npm --prefix backend run env:check
 npm --prefix backend run leaseweb -- doctor
 npm --prefix backend run leaseweb -- sync-offers
-npm --prefix backend run leaseweb -- list-monthly
-npm --prefix backend run env:check
 ```
 
-Warnings:
-
-- **Never commit `backend/.env.local`** (it is git-ignored; `git check-ignore backend/.env.local` must list it).
-- **Never send the API key in chat or logs** — diagnostics only print `configured`/`missing`.
-- **Keep paid ordering disabled during discovery**: `LEASEWEB_ORDERING_ENABLED=false`.
-- Production never uses these files: `NODE_ENV=production` skips file loading entirely, Docker build contexts ignore `*.env.local`, and nothing is COPY'd into images.
-
-First verification command after pasting your key:
-
-```bash
-npm --prefix backend run env:check
-# backend/.env.local: found
-# LEASEWEB_API_KEY: configured
-# LEASEWEB_MODE: live
-# LEASEWEB_ORDERING_ENABLED: false
-```
+Diagnostics print only configured/enabled account counts, never key values.
+Never commit either secret file or send a key in chat/logs.
 
 ## Read-only live setup (account discovery)
 
@@ -286,18 +260,9 @@ Connect the backend to the real Leaseweb account **without placing any paid
 order**. Everything here is GET-only; the paid order endpoint is guarded
 locally.
 
-Required environment (server or local shell, **never committed**):
-
-```bash
-LEASEWEB_MODE=live
-LEASEWEB_API_KEY=...        # set via env / secret manager — never printed
-LEASEWEB_ORDERING_ENABLED=false
-```
-
-The guard: `LiveLeasewebProvider.createServer()` throws a permanent local
-safety error before any HTTP request when `LEASEWEB_ORDERING_ENABLED != true`
-(verified by `backend/test/unit/leaseweb-ordering-guard.test.ts` — provider
-HTTP POST count stays 0). Catalog GETs (`syncCatalog`) are allowed.
+In private TOML, enable the provider and usable accounts, but leave
+`providers.leaseweb.ordering_enabled=false`. The guard in `createServer()`
+rejects locally before any provider request; catalog reads remain allowed.
 
 Operations CLI (`npm run leaseweb -- <command>`):
 
@@ -311,14 +276,14 @@ Operations CLI (`npm run leaseweb -- <command>`):
   provider** `billingCycle` / `contractTerm` values, provider base price and
   commercial classification (MONTH-TO-MONTH vs MONTHLY BILLING / LONGER
   CONTRACT — never collapsed into one "monthly").
-- `price-preview [--json]` — provider EUR cost → active EUR→IRR FX → markup →
-  tax → final IRR + toman (all integer math).
+- `price-preview [--json]` — provider cost → the actual currency's IRR rate →
+  markup/tax → IRR/toman, without assuming every account bills in EUR.
 
 Retail safety:
 
-- Newly synced offers default to `enabled=false` — catalog availability is
-  **not** retail-sale approval. An admin must review price, FX, markup and
-  monthly terms, then enable the offer explicitly.
+- Newly synced offers default to `enabled=false` unless the operator explicitly
+  sets the relevant `storefront.pricing.*.auto_publish=true`. Existing admin
+  approvals/disabled decisions survive synchronization.
 - Quotes are refused when the catalog is older than `CATALOG_MAX_AGE_MINUTES`
   (default 1440); existing quotes/orders keep their frozen snapshots.
 - Products that disappear from the provider are marked unavailable for new
@@ -351,9 +316,8 @@ Categories:
 - `NON_MONTHLY_BILLING` — provably not monthly invoicing.
 - `UNKNOWN` — cycle or term unrecognized/unprovable; never assumed monthly.
 
-Recognized spellings for months: numbers (`12`), `monthly`/`1M`/`1 month`,
-and `NM`/`N months` term forms. Anything else → `UNKNOWN` until the operator
-adds the observed provider value to the parser.
+Recognized month spellings include numbers (`12`), `monthly`/`1M`/`1 month`,
+and actual Leaseweb `1_MONTH` / `12_MONTHS` contract keys. Unknown terms stay UNKNOWN.
 
 Each option records `classification`, `customerBillingInterval`
 (`'MONTHLY' | null`), `monthToMonth` (`true | false | null`),
@@ -366,17 +330,15 @@ embedding its own contract terms (proven pairings), or a priced cycle with no
 term list at all (commitment unknown). An independent `billingCycles` list
 plus an independent `contractTerms` list is NOT combined into a Cartesian
 product — those products stay catalog-only until the real response shape is
-observed and mapped in `buildBillingOptions` (`live.ts`). If the real API
-uses different combination semantics, adjust that one function and keep the
-classifier untouched.
+observed and mapped in `catalog.ts`. A successful detail query with an explicit
+billing-cycle/contract-term pair is also authoritative evidence for that pair.
 
 ## Going live (checklist)
 
 1. Complete KYC + sales organization setup at Leaseweb.
-2. Generate a read-only-scoped API key first and test catalog sync in
-   `LEASEWEB_MODE=live` with `LEASEWEB_ORDERING_ENABLED=false`.
-3. Verify the returned billing cycles/contract terms — especially monthly —
-   match what you intend to sell.
-4. Only then set `LEASEWEB_ORDERING_ENABLED=true` on the server
-   (`/opt/tofan/cloud/.env`) and restart the stack.
+2. Configure a discovery credential in private TOML and keep `ordering_enabled=false`.
+3. Review real regional offers, free OS/SLA compatibility, monthly commitments,
+   currency-specific FX and markup.
+4. Explicitly set `providers.leaseweb.ordering_enabled=true` in
+   `/opt/tofan/cloud/configuration.toml` and recreate API/worker.
 5. Never enable it automatically, never commit the key.

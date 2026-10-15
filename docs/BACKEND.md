@@ -1,9 +1,8 @@
 # Cloud Server — Backend
 
 Production-grade backend for the Cloud Server hosting platform. The backend is
-provider-agnostic: Leaseweb is the first provider, but orders, billing,
-wallets, invoices, subscriptions and server management never reference
-provider-specific logic.
+provider-agnostic: Hetzner Cloud and Leaseweb VPS/Public Cloud implement the
+same catalog, provisioning and management contract.
 
 ```
 Customer browser
@@ -33,7 +32,7 @@ inside the internal Docker network.
 | Database       | PostgreSQL 17 + Drizzle ORM              |
 | Queue          | Redis 7 + BullMQ                         |
 | Passwords      | Argon2id (`argon2`)                      |
-| Money          | integer rials (customer) / integer cents (provider) |
+| Money          | integer customer rials / exact decimal provider prices |
 | Logging        | pino structured logs                     |
 | API docs       | OpenAPI/Swagger at `/docs`               |
 
@@ -42,7 +41,7 @@ inside the internal Docker network.
 ```
 backend/
   src/
-    config.ts            env parsing (Zod), secret redaction helpers
+    config.ts            environment infrastructure + private TOML providers
     logger.ts            pino logger
     db/
       schema.ts          full Drizzle schema
@@ -66,10 +65,11 @@ backend/
       quotes/            price quotes (single-use, TTL 15 min)
       orders/            order state machine + safe paid ordering
       invoices/          invoices + items, price snapshots
-      subscriptions/     MONTHLY subscriptions + renewal
+      subscriptions/     hourly/daily/monthly subscriptions + renewal
       servers/           internal server entity + actions
       providers/         CloudProvider interface + registry
-        leaseweb/        types, HTTP client, mock + live providers, fixtures
+        leaseweb/        account-pinned VPS + hourly Public Cloud, mock fixtures
+        hetzner/         live API catalog, IPv4 pricing and priority account pool
       provisioning/      job handlers (provision, reconcile, sync, renewal)
       health/            /api/health/live + /api/health/ready
       admin/             admin endpoints (users, wallets, pricing, ops, audit)
@@ -89,9 +89,9 @@ backend/
 
 - Customer money: **integer rials** (IRR). Display in تومان = rials / 10
   (presentation only).
-- Provider money: **integer cents** in the provider currency (e.g. EUR).
-- FX rates are stored as decimal strings (`620000.5`) and applied with exact
-  BigInt math (`applyRateDivisor`). Never `Number` arithmetic on money.
+- Provider money: exact decimal strings in the actual provider currency
+  (observed live: EUR and GBP); quote cents support six fractional digits.
+- FX rates are decimal strings and conversions use scaled BigInt arithmetic.
 - Every price is computed server-side from the stored offer + pricing rules.
   **The browser never sends prices.**
 
@@ -195,10 +195,30 @@ UNKNOWN→reconciliation) and cross-user isolation.
 - Migrations are explicit SQL files under `backend/drizzle`; they are applied
   by the API/worker entrypoints (idempotent) — never auto-generated at startup
   in production.
-- `LEASEWEB_MODE` defaults to `mock`. Real ordering additionally requires
-  `LEASEWEB_ORDERING_ENABLED=true` (see docs/LEASEWEB.md).
-- Secrets: `DATABASE_URL`, `REDIS_URL`, `AUTH_SECRET`, `LEASEWEB_API_KEY` come
-  from the environment (server-side `/opt/tofan/cloud/.env`); they are never
-  logged, never committed, never exposed via any endpoint.
+- Production requires a private TOML file; it never falls back to a mock provider.
+  `configuration.example.toml` documents account arrays/tables, locations,
+  product families, ordering gates, periodic sync and explicit auto-publication.
+- Infrastructure/auth secrets remain in `/opt/tofan/cloud/.env`. Provider keys
+  live only in `/opt/tofan/cloud/configuration.toml`, mounted read-only into
+  API/worker at `/etc/tofan-cloud/configuration.toml` (UID/GID 10001, host mode 0640).
+  Keys never enter frontend assets, image layers, catalog responses or logs.
 - Health: `GET /api/health/live` (always 200 when the process is up),
   `GET /api/health/ready` (checks PostgreSQL).
+
+## Server storefront
+
+- Public `GET /api/catalog/storefront` returns only configured live providers
+  with ordering enabled, current retail-approved offers, actual locations, OS
+  choices and server-calculated rial prices. No provider account IDs or secrets.
+- `POST /api/servers`: `{name, offerId, os, walletId?, billingPeriod}` where
+  `billingPeriod` is `hourly`, `daily` or `monthly`. Old `plan`/`region` demo
+  aliases and Iran-to-Amsterdam remapping were removed.
+- Provider catalog refresh is scheduled from TOML (`900` seconds by default).
+  Successful complete snapshots retire disappeared offers; failed reads do not.
+- Hetzner uses `server_types.locations[].available`; the retired `/datacenters`
+  endpoint is not called. IPv4 cost is included. Definitive capacity refusal
+  can route to the next active account; ambiguous dispatch never does.
+- New external resource IDs preserve owning account/family. Disabled accounts
+  remain readable for existing servers; they receive no new orders.
+- Asiatech is intentionally disabled: no API contract/credentials were supplied.
+  Enabling it without an implementation is rejected, never simulated.

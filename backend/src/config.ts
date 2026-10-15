@@ -1,10 +1,12 @@
 /**
- * Backend configuration — all values come from the environment.
- * Secrets (DATABASE_URL, REDIS_URL, AUTH_SECRET, LEASEWEB_API_KEY) are never
- * logged, never committed, and never exposed through any API endpoint.
+ * Backend infrastructure/auth stays environment-owned; provider/storefront
+ * settings may additionally come from the runtime TOML configuration.
+ * Credentials must never be logged or exposed through API endpoints.
  */
 import { z } from 'zod'
 import { loadLocalEnvFiles } from './lib/env-loader.js'
+import { loadProviderConfig, type ProviderRuntimeConfig } from './lib/provider-config.js'
+export type { ProviderAccount, HetznerConfig, LeasewebConfig, AsiatechConfig } from './lib/provider-config.js'
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -59,7 +61,7 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
 })
 
-export type AppConfig = z.infer<typeof envSchema>
+export type AppConfig = z.infer<typeof envSchema> & ProviderRuntimeConfig
 
 let cached: AppConfig | null = null
 
@@ -75,7 +77,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     const details = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')
     throw new Error(`Invalid environment configuration: ${details}`)
   }
-  cached = parsed.data
+  cached = { ...parsed.data, ...loadProviderConfig(env, env === process.env) }
   return cached
 }
 
@@ -92,15 +94,20 @@ export function isTest(): boolean {
   return getConfig().NODE_ENV === 'test'
 }
 
-/** True when real Leaseweb ordering is allowed. Requires BOTH flags. */
+/** TOML accounts are authoritative when configured. */
 export function leasewebOrderingEnabled(): boolean {
   const c = getConfig()
-  return c.LEASEWEB_MODE === 'live' && c.LEASEWEB_ORDERING_ENABLED
+  return c.PROVIDERS.leaseweb.enabled && c.PROVIDERS.leaseweb.orderingEnabled
 }
 
 export function redactSecrets(input: string): string {
   const c = getConfig()
-  const secrets = [c.AUTH_SECRET, c.LEASEWEB_API_KEY].filter((s) => s.length >= 8)
+  const secrets = [
+    c.AUTH_SECRET, c.DATABASE_URL, c.REDIS_URL, c.LEASEWEB_API_KEY,
+    c.PROVIDERS.asiatech.apiKey,
+    ...Object.values(c.PROVIDERS).flatMap((provider) =>
+      'accounts' in provider ? provider.accounts.flatMap((account) => [account.apiKey ?? '', account.apiToken ?? '']) : []),
+  ].filter((secret) => secret.length > 0).sort((a, b) => b.length - a.length)
   let out = input
   for (const s of secrets) out = out.split(s).join('***REDACTED***')
   return out

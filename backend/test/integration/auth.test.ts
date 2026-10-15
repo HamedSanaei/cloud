@@ -2,9 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getTestContext, truncateAll, dbAvailable, testLogger } from '../helpers.js'
 import { buildApp } from '../../src/app.js'
 import { setFxRate } from '../../src/modules/pricing/service.js'
-import { syncProviderCatalog, enableAllOffersForSale } from '../../src/modules/catalog/service.js'
+import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
 import { getProvider } from '../../src/modules/providers/registry.js'
 import type { FastifyInstance } from 'fastify'
+import { eq } from 'drizzle-orm'
+import { ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/service.js'
+import { handleProvision } from '../../src/modules/provisioning/handlers.js'
 
 const skip = !dbAvailable
 
@@ -96,15 +99,21 @@ describe.skipIf(skip)('auth + permissions (integration)', () => {
     })
     expect(sync.statusCode).toBe(200)
 
-    // A creates a server via the wizard bridge.
+    const offer = await findOfferByProductAndLocation(ctx.db, 'leaseweb', 'VPS02_4', 'FRA-01')
+    const owner = await ctx.db.query.users.findFirst({ where: (t) => eq(t.email, 'bob@test.local') })
+    const wallet = await ensureDefaultWallet(ctx.db, owner!.id)
+    await creditWallet(ctx.db, owner!.id, wallet.id, 50000000, { type: 'manual_credit' })
     const create = await app.inject({
       method: 'POST',
       url: '/api/v1/servers',
       headers: { authorization: `Bearer ${aToken}`, 'idempotency-key': 'perm-a-1' },
-      payload: { name: 'a-vps', region: 'germany', plan: 'standard', os: 'ubuntu' },
+      payload: { name: 'a-vps', offerId: offer!.id, os: 'ubuntu-24.04', walletId: wallet.id, billingPeriod: 'monthly' },
     })
     expect(create.statusCode).toBe(201)
-    const serverId = (create.json() as { data: { id: string } }).data.id
+    const creation = create.json<{ data: { id: string } }>()
+    await handleProvision(ctx, { orderId: creation.data.id })
+    const server = await ctx.db.query.servers.findFirst({ where: (t) => eq(t.orderId, creation.data.id) })
+    const serverId = server!.id
 
     // B cannot see A's server.
     const bList = await app.inject({ method: 'GET', url: '/api/v1/servers', headers: { authorization: `Bearer ${bToken}` } })

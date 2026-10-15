@@ -1560,6 +1560,80 @@ textarea:focus-visible {
   min-height: 145px;
 }
 
+.storefront-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+}
+
+.storefront-stack {
+  display: grid;
+  gap: 22px;
+}
+
+.storefront-state {
+  display: flex;
+  min-height: 160px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+
+.storefront-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.provider-card__logo {
+  display: flex;
+  width: 190px;
+  max-width: 100%;
+  height: 76px;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.provider-card__logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.server-storefront .choice-card {
+  min-width: 0;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.server-storefront .choice-card:focus-visible {
+  outline: 3px solid var(--brand-500);
+  outline-offset: 3px;
+}
+
+.server-storefront .choice-card small {
+  font-size: 12px;
+}
+
+.server-storefront .review-list strong {
+  text-align: end;
+  overflow-wrap: anywhere;
+}
+
+.server-storefront .info-box svg {
+  flex-shrink: 0;
+}
+
 .wizard-form,
 .review-grid {
   display: grid;

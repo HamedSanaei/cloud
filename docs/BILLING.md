@@ -5,13 +5,13 @@
 | Currency context | Storage                                  | Display              |
 | ---------------- | ---------------------------------------- | -------------------- |
 | Customer ledger  | **integer rials** (IRR) in `*_rial` columns | تومان = rials / 10 (truncation, display only) |
-| Provider prices  | **integer cents** in provider currency (`provider_amount_cents` + `provider_currency`) | – |
+| Provider prices  | Exact decimal currency strings; quote `provider_amount_cents` is `numeric(20,6)` for fractional cents | Provider currency is preserved |
 
 Rules:
 
 - **Never use floating point for money.** All conversions go through
-  `src/lib/money.ts` (BigInt-based exact math: `applyRateDivisor`,
-  `percentOf`, `roundTo`, `toCents`).
+  `src/lib/money.ts` and `src/modules/pricing/periods.ts` (scaled BigInt
+  conversions, markup and rounding). Sub-cent cloud prices are not truncated.
 - Prices are always computed server-side from stored offers + pricing rules.
   The browser never sends amounts.
 - Every order/invoice keeps a **price snapshot** (provider amount, FX rate,
@@ -23,7 +23,7 @@ Rules:
 
 ```
 provider_base_cost (cents)
-  × FX rate (EUR → IRR, decimal string, admin-set)
+  × FX rate (the offer's currency → IRR, decimal string, admin-set)
   + fixed markup (rials)
   + percent markup
   + tax percent
@@ -31,8 +31,8 @@ provider_base_cost (cents)
 ```
 
 - FX rates live in `fx_rates` (append-only history; latest per pair is
-  active). `POST /api/v1/admin/fx-rates`.
-- Pricing rules per provider in `pricing_rules`. `PUT /api/v1/admin/pricing`.
+  active). `POST /api/v1/admin/fx-rates` accepts `{currency: "EUR" | "GBP" | ..., rate: "..."}`; `GET` filters with `?currency=GBP`. EUR remains the default for existing callers.
+- Pricing rules per provider in `pricing_rules`; Leaseweb Cloud uses the `leaseweb.hourly` rule. `PUT /api/v1/admin/pricing`.
 - Quotes expire after `QUOTE_TTL_MINUTES` (default 15) and are **single-use**
   (row-locked at order time).
 
@@ -59,23 +59,22 @@ provider_base_cost (cents)
 - Unpaid orders can be paid later from any wallet
   (`POST /api/v1/orders/:id/pay`) — idempotent.
 
-## Subscriptions & renewal (MONTHLY)
+## Subscriptions & renewal (HOURLY / DAILY / MONTHLY)
 
-- Every provisioned server gets a MONTHLY subscription at the order's paid
-  price (`subscriptions.price_rial`, `billing_interval = 'MONTHLY'`).
-  The schema already supports quarterly/semiannual/annual later.
-- `handleRenewalSweep` (worker, every 30 min, row-locked so two workers can't
-  double-invoice):
-  1. finds subscriptions due within `RENEWAL_LOOKAHEAD_DAYS` (default 3),
-  2. generates an open invoice + renewal attempt,
-  3. if `auto_renew` (default), debits the default wallet idempotently
-     (`renewal:<invoice_id>`) and extends the period; on success marks the
-     invoice paid,
-  4. on insufficient funds: renewal attempt `insufficient_funds`, invoice
-     stays open, subscription enters grace (`RENEWAL_GRACE_DAYS`, default 3),
-     user notified,
-  5. after grace expiry the subscription is suspended and the server marked
-     `suspended`.
+- A subscription begins only after the provider reports the server running.
+  Its interval is copied from the paid order, not inferred from provider invoicing.
+- Hourly cloud offers support hourly retail or a daily block of exactly 24 native hours.
+  The provider still receives its original hourly billing option.
+- Prepaid monthly VPS offers remain monthly; no monthly price is divided into
+  invented hourly/daily offers. Longer commitments are not sold as month-to-month.
+- `handleRenewalSweep` runs every minute and only bills periods actually due.
+  The subscription row lock, invoice creation/reuse, wallet debit and period
+  advancement share one transaction. Concurrent sweeps cannot double-charge.
+- Renewal uses the original order wallet (default wallet only for historical
+  orders without one). An unpaid period reuses its open invoice; repeated
+  insufficient-funds checks do not restart grace or spam notifications.
+- On insufficient funds, the subscription enters `RENEWAL_GRACE_DAYS` of grace.
+  After grace expiry it is suspended and the internal server marked `suspended`.
 - **We do not invent Leaseweb lifecycle APIs.** If the provider cannot
   auto-suspend/terminate, an admin/manual intervention state is used instead
   (capability-checked via the provider abstraction).

@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import type { DbClient } from '../../db/index.js'
+import type { DbClient, DbOrTx } from '../../db/index.js'
 import { subscriptionEvents, subscriptions } from '../../db/schema.js'
 import { NotFoundError } from '../../lib/errors.js'
 import { getConfig } from '../../config.js'
@@ -12,11 +12,11 @@ export interface CreateSubscriptionInput {
   serverId: string
   orderId: string
   priceRial: number
-  billingInterval?: 'MONTHLY'
+  billingInterval?: typeof subscriptions.$inferSelect.billingInterval
   periodStart?: Date
 }
 
-export async function createSubscription(db: DbClient, input: CreateSubscriptionInput) {
+export async function createSubscription(db: DbOrTx, input: CreateSubscriptionInput) {
   const start = input.periodStart ?? new Date()
   const end = addInterval(start, input.billingInterval ?? 'MONTHLY')
   const [sub] = await db
@@ -91,7 +91,7 @@ export async function cancelSubscription(db: DbClient, userId: string, subscript
  * Extend the subscription periods by one interval. Called by the renewal job
  * after a successful payment. Idempotent: if already extended past `now`, no-op.
  */
-export async function extendSubscriptionPeriod(db: DbClient, subscriptionId: string): Promise<boolean> {
+export async function extendSubscriptionPeriod(db: DbOrTx, subscriptionId: string): Promise<boolean> {
   const sub = await db.query.subscriptions.findFirst({ where: (t) => eq(t.id, subscriptionId) })
   if (!sub) return false
   if (sub.currentPeriodEnd > new Date() && sub.status === 'active') return false
@@ -121,7 +121,7 @@ export async function extendSubscriptionPeriod(db: DbClient, subscriptionId: str
   return true
 }
 
-export async function enterGracePeriod(db: DbClient, subscriptionId: string): Promise<void> {
+export async function enterGracePeriod(db: DbOrTx, subscriptionId: string): Promise<void> {
   const graceUntil = new Date(Date.now() + getConfig().RENEWAL_GRACE_DAYS * 24 * 60 * 60 * 1000)
   await db.update(subscriptions).set({ status: 'grace', graceUntil, updatedAt: new Date() }).where(eq(subscriptions.id, subscriptionId))
   await db.insert(subscriptionEvents).values({
@@ -156,9 +156,15 @@ export async function findGraceExpiredSubscriptions(db: DbClient) {
   })
 }
 
-function addInterval(date: Date, interval: 'MONTHLY' | 'QUARTERLY' | 'SEMIANNUAL' | 'ANNUAL'): Date {
+function addInterval(date: Date, interval: typeof subscriptions.$inferSelect.billingInterval): Date {
   const out = new Date(date)
   switch (interval) {
+    case 'HOURLY':
+      out.setUTCHours(out.getUTCHours() + 1)
+      break
+    case 'DAILY':
+      out.setUTCDate(out.getUTCDate() + 1)
+      break
     case 'QUARTERLY':
       out.setUTCMonth(out.getUTCMonth() + 3)
       break

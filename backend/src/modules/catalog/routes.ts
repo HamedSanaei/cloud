@@ -7,9 +7,13 @@ import { requireUser } from '../../http/auth.js'
 import { getOffer, listCatalogProviders, listLocations, listOffers } from './service.js'
 import { offerToDto } from '../../lib/dto.js'
 import { NotFoundError } from '../../lib/errors.js'
+import { getStorefront } from './storefront.js'
 
 export const registerCatalogRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
   const { db } = ctx
+
+  // Public catalog projection contains no credentials or provider account ids.
+  app.get('/catalog/storefront', async () => ({ data: await getStorefront(db) }))
 
   app.get('/catalog/providers', async () => {
     const rows = await listCatalogProviders(db)

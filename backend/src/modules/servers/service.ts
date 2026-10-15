@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import type { DbClient } from '../../db/index.js'
+import type { DbClient, DbOrTx } from '../../db/index.js'
 import { providerOperations, servers } from '../../db/schema.js'
 import { ConflictError, NotFoundError } from '../../lib/errors.js'
 import { writeAudit } from '../audit/service.js'
@@ -61,7 +61,7 @@ export async function listServersForUser(db: DbClient, userId: string, opts: { l
   })
 }
 
-export async function activateServer(db: DbClient, serverId: string, view?: ProviderServerView) {
+export async function activateServer(db: DbOrTx, serverId: string, view?: ProviderServerView) {
   const now = new Date()
   const update: Record<string, unknown> = { status: 'active', activatedAt: now, lastSyncedAt: now }
   if (view?.ipv4) update.ipv4 = view.ipv4
@@ -101,7 +101,7 @@ export async function createServerActionOperation(db: DbClient, serverId: string
   const provider = getProvider(server.provider)
   provider.require(action)
 
-  const businessKey = `leaseweb:${action}:server:${server.id}`
+  const businessKey = `${server.provider}:${action}:server:${server.id}`
   const existing = await db.query.providerOperations.findFirst({ where: (t) => eq(t.businessKey, businessKey) })
   if (existing) {
     if (existing.status === 'succeeded') return existing

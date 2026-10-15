@@ -38,7 +38,7 @@ export function parseContractTermMonths(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return Math.round(value)
   if (typeof value !== 'string') return null
   const s = value.trim().toLowerCase()
-  const m = /^(\d+)\s*m(?:onth)?s?$/.exec(s)
+  const m = /^(\d+)[_\s]*m(?:onth)?s?$/.exec(s)
   if (m) return Number(m[1])
   const n = Number(s)
   if (Number.isFinite(n) && n >= 0 && Number.isInteger(n)) return n

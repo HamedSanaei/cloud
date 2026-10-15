@@ -1,0 +1,84 @@
+# Copy to configuration.toml; never commit the private copy.
+# Provider credentials only. This project's DATABASE_URL, REDIS_URL and
+# AUTH_SECRET remain in its own backend environment, not another project's TOML.
+# Bootstrap: CLOUD_PLATFORM_CONFIG_FILE; production /etc/tofan-cloud/configuration.toml.
+
+[providers.hetzner]
+enabled = false
+display_name = "هتزنر"
+base_url = "https://api.hetzner.cloud/v1"
+ordering_enabled = false
+
+[[providers.hetzner.accounts]]
+id = "default"
+label = "Original project"
+enabled = false
+state = "active"
+priority = 100
+api_token = ""
+
+[[providers.hetzner.accounts]]
+id = "secondary"
+label = "Second project"
+enabled = false
+state = "active"
+priority = 200
+api_token = ""
+
+[providers.leaseweb]
+enabled = false
+display_name = "لیزوب"
+base_url = "https://api.leaseweb.com"
+ordering_enabled = false
+locations = ["FRA-01", "LON-01", "AMS-01", "MTL-02", "SFO-12", "SIN-01", "SYD-12", "TYO-11", "WDC-02"]
+
+[providers.leaseweb.accounts.primary]
+label = "Original sales organization"
+enabled = false
+state = "active"
+priority = 100
+api_key = ""
+
+[providers.leaseweb.accounts.uk]
+label = "UK sales organization"
+enabled = false
+state = "active"
+priority = 200
+api_key = ""
+
+[providers.leaseweb.families.vps]
+enabled = true
+billing_model = "prepaid_monthly_fixed"
+
+[providers.leaseweb.families.cloud]
+enabled = true
+billing_model = "hourly"
+
+# No Asiatech API/credentials were present in the supplied source configuration.
+# Enabling an unimplemented provider fails configuration validation.
+[providers.asiatech]
+enabled = false
+display_name = "آسیاتک"
+base_url = ""
+api_key = ""
+
+[storefront.catalog_sync]
+enabled = true
+interval_seconds = 900
+
+# Explicit auto_publish=true makes newly discovered offers available for sale.
+# Existing admin-disabled offers stay disabled across catalog synchronization.
+[storefront.pricing.hetzner]
+mode = "markup"
+markup_percent = 25
+auto_publish = false
+
+[storefront.pricing.leaseweb]
+mode = "markup"
+markup_percent = 25
+auto_publish = false
+
+[storefront.pricing."leaseweb.hourly"]
+mode = "markup"
+markup_percent = 25
+auto_publish = false

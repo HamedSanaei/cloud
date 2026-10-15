@@ -6,6 +6,8 @@ import { NotFoundError, ValidationError } from '../../lib/errors.js'
 import { getOffer } from '../catalog/service.js'
 import { computePriceSnapshot } from '../pricing/service.js'
 import type { ProviderBillingOption, ProviderSlaOption } from '../providers/provider.interface.js'
+import { nativePeriod, retailBilling, type RetailPeriod } from '../pricing/periods.js'
+import { getProvider } from '../providers/registry.js'
 
 export interface CreateQuoteInput {
   userId: string
@@ -14,12 +16,28 @@ export interface CreateQuoteInput {
   billingOption: ProviderBillingOption
   operatingSystem?: string
   serviceLevel?: ProviderSlaOption
+  billingPeriod?: RetailPeriod
 }
 
 export async function createQuote(db: DbClient, input: CreateQuoteInput) {
   const offer = await getOffer(db, input.offerId)
   if (!offer.enabled || !offer.available) throw new ValidationError('این محصول فعلاً قابل سفارش نیست')
-  if (offer.provider !== 'leaseweb') throw new ValidationError('Provider not supported')
+  getProvider(offer.provider).require('provision')
+  const config = getConfig()
+  const settings = offer.provider === 'hetzner' ? config.PROVIDERS.hetzner : config.PROVIDERS.leaseweb
+  if (config.NODE_ENV !== 'test' && (!settings.enabled || !settings.orderingEnabled)) {
+    throw new ValidationError('ثبت سفارش این دیتاسنتر فعلاً فعال نیست')
+  }
+  const providerRow = await db.query.providers.findFirst({ where: (t) => eq(t.id, offer.provider) })
+  if (!providerRow?.enabled) throw new ValidationError('این دیتاسنتر غیرفعال است')
+  const location = offer.locationId
+    ? await db.query.providerLocations.findFirst({ where: (t) => eq(t.id, offer.locationId!) })
+    : null
+  if (!location?.available || location.code !== input.locationCode) throw new ValidationError('موقعیت انتخابی برای این محصول موجود نیست')
+  const systems = (offer.operatingSystems ?? []) as Array<{ id: string }>
+  if (input.operatingSystem && !systems.some((system) => system.id === input.operatingSystem)) {
+    throw new ValidationError('سیستم عامل انتخابی برای این محصول موجود نیست')
+  }
 
   // Catalog-freshness gate: never retail-quote severely stale provider price
   // data. Existing quotes/orders are untouched (they carry their snapshot).
@@ -42,11 +60,14 @@ export async function createQuote(db: DbClient, input: CreateQuoteInput) {
   if (!matched) {
     throw new ValidationError('گزینه صورتحساب انتخابی برای این محصول موجود نیست')
   }
+  const period = input.billingPeriod ?? nativePeriod(matched)
+  if (!period) throw new ValidationError('دوره پرداخت این سرویس پشتیبانی نمی‌شود')
+  const retail = retailBilling([matched], period)
 
   const snapshot = await computePriceSnapshot(db, {
-    provider: offer.provider,
+    provider: offer.provider === 'leaseweb' && offer.category === 'cloud' ? 'leaseweb.hourly' : offer.provider,
     providerCurrency: offer.providerCurrency,
-    billingOption: matched,
+    billingOption: retail.pricing,
   })
 
   const ttlMinutes = getConfig().QUOTE_TTL_MINUTES
@@ -69,7 +90,7 @@ export async function createQuote(db: DbClient, input: CreateQuoteInput) {
       subtotalRial: snapshot.subtotalRial,
       taxRial: snapshot.taxRial,
       totalRial: snapshot.totalRial,
-      billingInterval: 'MONTHLY',
+      billingInterval: retail.interval,
       billingOption: matched as never,
       operatingSystem: input.operatingSystem ?? null,
       serviceLevel: input.serviceLevel ?? null,

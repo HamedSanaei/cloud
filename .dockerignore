@@ -48,3 +48,5 @@ backend/.env.*.local
 .ghcr.env
 config.json
 known_hosts
+configuration.toml
+**/configuration.toml

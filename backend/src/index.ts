@@ -5,8 +5,6 @@ import { migrate } from './db/migrate.js'
 import { createCloudQueues } from './jobs/queue.js'
 import { registerConfiguredProviders } from './modules/providers/registry.js'
 import { buildApp } from './app.js'
-import { syncProviderCatalog } from './modules/catalog/service.js'
-import { getProvider } from './modules/providers/registry.js'
 
 async function main() {
   loadConfig()
@@ -19,15 +17,6 @@ async function main() {
   const dbHandle = createDb()
   const queues = createCloudQueues()
 
-  // Seed the catalog on first boot so the API is immediately usable in mock
-  // mode (idempotent; safe with live mode too since it reads the provider API).
-  try {
-    await syncProviderCatalog(dbHandle.db, getProvider(config.DEFAULT_PROVIDER))
-    logger.info('provider catalog synchronized on startup')
-  } catch (err) {
-    logger.warn({ error: (err as Error).message }, 'catalog sync at startup failed (will retry via job)')
-    await queues.addCatalogSync(config.DEFAULT_PROVIDER, null)
-  }
 
   const app = await buildApp({ db: dbHandle.db, queues, logger, exposeDocs: !['production'].includes(config.NODE_ENV) })
   app.addHook('onClose', async () => {
@@ -44,7 +33,7 @@ async function main() {
   process.on('SIGINT', () => void shutdown('SIGINT'))
 
   await app.listen({ host: config.HOST, port: config.PORT })
-  logger.info('cloud api listening on %s:%d (leaseweb_mode=%s, ordering_enabled=%s)', config.HOST, config.PORT, config.LEASEWEB_MODE, config.LEASEWEB_ORDERING_ENABLED)
+  logger.info('cloud api listening on %s:%d', config.HOST, config.PORT)
 }
 
 main().catch((err) => {

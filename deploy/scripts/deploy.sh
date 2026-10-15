@@ -21,10 +21,9 @@
 #   GHCR_USERNAME   username for authenticated GHCR pull (private package)
 #   GHCR_TOKEN      token with read:packages for that user (private package)
 #
-# Secrets: DATABASE_URL, AUTH_SECRET, POSTGRES_PASSWORD, LEASEWEB_API_KEY etc.
-# live in ${COMPOSE_DIR}/.env (created by server-bootstrap.sh; NEVER in git).
-# docker compose reads that .env automatically because it sits next to the
-# generated compose file.
+# Infrastructure/auth secrets live in ${COMPOSE_DIR}/.env (NEVER in git).
+# Provider credentials live in ${COMPOSE_DIR}/configuration.toml, mounted
+# read-only into API and worker. Neither file is included in an image.
 #
 # GHCR access:
 #   - Anonymous `docker pull` is attempted first -> works for PUBLIC packages.
@@ -169,15 +168,18 @@ services:
       AUTH_SECRET: \${AUTH_SECRET:?AUTH_SECRET must be set in ${COMPOSE_DIR}/.env}
       COOKIE_SECURE: \${COOKIE_SECURE:-true}
       CORS_ORIGIN: \${CORS_ORIGIN:-}
-      LEASEWEB_MODE: \${LEASEWEB_MODE:-mock}
-      LEASEWEB_API_BASE_URL: \${LEASEWEB_API_BASE_URL:-https://api.leaseweb.com}
-      LEASEWEB_API_KEY: \${LEASEWEB_API_KEY:-}
-      LEASEWEB_ORDERING_ENABLED: \${LEASEWEB_ORDERING_ENABLED:-false}
-      DEFAULT_PROVIDER: \${DEFAULT_PROVIDER:-leaseweb}
+      CLOUD_PLATFORM_CONFIG_FILE: /etc/tofan-cloud/configuration.toml
       QUOTE_TTL_MINUTES: \${QUOTE_TTL_MINUTES:-15}
       RENEWAL_LOOKAHEAD_DAYS: \${RENEWAL_LOOKAHEAD_DAYS:-3}
       RENEWAL_GRACE_DAYS: \${RENEWAL_GRACE_DAYS:-3}
       LOG_LEVEL: \${LOG_LEVEL:-info}
+    volumes:
+      - type: bind
+        source: ${COMPOSE_DIR}/configuration.toml
+        target: /etc/tofan-cloud/configuration.toml
+        read_only: true
+        bind:
+          create_host_path: false
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8000/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 20s
@@ -200,6 +202,8 @@ services:
     container_name: ${WORKER_CONTAINER}
     restart: unless-stopped
     depends_on:
+      cloud-api:
+        condition: service_healthy
       cloud-postgres:
         condition: service_healthy
       cloud-redis:
@@ -211,16 +215,21 @@ services:
       DATABASE_URL: \${DATABASE_URL:?DATABASE_URL must be set in ${COMPOSE_DIR}/.env}
       REDIS_URL: \${REDIS_URL:?REDIS_URL must be set in ${COMPOSE_DIR}/.env}
       AUTH_SECRET: \${AUTH_SECRET:?AUTH_SECRET must be set in ${COMPOSE_DIR}/.env}
-      LEASEWEB_MODE: \${LEASEWEB_MODE:-mock}
-      LEASEWEB_API_BASE_URL: \${LEASEWEB_API_BASE_URL:-https://api.leaseweb.com}
-      LEASEWEB_API_KEY: \${LEASEWEB_API_KEY:-}
-      LEASEWEB_ORDERING_ENABLED: \${LEASEWEB_ORDERING_ENABLED:-false}
-      DEFAULT_PROVIDER: \${DEFAULT_PROVIDER:-leaseweb}
+      CLOUD_PLATFORM_CONFIG_FILE: /etc/tofan-cloud/configuration.toml
       QUOTE_TTL_MINUTES: \${QUOTE_TTL_MINUTES:-15}
       RENEWAL_LOOKAHEAD_DAYS: \${RENEWAL_LOOKAHEAD_DAYS:-3}
       RENEWAL_GRACE_DAYS: \${RENEWAL_GRACE_DAYS:-3}
       LOG_LEVEL: \${LOG_LEVEL:-info}
+    volumes:
+      - type: bind
+        source: ${COMPOSE_DIR}/configuration.toml
+        target: /etc/tofan-cloud/configuration.toml
+        read_only: true
+        bind:
+          create_host_path: false
     command: ["npm", "run", "start:worker"]
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:
@@ -259,6 +268,7 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
 
   cloud-redis:
     image: redis:7-alpine
@@ -266,7 +276,9 @@ services:
     restart: unless-stopped
     networks:
       - ${PROJECT}_net
-    command: ["redis-server", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - cloud-redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -282,9 +294,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
 
 volumes:
   cloud-postgres-data:
+  cloud-redis-data:
 
 networks:
   ${PROJECT}_net:
@@ -352,11 +366,11 @@ rollback() {
     return 1
   fi
 
-  if ! pull_image "${PREV_IMAGE}"; then
+  if ! docker image inspect "${PREV_IMAGE}" >/dev/null 2>&1 && ! pull_image "${PREV_IMAGE}"; then
     die "Could not pull previous web image ${PREV_IMAGE} during rollback."
     return 1
   fi
-  if ! pull_image "${PREV_API_IMAGE}"; then
+  if ! docker image inspect "${PREV_API_IMAGE}" >/dev/null 2>&1 && ! pull_image "${PREV_API_IMAGE}"; then
     die "Could not pull previous api image ${PREV_API_IMAGE} during rollback."
     return 1
   fi

@@ -26,11 +26,39 @@ export interface Server {
 
 export interface CreateServerPayload {
   name: string
-  region: string
-  plan: string
+  offerId: string
   os: string
   walletId?: string
-  billingPeriod?: string
+  billingPeriod: BillingPeriod
+}
+
+export type BillingPeriod = 'hourly' | 'daily' | 'monthly'
+
+export interface StorefrontDatacenter {
+  id: string
+  name: string
+  logo: string
+  locations: Array<{ code: string; country: string | null; city: string | null }>
+  billingPeriods: BillingPeriod[]
+}
+
+export interface StorefrontOffer {
+  id: string
+  provider: string
+  location: string
+  name: string
+  category: string
+  vcpu: number
+  memoryMb: number
+  diskGb: number
+  trafficGb: number | null
+  operatingSystems: Array<{ id: string; label?: string; family?: string }>
+  prices: Array<{ period: BillingPeriod; totalRial: number; billingCycle: string; contractTerm?: string | number }>
+}
+
+export interface StorefrontCatalog {
+  datacenters: StorefrontDatacenter[]
+  offers: StorefrontOffer[]
 }
 
 export interface IpAddress {

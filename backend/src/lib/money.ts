@@ -54,10 +54,9 @@ export function roundTo(amount: number, unit: number): number {
   const a = BigInt(amount)
   const sign = a < 0n ? -1n : 1n
   const abs = a < 0n ? -a : a
-  const half = u / 2n
   const down = (abs / u) * u
   const up = down + u
-  let rounded = abs - down >= half ? up : down
+  let rounded = 2n * (abs - down) >= u ? up : down
   if (rounded === 0n && abs > 0n) rounded = u // never collapse a non-zero amount
   return Number(sign * rounded)
 }

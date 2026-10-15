@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { getTestContext, truncateAll, dbAvailable } from '../helpers.js'
 import { registerUser } from '../../src/modules/auth/service.js'
-import { syncProviderCatalog, enableAllOffersForSale } from '../../src/modules/catalog/service.js'
+import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
 import { setFxRate } from '../../src/modules/pricing/service.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
 import { createOrderFromQuote } from '../../src/modules/orders/service.js'
@@ -46,9 +46,7 @@ describe.skipIf(skip)('provisioning safety + permissions (integration)', () => {
   }
 
   async function makeMonthlyQuote(userId: string) {
-    const offer = await ctx.db.query.providerProducts.findFirst({
-      where: (t) => eq(t.providerProductId, 'VPS02_4'),
-    })
+    const offer = await findOfferByProductAndLocation(ctx.db, 'leaseweb', 'VPS02_4', 'FRA-01')
     expect(offer).toBeTruthy()
     return createQuote(ctx.db, {
       userId,

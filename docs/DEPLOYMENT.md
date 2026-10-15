@@ -1,7 +1,7 @@
 # tofan-cloud — Production Deployment
 
 This document describes the production CI/CD pipeline and Docker deployment for
-the **Cloud** console (a static React + TypeScript + Vite SPA served by nginx).
+the **Cloud** console, Fastify API, BullMQ worker and isolated PostgreSQL/Redis.
 
 It is designed to run **alongside Vendora** on the same Linux server without
 touching it — isolated project name, network, container, directory and port.
@@ -363,6 +363,37 @@ sudo bash /opt/tofan/cloud/scripts/status.sh
 
 ## 14. Resource usage
 
-The runtime container is nginx serving static files + gzip. It needs very little
-CPU/RAM, no Node runtime, no Redis/database/PM2. Docker log rotation is set in
-`compose.yml` (`max-size: 5m`, `max-file: 3`, compress).
+The web container serves static files. API and worker run Node.js 24; PostgreSQL
+and Redis are isolated on the Cloud compose network, with no host ports.
+Docker log rotation remains `max-size: 5m`, `max-file: 3`, compress.
+
+## 15. Private provider configuration
+
+- `/opt/tofan/cloud/.env`: this project's database password/URLs and `AUTH_SECRET`;
+  root-owned mode `0600`. Never reuse the source project's infrastructure secrets.
+- `/opt/tofan/cloud/configuration.toml`: only provider/storefront configuration,
+  root-owned group `10001`, mode `0640`. API and worker run as UID/GID `10001`.
+- Both services bind-mount the file read-only to
+  `/etc/tofan-cloud/configuration.toml`; missing source files fail deployment
+  rather than becoming empty directories. No keys are baked into Docker images.
+- `CLOUD_PLATFORM_CONFIG_FILE` points to the container path. `CLOUD_CONFIG_FILE`
+  optionally overrides the host source when using the repository compose file.
+- Configure real accounts, locations and product families using
+  `configuration.example.toml`. Preserve disabled account credentials while
+  they still own servers. New orders use active accounts only.
+- The worker schedules catalog sync from TOML (`900` seconds by default).
+  Configure EUR→IRR and GBP→IRR independently through the admin FX API;
+  never apply a euro rate to a pound-denominated account.
+- After changing TOML, recreate `cloud-api` and `cloud-worker`. The deploy
+  script preserves the private host file across image releases/rollbacks.
+- Verify `GET /api/catalog/storefront`, provider logo assets, actual location
+  choices and hourly/daily filtering; health endpoints alone do not prove the catalog.
+- PostgreSQL/Redis entrypoints receive only the ownership/user-switching
+  capabilities required for fresh volumes; application containers still drop all.
+- The worker does not serve HTTP and disables the shared API image's HTTP
+  healthcheck. Verify `cloud worker ready` plus completed queue jobs.
+- Queue Redis uses AOF on its own persistent volume and `noeviction`, so memory
+  pressure cannot silently discard paid provisioning jobs.
+- Rollback prefers the already-cached previous image pair before pulling,
+  including an operator-built local release. The prior frontend-only compose
+  file is retained in the release backup during the first full-stack cutover.

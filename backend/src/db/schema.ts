@@ -90,7 +90,7 @@ export const providerOpStatusEnum = pgEnum('provider_op_status', [
 ])
 
 export const providerModeEnum = pgEnum('provider_mode', ['mock', 'live'])
-export const billingIntervalEnum = pgEnum('billing_interval', ['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'])
+export const billingIntervalEnum = pgEnum('billing_interval', ['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL', 'HOURLY', 'DAILY'])
 
 // ---------------------------------------------------------------------------
 // Users & auth
@@ -354,8 +354,8 @@ export const quotes = pgTable(
     provider: varchar('provider', { length: 50 }).notNull(),
     providerProductId: varchar('provider_product_id', { length: 100 }).notNull(),
     providerCurrency: varchar('provider_currency', { length: 8 }).notNull(),
-    // Provider amount for the chosen period, integer cents.
-    providerAmountCents: bigint('provider_amount_cents', { mode: 'number' }).notNull(),
+    // Exact provider cents, including fractional cents for hourly cloud prices.
+    providerAmountCents: numeric('provider_amount_cents', { precision: 20, scale: 6, mode: 'number' }).notNull(),
     fxRate: numeric('fx_rate', { precision: 20, scale: 6 }).notNull(),
     markupPercent: numeric('markup_percent', { precision: 10, scale: 4 }).notNull(),
     markupFixedRial: bigint('markup_fixed_rial', { mode: 'number' }).notNull(),

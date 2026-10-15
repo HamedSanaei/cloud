@@ -15,6 +15,7 @@ import type {
   Profile,
   Server,
   Session,
+  StorefrontCatalog,
   Ticket,
   TicketSummary,
   TrafficPackage,
@@ -95,9 +96,18 @@ export async function listServers(): Promise<Server[]> {
   return unwrapList<Server>(payload)
 }
 
+export async function getStorefrontCatalog(): Promise<StorefrontCatalog> {
+  if (noApi()) throw new Error('اتصال به سرویس کاتالوگ پیکربندی نشده است.')
+  const payload = await apiGet<{ data: StorefrontCatalog }>('/catalog/storefront')
+  return payload.data
+}
+
 export async function createServer(payload: CreateServerPayload): Promise<Server> {
+  if (noApi()) throw new Error('اتصال به سرویس ایجاد سرور پیکربندی نشده است.')
   const created = await apiPost<Server | { data: Server }>('/servers', payload)
-  return unwrapOne(created, { id: `srv-${Date.now()}`, name: payload.name, status: 'building', datacenter: payload.region, cpu: '', ram: '', disk: '' })
+  const server = 'data' in created ? created.data : created
+  if (!server?.id) throw new Error('پاسخ سرویس ایجاد سرور معتبر نیست.')
+  return server
 }
 
 export async function listIps(): Promise<IpAddress[]> {

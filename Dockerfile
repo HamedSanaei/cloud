@@ -7,6 +7,10 @@ FROM node:22-alpine AS build
 
 WORKDIR /app
 
+# Same-origin API is the production default; no credentials enter the build.
+ARG VITE_API_BASE_URL=/api
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+
 # Install dependencies first (leverages Docker layer caching on package.json)
 COPY package.json package-lock.json ./
 RUN npm ci

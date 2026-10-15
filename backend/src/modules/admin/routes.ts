@@ -70,14 +70,15 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
 
   app.get('/admin/fx-rates', async (request) => {
     requireAdmin(request)
-    return { data: await listFxRateHistory(db) }
+    const query = parse(z.object({ currency: z.string().regex(/^[A-Z]{3}$/).default('EUR') }), request.query)
+    return { data: await listFxRateHistory(db, 20, query.currency) }
   })
 
   app.post('/admin/fx-rates', async (request) => {
     const admin = requireAdmin(request)
-    const input = parse(z.object({ rate: z.string().min(1), note: z.string().max(300).optional() }), request.body)
-    const row = await setFxRate(db, input.rate, { actorId: admin.id, note: input.note })
-    return { data: { id: row.id, rate: row.rate, createdAt: row.createdAt } }
+    const input = parse(z.object({ rate: z.string().min(1), currency: z.string().regex(/^[A-Z]{3}$/).default('EUR'), note: z.string().max(300).optional() }), request.body)
+    const row = await setFxRate(db, input.rate, { actorId: admin.id, note: input.note, currency: input.currency })
+    return { data: { id: row.id, currency: row.fromCurrency, rate: row.rate, createdAt: row.createdAt } }
   })
 
   app.get('/admin/pricing', async (request) => {

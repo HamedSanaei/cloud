@@ -17,3 +17,7 @@ backend/.env.*.local
 # local docker/dev state
 .docker/
 *.pid
+
+# Runtime provider credentials
+configuration.toml
+backend/configuration.toml

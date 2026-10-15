@@ -97,6 +97,7 @@ export interface ProviderOffer {
   provider: string
   providerProductId: string
   location: string
+  category?: 'vps' | 'cloud'
   name: string
   vcpu: number
   memoryMb: number
@@ -121,6 +122,8 @@ export interface ProviderOrderRequest {
   serviceLevel?: ProviderSlaOption
   hostname?: string
   quantity?: number
+  /** Internal operation id, used only for provider-supported ownership labels. */
+  clientReference?: string
 }
 
 export type ProviderOrderState = 'pending' | 'active' | 'failed' | 'unknown'
@@ -227,6 +230,7 @@ export interface CloudProvider {
       operatingSystem?: string
       hostname?: string
       billingOption?: ProviderBillingOption
+      clientReference?: string
     }
   }): Promise<RecoveryResult>
 }

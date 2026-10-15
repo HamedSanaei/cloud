@@ -26,6 +26,20 @@ describe('LeasewebClient mutating POST classification', () => {
     if (outcome.kind === 'unknown') expect(outcome.status).toBe(503)
   })
 
+  it('HTTP 408 is ambiguous and never authorizes a replacement order', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('{}', { status: 408 }))
+    expect((await client().postMutating('/publicCloud/v1/instances', {})).kind).toBe('unknown')
+  })
+
+  it('removes echoed credential fields and values before returning provider payloads', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({
+      id: 'safe', apiKey: 'test-key', nested: { authorization: 'test-key', note: 'echo test-key' },
+    }), { status: 200 }))
+    const payload = await client().get('/publicCloud/v1/regions')
+    expect(JSON.stringify(payload)).not.toContain('test-key')
+    expect(payload).toEqual({ id: 'safe', nested: { note: 'echo [REDACTED]' } })
+  })
+
   it('network failure after transmission is UNKNOWN (may have been processed)', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('fetch failed'))
     const outcome = await client().postMutating('/ordering/v1/products/vps/VPS02_4/order', {})

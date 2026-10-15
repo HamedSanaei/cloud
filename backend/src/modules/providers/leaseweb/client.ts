@@ -15,6 +15,7 @@
 import { randomUUID } from 'node:crypto'
 import { ProviderPermanentError, ProviderRetryableError } from '../../../lib/errors.js'
 import type { Logger } from '../../../logger.js'
+import { sanitizeLeasewebPayload } from './safety.js'
 
 /** Leaseweb's server-side correlation header (case-insensitive lookup). */
 export const LSW_CORRELATION_HEADER = 'apigw-correlation-id'
@@ -105,7 +106,7 @@ export class LeasewebClient {
       })
       const providerCorrelationId = readCorrelationId(res.headers)
       const text = await res.text().catch(() => '')
-      const payload = parseJson(text)
+      const payload = sanitizeLeasewebPayload(parseJson(text), [this.apiKey])
 
       if (res.ok) {
         return { kind: 'success', data: payload, correlationId: providerCorrelationId, requestId: correlationId }
@@ -113,7 +114,7 @@ export class LeasewebClient {
 
       const message = extractMessage(payload) ?? `Leaseweb HTTP ${res.status}`
 
-      if (res.status >= 500 || res.status === 429) {
+      if (res.status >= 500 || res.status === 429 || res.status === 408 || res.status < 400) {
         // We cannot prove whether Leaseweb processed the order. Conservative.
         this.logger.warn({ method: 'POST', path, status: res.status, correlationId, providerCorrelationId }, 'leaseweb mutating request returned ambiguous status')
         return {
@@ -140,7 +141,7 @@ export class LeasewebClient {
       this.logger.warn({ method: 'POST', path, correlationId, aborted }, 'leaseweb mutating request failed (outcome unknown)')
       return {
         kind: 'unknown',
-        message: aborted ? 'Leaseweb request timed out after transmission — outcome unknown' : `Leaseweb request failed: ${(err as Error).message} — outcome unknown`,
+        message: aborted ? 'Leaseweb request timed out after transmission — outcome unknown' : 'Leaseweb request failed after transmission — outcome unknown',
         requestId: correlationId,
       }
     } finally {
@@ -184,7 +185,7 @@ export class LeasewebClient {
       })
       const providerCorrelationId = readCorrelationId(res.headers)
       const text = await res.text().catch(() => '')
-      const payload = parseJson(text)
+      const payload = sanitizeLeasewebPayload(parseJson(text), [this.apiKey])
 
       if (res.ok) {
         return { data: payload as T, meta: { clientCorrelationId: correlationId, providerCorrelationId } }
@@ -208,7 +209,7 @@ export class LeasewebClient {
       const aborted = err instanceof Error && err.name === 'AbortError'
       this.logger.warn({ method, path, correlationId, aborted }, 'leaseweb request failed')
       throw new ProviderRetryableError(
-        aborted ? 'Leaseweb request timed out' : `Leaseweb request failed: ${(err as Error).message}`,
+        aborted ? 'Leaseweb request timed out' : 'Leaseweb request failed',
         { correlationId },
       )
     } finally {

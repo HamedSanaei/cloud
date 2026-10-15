@@ -1,7 +1,7 @@
 import { loadConfig, getConfig, redactSecrets } from './config.js'
 import { createLogger } from './logger.js'
 import { createDb } from './db/index.js'
-import { createCloudQueues } from './jobs/queue.js'
+import { createCloudQueues, JOB_NAMES } from './jobs/queue.js'
 import { createWorkers } from './jobs/workers.js'
 import { registerConfiguredProviders } from './modules/providers/registry.js'
 import { migrate } from './db/migrate.js'
@@ -13,7 +13,7 @@ async function main() {
   logger.info('starting cloud worker (env=%s, leaseweb_mode=%s)', config.NODE_ENV, config.LEASEWEB_MODE)
 
   await migrate()
-  registerConfiguredProviders()
+  const providers = registerConfiguredProviders()
 
   const dbHandle = createDb()
   const queues = createCloudQueues()
@@ -22,6 +22,20 @@ async function main() {
   // Schedule the periodic renewal sweep (idempotent).
   await queues.scheduleRenewalSweep()
   logger.info('renewal sweep scheduled')
+  await queues.queue(JOB_NAMES.SERVER_SYNC).upsertJobScheduler(
+    'provisioning-status', { every: 30_000 }, { name: 'server-sync', data: {} },
+  )
+
+  if (config.CATALOG_SYNC_ENABLED) {
+    for (const provider of providers) {
+      await queues.queue(JOB_NAMES.CATALOG_SYNC).upsertJobScheduler(
+        `catalog-${provider.id}`,
+        { every: config.CATALOG_SYNC_INTERVAL_SECONDS * 1000 },
+        { name: 'catalog-sync', data: { provider: provider.id } },
+      )
+    }
+    logger.info('provider catalog schedules installed')
+  }
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'shutting down worker')

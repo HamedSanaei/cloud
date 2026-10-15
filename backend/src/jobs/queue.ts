@@ -41,7 +41,7 @@ export interface CloudQueues {
   addProvision(orderId: string): Promise<void>
   addCatalogSync(provider: string, actorId?: string | null): Promise<void>
   addServerAction(data: ServerActionJobData): Promise<void>
-  addServerSync(serverId: string): Promise<void>
+  addServerSync(serverId: string, delayMs?: number): Promise<void>
   addReconcile(operationId?: string): Promise<void>
   scheduleRenewalSweep(): Promise<void>
   close(): Promise<void>
@@ -97,8 +97,9 @@ export function createCloudQueues(redisUrl: string = getConfig().REDIS_URL): Clo
       })
     },
 
-    async addServerSync(serverId: string) {
+    async addServerSync(serverId: string, delayMs = 0) {
       await queue(JOB_NAMES.SERVER_SYNC).add('server-sync', { serverId } satisfies ServerSyncJobData, {
+        delay: delayMs,
         attempts: 3,
         backoff: { type: 'exponential', delay: 5_000 },
         removeOnComplete: 100,
@@ -116,10 +117,10 @@ export function createCloudQueues(redisUrl: string = getConfig().REDIS_URL): Clo
     },
 
     async scheduleRenewalSweep() {
-      // Runs every 30 minutes; idempotent by design (row-locked sweep).
+      // Minute-level sweeps serve hourly and daily subscriptions without early charging.
       await queue(JOB_NAMES.RENEWAL_SWEEP).upsertJobScheduler(
         'renewal-sweep',
-        { every: 30 * 60 * 1000 },
+        { every: 60 * 1000 },
         { name: 'renewal-sweep', data: {} },
       )
     },

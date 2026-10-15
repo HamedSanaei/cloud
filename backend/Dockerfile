@@ -37,7 +37,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 # Non-root user
-RUN addgroup -S cloud && adduser -S cloud -G cloud
+RUN addgroup -S -g 10001 cloud && adduser -S -u 10001 -G cloud cloud
 
 # node_modules (production-only, with native binaries from the build stage)
 COPY --from=build /app/node_modules ./node_modules

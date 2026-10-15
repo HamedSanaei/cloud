@@ -18,7 +18,6 @@
  *    LONGER CONTRACT are never collapsed into a single "monthly".
  */
 import { loadConfig, getConfig } from '../config.js'
-import { describeLocalEnv } from '../lib/env-loader.js'
 import { createDb } from '../db/index.js'
 import { migrate } from '../db/migrate.js'
 import { registerConfiguredProviders, getProvider } from '../modules/providers/registry.js'
@@ -33,7 +32,7 @@ function toman(rial: number): string {
   return `${(rial / 10).toLocaleString('en-US')} تومان`
 }
 
-function eurCentsToEur(cents: number): string {
+function formatProviderCents(cents: number): string {
   return (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
@@ -48,20 +47,19 @@ function getMonthlyInvoicingOptions(billingOptions: unknown): ProviderBillingOpt
 
 async function runDoctor() {
   const config = getConfig()
-  const orderingEnabled = config.LEASEWEB_ORDERING_ENABLED
-  const local = describeLocalEnv()
+  const leaseweb = config.PROVIDERS.leaseweb
+  const orderingEnabled = leaseweb.enabled && leaseweb.orderingEnabled
   console.log('Leaseweb doctor')
-  console.log(`  LEASEWEB_API_KEY      : ${local.apiKey}`)
-  console.log(`  LEASEWEB_MODE         : ${local.mode}`)
-  console.log(`  LEASEWEB_ORDERING_ENABLED: ${local.orderingEnabled}`)
+  console.log(`  configured accounts  : ${leaseweb.accounts.filter((account) => !!account.apiKey).length}`)
+  console.log(`  active accounts      : ${leaseweb.accounts.filter((account) => account.enabled && account.state === 'active').length}`)
   console.log('  ordering enabled     :', orderingEnabled ? 'YES' : 'NO')
   console.log('  paid POST safety guard:', orderingEnabled ? 'INACTIVE — live ordering allowed' : 'ACTIVE')
 
-  if (config.LEASEWEB_MODE !== 'live') {
-    console.log('  API reachable        : N/A (mock mode — no network calls)')
-    console.log('  authentication       : N/A (mock mode)')
-    console.log('  catalog access       : N/A (mock mode)')
-    console.log('\nTo check the real account, run with LEASEWEB_MODE=live (read-only).')
+  if (!leaseweb.enabled) {
+    console.log('  API reachable        : N/A (live provider disabled)')
+    console.log('  authentication       : N/A')
+    console.log('  catalog access       : N/A')
+    console.log('\nConfigure providers.leaseweb in the private runtime TOML for a read-only live check.')
     return 0
   }
 
@@ -104,8 +102,8 @@ async function runSyncOffers() {
       console.log(`  missing billing opts: ${latest.missingBillingOptions}`)
       console.log(`  http errors         : ${latest.httpErrors}`)
     }
-    console.log('\nNewly discovered offers are NOT enabled for retail sale.')
-    console.log('Enable them via the admin API after price/FX/markup/terms review.')
+    console.log('\nRetail approval follows the explicit storefront.pricing auto_publish policy.')
+    console.log('Otherwise enable offers through the admin API after price/FX/markup/terms review.')
   } finally {
     await pool.end()
   }
@@ -223,7 +221,7 @@ async function runListMonthly(json: boolean) {
         String(r.memoryMb),
         String(r.diskGb),
         String(r.trafficGb ?? '-'),
-        r.providerPrice.minorUnits != null ? eurCentsToEur(r.providerPrice.minorUnits) : '-',
+        r.providerPrice.minorUnits != null ? formatProviderCents(r.providerPrice.minorUnits) : '-',
         r.providerPrice.currency ?? '-',
         r.billing.billingCycle ?? '-',
         r.billing.contractTerm != null ? String(r.billing.contractTerm) : '-',
@@ -239,13 +237,7 @@ async function runPricePreview(json: boolean) {
   const { db, pool } = createDb()
   try {
     const rows = await listMonthlyRows()
-    let fxRate: string
-    try {
-      fxRate = (await getActiveFxRate(db)).rate
-    } catch {
-      console.log('No active EUR->IRR FX rate. Set one first (admin API / seed).')
-      return 1
-    }
+    const rates = new Map<string, string>()
     const rules = await getPricingRules(db, 'leaseweb')
     const out = []
     for (const r of rows) {
@@ -255,15 +247,21 @@ async function runPricePreview(json: boolean) {
         continue
       }
       try {
+        const currency = r.providerPrice.currency ?? 'EUR'
+        let fxRate = rates.get(currency)
+        if (!fxRate) {
+          fxRate = (await getActiveFxRate(db, currency)).rate
+          rates.set(currency, fxRate)
+        }
         const snap = computePriceFromRules({
-          providerCurrency: r.providerPrice.currency ?? 'EUR',
+          providerCurrency: currency,
           providerAmountCents: amountCents,
           fxRate,
           rules,
         })
         out.push({
           ...r,
-          providerCostEur: eurCentsToEur(amountCents),
+          providerCost: `${formatProviderCents(amountCents)} ${currency}`,
           fxRate,
           markupPercent: snap.markupPercent,
           markupFixedRial: snap.markupFixedRial,
@@ -275,16 +273,16 @@ async function runPricePreview(json: boolean) {
       }
     }
     if (json) {
-      console.log(JSON.stringify({ fxRate, offerings: out }, null, 2))
+      console.log(JSON.stringify({ offerings: out }, null, 2))
       return 0
     }
-    console.log('PRODUCT\tLOCATION\tEUR/mo\tFX\tMARKUP %\tFINAL IRR\tFINAL (TOMAN)\tTYPE')
+    console.log('PRODUCT\tLOCATION\tPROVIDER COST/mo\tFX\tMARKUP %\tFINAL IRR\tFINAL (TOMAN)\tTYPE')
     for (const o of out) {
       if ('error' in o) {
         console.log(`${o.providerProductId}\t${o.location ?? '-'}\t-\t-\t-\tERROR: ${o.error}`)
       } else {
         console.log(
-          `${o.providerProductId}\t${o.location ?? '-'}\t${o.providerCostEur}\t${o.fxRate}\t${o.markupPercent}\t${o.finalRial}\t${o.finalToman}\t${commercialTypeLabel(o.classification as CommercialType)}`,
+          `${o.providerProductId}\t${o.location ?? '-'}\t${o.providerCost}\t${o.fxRate}\t${o.markupPercent}\t${o.finalRial}\t${o.finalToman}\t${commercialTypeLabel(o.classification as CommercialType)}`,
         )
       }
     }
