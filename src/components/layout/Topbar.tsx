@@ -5,6 +5,7 @@ import { accountLinks, allSearchItems } from '../../data/navigation'
 import { useApiQuery } from '../../hooks/useApiQuery'
 import { getNotifications, getWalletSummary } from '../../lib/endpoints'
 import { formatToman } from '../../lib/format'
+import { useAuth } from '../../auth/AuthContext'
 
 export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
   const [query, setQuery] = useState('')
@@ -22,6 +23,20 @@ export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
   const navigate = useNavigate()
   const wallet = useApiQuery(getWalletSummary)
   const notifications = useApiQuery(getNotifications)
+  const refreshNotifications = notifications.refetch
+  const refreshWallet = wallet.refetch
+  const { user } = useAuth()
+
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return
+      refreshNotifications()
+      refreshWallet()
+    }
+    const timer = window.setInterval(refresh, 60000)
+    window.addEventListener('focus', refresh)
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh) }
+  }, [refreshNotifications, refreshWallet])
 
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
@@ -99,28 +114,32 @@ export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
           {dark ? <Sun size={20} /> : <Moon size={20} />}
         </button>
         <div className="menu-anchor">
-          <button type="button" className="icon-button" onClick={() => setNotificationsOpen((value) => !value)} aria-label="اعلان‌ها">
+          <button type="button" className="icon-button" onClick={() => { setNotificationsOpen((value) => !value); refreshNotifications() }} aria-label="اعلان‌ها">
             <Bell size={20} />
             {unreadCount > 0 ? <span className="notification-dot" /> : null}
           </button>
           {notificationsOpen ? (
             <div className="popover popover--notifications">
               <strong>اعلان‌ها</strong>
-              {notifications.loading ? (
+              {notifications.loading && !notifications.data ? (
                 <p>در حال دریافت...</p>
               ) : !notifications.data?.length ? (
                 <p>اعلان جدیدی ندارید.</p>
               ) : (
-                notifications.data.slice(0, 5).map((item) => <p key={item.id}>{item.title}</p>)
+                notifications.data.slice(0, 10).map((item) => <article className="notification-item" key={item.id}>
+                  <strong>{item.title}</strong>
+                  {item.body ? <p>{item.body}</p> : null}
+                  {item.type === 'warning' ? <Link to="/wallet" onClick={() => setNotificationsOpen(false)}>افزایش موجودی کیف پول</Link> : null}
+                </article>)
               )}
             </div>
           ) : null}
         </div>
         <div className="menu-anchor">
-          <button type="button" className="avatar-button" onClick={() => setProfileOpen((value) => !value)} aria-label="منوی کاربری">ه</button>
+          <button type="button" className="avatar-button" onClick={() => setProfileOpen((value) => !value)} aria-label="منوی کاربری">{(user?.firstName || user?.email || 'ک').slice(0, 1)}</button>
           {profileOpen ? (
             <div className="popover popover--profile">
-              <div className="popover__user"><UserRound size={20} /><span><strong>کاربر میزبان</strong><small>حساب آزمایشی</small></span></div>
+              <div className="popover__user"><UserRound size={20} /><span><strong>{[user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'کاربر سرورهاب'}</strong><small>{user?.email || user?.mobile || 'حساب کاربری'}</small></span></div>
               {accountLinks.map(({ label, path, icon: Icon }) => (
                 <Link key={path} to={path} onClick={() => setProfileOpen(false)}><Icon size={17} />{label}</Link>
               ))}

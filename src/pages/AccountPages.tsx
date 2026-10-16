@@ -1,4 +1,4 @@
-import { Clock3, Laptop, LogOut, MapPin, Save, ShieldCheck, UserRound, UserRoundCheck } from 'lucide-react'
+import { Clock3, KeyRound, Laptop, LogOut, MapPin, Save, ShieldCheck, UserRound, UserRoundCheck } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { Button } from '../components/ui/Button'
 import { Card, SectionHeading } from '../components/ui/Card'
@@ -12,6 +12,8 @@ import { useApiQuery } from '../hooks/useApiQuery'
 import { isApiConfigured } from '../lib/apiClient'
 import { getProfile, listSessions, revokeOtherSessions, updateProfile, updateTimezone, verifyNationalCode } from '../lib/endpoints'
 import { formatCount } from '../lib/format'
+import { disableTwoFactor, enableTwoFactor, setupTwoFactor, type TwoFactorSetup } from '../lib/auth'
+import { useAuth } from '../auth/AuthContext'
 
 export function ProfilePage() {
   const [firstName, setFirstName] = useState('')
@@ -195,7 +197,12 @@ export function SettingsPage() {
     }
   })
   const [saving, setSaving] = useState(false)
+  const [twoFactorSetup, setTwoFactorSetup] = useState<TwoFactorSetup | null>(null)
+  const [twoFactorCode, setTwoFactorCode] = useState('')
+  const [disablePassword, setDisablePassword] = useState('')
+  const [twoFactorBusy, setTwoFactorBusy] = useState(false)
   const { showToast } = useToast()
+  const { user, refresh } = useAuth()
 
   const saveTimezone = async () => {
     setSaving(true)
@@ -214,6 +221,47 @@ export function SettingsPage() {
     }
   }
 
+  const beginTwoFactorSetup = async () => {
+    setTwoFactorBusy(true)
+    try {
+      setTwoFactorSetup(await setupTwoFactor())
+      showToast('کلید تأیید دومرحله‌ای ساخته شد؛ آن را در برنامه احراز هویت وارد کنید.')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'راه‌اندازی تأیید دومرحله‌ای ناموفق بود.')
+    } finally {
+      setTwoFactorBusy(false)
+    }
+  }
+
+  const confirmTwoFactor = async () => {
+    setTwoFactorBusy(true)
+    try {
+      await enableTwoFactor(twoFactorCode)
+      await refresh()
+      setTwoFactorSetup(null)
+      setTwoFactorCode('')
+      showToast('تأیید دومرحله‌ای فعال شد. کدهای بازیابی را در محل امن نگه دارید.')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'کد برنامه احراز هویت معتبر نیست.')
+    } finally {
+      setTwoFactorBusy(false)
+    }
+  }
+
+  const turnOffTwoFactor = async () => {
+    setTwoFactorBusy(true)
+    try {
+      await disableTwoFactor(disablePassword)
+      await refresh()
+      setDisablePassword('')
+      showToast('تأیید دومرحله‌ای غیرفعال شد.')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'غیرفعال‌سازی تأیید دومرحله‌ای ناموفق بود.')
+    } finally {
+      setTwoFactorBusy(false)
+    }
+  }
+
   return (
     <div className="page-stack">
       <PageHeader title="تنظیمات" subtitle="ترجیحات نمایش و تنظیمات حساب کاربری" />
@@ -223,6 +271,26 @@ export function SettingsPage() {
           <option value="auto">تشخیص خودکار</option><option>Asia/Tehran</option><option>Asia/Dubai</option><option>Europe/Berlin</option><option>Europe/London</option><option>Europe/Amsterdam</option><option>Europe/Istanbul</option><option>America/New_York</option><option>America/Chicago</option><option>America/Los_Angeles</option><option>Asia/Kolkata</option><option>Asia/Shanghai</option><option>Asia/Tokyo</option><option>Australia/Sydney</option><option>UTC</option>
         </Select>
         <Button icon={<Save size={18} />} disabled={saving} onClick={saveTimezone}>{saving ? 'در حال ذخیره...' : 'ذخیره'}</Button>
+      </Card>
+      <Card className="settings-card two-factor-settings">
+        <SectionHeading title="تأیید دومرحله‌ای" icon={<KeyRound size={20} />} />
+        <p className="muted-copy">پس از ورود با ایمیل و رمز عبور، یک کد ۶ رقمی از برنامه احراز هویت از شما خواسته می‌شود.</p>
+        {user?.twoFactorEnabled ? (
+          <>
+            <div className="security-status security-status--enabled"><ShieldCheck size={19} /> تأیید دومرحله‌ای برای حساب شما فعال است.</div>
+            <Input label="رمز عبور فعلی برای غیرفعال‌سازی" type="password" value={disablePassword} onChange={(event) => setDisablePassword(event.target.value)} />
+            <Button variant="danger" disabled={twoFactorBusy || !disablePassword} onClick={() => void turnOffTwoFactor()}>غیرفعال‌سازی 2FA</Button>
+          </>
+        ) : twoFactorSetup ? (
+          <>
+            <div className="totp-secret"><span>کلید دستی برنامه احراز هویت</span><code dir="ltr">{twoFactorSetup.secret}</code></div>
+            <Input label="کد ۶ رقمی برنامه" dir="ltr" inputMode="numeric" maxLength={6} value={twoFactorCode} onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, ''))} />
+            <div className="recovery-code-box"><strong>کدهای بازیابی یک‌بارمصرف</strong><div>{twoFactorSetup.recoveryCodes.map((code) => <code dir="ltr" key={code}>{code}</code>)}</div></div>
+            <Button disabled={twoFactorBusy || twoFactorCode.length !== 6} onClick={() => void confirmTwoFactor()}>تأیید و فعال‌سازی</Button>
+          </>
+        ) : (
+          <Button icon={<ShieldCheck size={18} />} disabled={twoFactorBusy} onClick={() => void beginTwoFactorSetup()}>راه‌اندازی تأیید دومرحله‌ای</Button>
+        )}
       </Card>
     </div>
   )

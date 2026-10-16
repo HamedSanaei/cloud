@@ -107,7 +107,7 @@ export async function applyWalletTransaction(
     const balanceAfter = balanceBefore + signed
     if (balanceAfter < 0) {
       throw new InsufficientFundsError(
-        `موجودی کیف پول کافی نیست (نیازمند ${input.amountRial} ریال، موجودی ${balanceBefore} ریال)`,
+        `موجودی کیف پول کافی نیست (نیازمند ${Math.ceil(input.amountRial / 10).toLocaleString('fa-IR')} تومان، موجودی ${Math.floor(balanceBefore / 10).toLocaleString('fa-IR')} تومان)`,
       )
     }
 

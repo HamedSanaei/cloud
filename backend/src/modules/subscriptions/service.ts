@@ -156,7 +156,7 @@ export async function findGraceExpiredSubscriptions(db: DbClient) {
   })
 }
 
-function addInterval(date: Date, interval: typeof subscriptions.$inferSelect.billingInterval): Date {
+export function addInterval(date: Date, interval: typeof subscriptions.$inferSelect.billingInterval): Date {
   const out = new Date(date)
   switch (interval) {
     case 'HOURLY':

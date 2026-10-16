@@ -23,7 +23,7 @@ Rules:
 
 ```
 provider_base_cost (cents)
-  × FX rate (the offer's currency → IRR, decimal string, admin-set)
+  × FX rate (native currency → IRR; USD = USDT → IRR)
   + fixed markup (rials)
   + percent markup
   + tax percent
@@ -35,6 +35,24 @@ provider_base_cost (cents)
 - Pricing rules per provider in `pricing_rules`; Leaseweb Cloud uses the `leaseweb.hourly` rule. `PUT /api/v1/admin/pricing`.
 - Quotes expire after `QUOTE_TTL_MINUTES` (default 15) and are **single-use**
   (row-locked at order time).
+
+### Dollar/Tether pricing
+
+- USD and USDT are pegged **1:1** for pricing only. Both resolve the canonical
+  `USDT → IRR` history; historical fiat `USD → IRR` rows are not used.
+- The public AbanTether `USDTIRT.buy_price` quote is in **toman** and is multiplied
+  by **10** to obtain rials. Decimal scaling preserves sub-cent provider prices.
+- `USDT_RATE_API_BASE_URL` defaults to `https://api.abantether.com`;
+  `USDT_RATE_MAX_AGE_SECONDS` defaults to **300**. No exchange API key is needed.
+  An expired/missing quote is refreshed once per process/database concurrently.
+  Missing, inactive, zero or unavailable market data refuses dollar pricing
+  (`503 usdt_rate_unavailable`); there is no stale/fiat-dollar fallback.
+- Admin rate/history endpoints accept `currency=USDT`; `USD` aliases that same
+  pair. A manually supplied Tether rate has the same freshness lifetime.
+- Wallets, debits and invoices remain integer IRR in the existing ledger and
+  **toman in the customer interface**. No dollar wallet or historical unit
+  migration is introduced; accepted quote snapshots are unchanged.
+
 
 ## Wallet & ledger
 
@@ -73,11 +91,44 @@ provider_base_cost (cents)
 - Renewal uses the original order wallet (default wallet only for historical
   orders without one). An unpaid period reuses its open invoice; repeated
   insufficient-funds checks do not restart grace or spam notifications.
-- On insufficient funds, the subscription enters `RENEWAL_GRACE_DAYS` of grace.
-  After grace expiry it is suspended and the internal server marked `suspended`.
-- **We do not invent Leaseweb lifecycle APIs.** If the provider cannot
-  auto-suspend/terminate, an admin/manual intervention state is used instead
-  (capability-checked via the provider abstraction).
+- Hourly funding protection runs before and after renewal. It compares each
+  **payment wallet** with the sum of one hour of its active hourly servers,
+  including queued starts. Strictly less than that amount, including zero,
+  persists a billing block and queues a real provider `power_off`; exactly one
+  aggregate hour is sufficient. Unrelated wallets cannot subsidize this wallet.
+- Automatic shutdown does not wait for grace expiry and does not fake an off
+  state in the database. Provider status reads confirm the physical state;
+  accepted asynchronous commands remain pending until their state is observed.
+- Confirmed-off hourly subscriptions pause renewal charges. A funded manual
+  start resumes renewal; existing unexpired paid time is retained.
+- Daily/monthly prepaid periods keep their normal boundary and
+  `RENEWAL_GRACE_DAYS` policy. Grace expiry also queues a provider shutdown
+  instead of only changing the internal server status.
+
+## Power controls and low-balance warnings
+
+- Server list/detail DTOs expose `power.canPowerOn`, `canPowerOff`, `canReboot`,
+  `billingBlocked`, `requiredBalanceToman` and `pendingAction`.
+- The panel removes power-on while hourly funding is insufficient and restores
+  it after enough credit reaches the payment wallet. The API and worker both
+  recheck funds; reboot cannot bypass the restriction. Top-up never
+  automatically starts a stopped VM or revives a rejected old start request.
+- Server controls refresh every 30 seconds, on window focus and after actions.
+  In-flight/unknown commands prevent conflicting power actions. New power
+  cycles use new operations rather than reusing an old succeeded command.
+- The minute-level sweep forecasts the next **72 hours** per payment wallet
+  from all active servers' actual renewal dates and the hourly safety reserve.
+  Daily/monthly prepaid time is respected. A shortage strictly before that
+  horizon creates one warning per user, repeated no more than every **6 hours**.
+- The warning includes affected server names, shortage timing, a toman top-up
+  estimate, shutdown/deletion risk and a wallet link. Delivery is the existing
+  **panel notifications** channel (`GET /api/notifications`, including body/type);
+  no SMS/email/Telegram delivery or automatic deletion is implied.
+- `users.low_balance_warned_at` persists the cooldown across workers/restarts.
+  The user lock and conditional timestamp update prevent concurrent duplicates;
+  reading notifications or topping up does not reset that cooldown.
+- The notification bell refreshes every minute, on focus and when opened.
+  Messages and the top-up link remain accessible on narrow mobile screens.
 
 ## Idempotency
 

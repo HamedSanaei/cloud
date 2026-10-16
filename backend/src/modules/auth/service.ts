@@ -3,7 +3,7 @@ import argon2 from 'argon2'
 import { and, eq, gte, isNull } from 'drizzle-orm'
 import type { DbClient } from '../../db/index.js'
 import { sessions, users } from '../../db/schema.js'
-import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from '../../lib/errors.js'
+import { ConflictError, NotFoundError, UnauthorizedError } from '../../lib/errors.js'
 import { writeAudit } from '../audit/service.js'
 
 // ---------------------------------------------------------------------------
@@ -92,16 +92,19 @@ export async function login(
   input: { email: string; password: string },
   meta: { userAgent?: string; ip?: string },
 ): Promise<{ user: SessionUser; token: string; sessionId: string }> {
+  const user = await verifyPrimaryCredentials(db, input)
+  const session = await createSession(db, user.id, meta)
+  await writeAudit(db, { actorId: user.id, action: 'user.login', metadata: { ip: meta.ip } })
+  return { user: toSessionUser(user, session.sessionId), token: session.token, sessionId: session.sessionId }
+}
+
+export async function verifyPrimaryCredentials(db: DbClient, input: { email: string; password: string }) {
   const email = input.email.trim().toLowerCase()
   const user = await db.query.users.findFirst({ where: (t) => eq(t.email, email) })
   // Constant-ish work even when the user does not exist (hash a dummy value).
   const ok = user ? await verifyPassword(user.passwordHash, input.password) : await verifyPassword(await hashPassword(input.password), input.password)
-  if (!user || !ok) throw new UnauthorizedError('ایمیل یا رمز عبور نادرست است')
-  if (user.status !== 'active') throw new ForbiddenError('حساب کاربری غیرفعال است')
-
-  const session = await createSession(db, user.id, meta)
-  await writeAudit(db, { actorId: user.id, action: 'user.login', metadata: { ip: meta.ip } })
-  return { user: toSessionUser(user, session.sessionId), token: session.token, sessionId: session.sessionId }
+  if (!user || !ok || user.status !== 'active') throw new UnauthorizedError('ایمیل یا رمز عبور نادرست است')
+  return user
 }
 
 export async function logout(db: DbClient, sessionId: string): Promise<void> {

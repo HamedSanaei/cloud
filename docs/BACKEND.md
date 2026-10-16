@@ -62,6 +62,7 @@ backend/
       wallets/           wallets + immutable ledger
       catalog/           provider catalog sync + normalized offers
       pricing/           FX rates + pricing rules + price engine
+      billing/           payment-wallet funding, power policy and 72h warnings
       quotes/            price quotes (single-use, TTL 15 min)
       orders/            order state machine + safe paid ordering
       invoices/          invoices + items, price snapshots
@@ -92,6 +93,8 @@ backend/
 - Provider money: exact decimal strings in the actual provider currency
   (observed live: EUR and GBP); quote cents support six fractional digits.
 - FX rates are decimal strings and conversions use scaled BigInt arithmetic.
+- USD is pegged to USDT 1:1. A fresh public USDT/IRT quote (toman × 10)
+  supplies the canonical USDT/IRR rate; there is no fiat-dollar fallback.
 - Every price is computed server-side from the stored offer + pricing rules.
   **The browser never sends prices.**
 
@@ -188,7 +191,10 @@ npm run test:integration   # needs DATABASE_URL (+ REDIS_URL for some paths)
 Integration suites cover: auth/sessions/permissions, wallet ledger +
 idempotency + concurrency, orders + full vertical slice, provisioning safety
 (two workers cannot double-order, retryable vs permanent failures,
-UNKNOWN→reconciliation) and cross-user isolation.
+UNKNOWN→reconciliation), cross-user isolation, zero/next-hour funding cutoffs,
+shared-wallet exposure, paused billing while off, funded restart permissions,
+72-hour/six-hour warning boundaries and USD/USDT-to-local-currency debits.
+Use a disposable database: integration fixtures truncate business tables.
 
 ## Production notes
 
@@ -202,6 +208,11 @@ UNKNOWN→reconciliation) and cross-user isolation.
   live only in `/opt/tofan/cloud/configuration.toml`, mounted read-only into
   API/worker at `/etc/tofan-cloud/configuration.toml` (UID/GID 10001, host mode 0640).
   Keys never enter frontend assets, image layers, catalog responses or logs.
+- Migration `0004_hourly_balance_protection` adds durable server billing blocks
+  and the per-user warning cooldown without rewriting balances or price snapshots.
+- API and worker receive `USDT_RATE_API_BASE_URL` and
+  `USDT_RATE_MAX_AGE_SECONDS` through Compose; defaults are the public AbanTether
+  endpoint and 300 seconds. No provider or exchange credential is exposed.
 - Health: `GET /api/health/live` (always 200 when the process is up),
   `GET /api/health/ready` (checks PostgreSQL).
 

@@ -12,6 +12,7 @@ import { eq } from 'drizzle-orm'
 import { ValidationError } from '../../lib/errors.js'
 import { retailBilling } from '../pricing/periods.js'
 import type { ProviderBillingOption } from '../providers/provider.interface.js'
+import { loadFundingFleet, serverPowerPolicy } from '../billing/funding.js'
 
 const wizardSchema = z.object({
   name: z.string().min(3).max(63),
@@ -28,14 +29,15 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     const user = requireUser(request)
     const query = parse(z.object({ limit: z.coerce.number().int().positive().max(200).optional() }), request.query)
     const rows = await listServersForUser(db, user.id, { limit: query.limit ?? 50 })
-    return { data: rows.map((s) => serverToDto(s)) }
+    const fleet = await loadFundingFleet(db, user.id)
+    return { data: rows.map((server) => serverToDto(server, serverPowerPolicy(server, fleet))) }
   })
 
   app.get('/servers/:id', async (request) => {
     const user = requireUser(request)
     const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
     const server = await getServerForUser(db, user.id, id)
-    return { data: serverToDto(server) }
+    return { data: serverToDto(server, serverPowerPolicy(server, await loadFundingFleet(db, user.id))) }
   })
 
   // Create server: resolves an offer, quotes, orders, debits the wallet and
@@ -76,7 +78,7 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     // still queued) — return a building placeholder then.
     const server = await db.query.servers.findFirst({ where: (t) => eq(t.orderId, result.order.id) })
     if (server) {
-      return reply.status(result.created ? 201 : 200).send({ data: serverToDto(server) })
+      return reply.status(result.created ? 201 : 200).send({ data: serverToDto(server, serverPowerPolicy(server, await loadFundingFleet(db, user.id))) })
     }
     return reply.status(result.created ? 201 : 200).send({
       data: {
@@ -88,6 +90,7 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
         ram: '',
         disk: '',
         createdAt: result.order.createdAt.toISOString(),
+        power: { canPowerOn: false, canPowerOff: false, canReboot: false, billingBlocked: false, requiredBalanceToman: null, pendingAction: null },
       },
     })
   })
@@ -102,7 +105,6 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     const server = await getServerForUser(db, user.id, id)
     const mapped = action === 'power-on' ? 'power_on' : action === 'power-off' ? 'power_off' : 'reboot'
     const op = await createServerActionOperation(db, server.id, mapped)
-    if (!op) throw new Error('failed to create provider operation')
     await queues.addServerAction({ operationId: op.id, serverId: server.id, action: mapped })
     await recordServerActionAudit(db, user.id, server.id, mapped, true)
     return { data: { operationId: op.id, status: 'queued' } }

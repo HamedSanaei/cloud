@@ -4,10 +4,11 @@ import {
   HardDrive,
   Network,
   Plus,
+  Power,
   RefreshCw,
   ServerCog,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button, LinkButton } from '../components/ui/Button'
 import { Card, SectionHeading } from '../components/ui/Card'
 import { FilterPanel } from '../components/ui/FilterPanel'
@@ -27,9 +28,10 @@ import {
   listIps,
   listServers,
   listTrafficPackages,
+  changeServerPower,
   transferDomain,
 } from '../lib/endpoints'
-import { formatCount } from '../lib/format'
+import { formatCount, formatToman } from '../lib/format'
 
 type ResourceKind = 'server' | 'ip'
 
@@ -40,10 +42,33 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
   const { showToast } = useToast()
   const server = kind === 'server'
   const [buying, setBuying] = useState(false)
+  const [powerBusy, setPowerBusy] = useState(false)
 
   const servers = useApiQuery(listServers, [kind])
   const ips = useApiQuery(listIps, [kind])
   const active = server ? servers : ips
+  const refreshServers = servers.refetch
+
+  useEffect(() => {
+    if (!server) return
+    const refresh = () => { if (document.visibilityState === 'visible') refreshServers() }
+    const timer = window.setInterval(refresh, 30000)
+    window.addEventListener('focus', refresh)
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh) }
+  }, [server, refreshServers])
+
+  const handlePower = async (id: string, action: 'power-on' | 'power-off') => {
+    setPowerBusy(true)
+    try {
+      await changeServerPower(id, action)
+      showToast(action === 'power-on' ? 'درخواست روشن کردن سرور ارسال شد.' : 'درخواست خاموش کردن سرور ارسال شد.')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'عملیات برق سرور ناموفق بود.')
+    } finally {
+      refreshServers()
+      setPowerBusy(false)
+    }
+  }
 
   const filteredServers = useMemo(() => {
     if (!server) return []
@@ -94,7 +119,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
         actions={
           <>
             {server ? <LinkButton to="/servers/create" icon={<Plus size={18} />}>ایجاد سرور جدید</LinkButton> : <Button icon={<Plus size={18} />} disabled={buying} onClick={handleBuyIp}>{buying ? 'در حال ثبت...' : 'خرید آی‌پی'}</Button>}
-            {!server ? <Button variant="secondary" icon={<RefreshCw size={17} />} onClick={() => { ips.refetch(); showToast('فهرست آی‌پی‌ها بروزرسانی شد.') }}>بروزرسانی</Button> : null}
+            <Button variant="secondary" icon={<RefreshCw size={17} />} onClick={() => active.refetch()}>بروزرسانی</Button>
           </>
         }
       />
@@ -107,19 +132,30 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
       </FilterPanel>
       <Card>
         <SectionHeading title={server ? 'لیست سرورها' : 'لیست آی‌پی‌ها'} />
-        {active.loading ? (
+        {active.loading && !active.data ? (
           <LoadingState label="در حال دریافت..." />
         ) : active.error ? (
           <QueryError message={active.error} onRetry={active.refetch} />
         ) : server ? (
           filteredServers.length ? (
-            <Table headers={['نام', 'وضعیت', 'دیتاسنتر', 'منابع']}>
+            <Table headers={['نام', 'وضعیت', 'دیتاسنتر', 'منابع', 'کنترل برق']}>
               {filteredServers.map((item) => (
                 <tr key={item.id}>
                   <td>{item.name}</td>
                   <td><Badge tone={item.status === 'active' ? 'success' : 'neutral'}>{item.status}</Badge></td>
                   <td>{item.datacenter}</td>
                   <td>{[item.cpu, item.ram, item.disk].filter(Boolean).join(' · ') || '—'}</td>
+                  <td>
+                    <div className="server-power-controls">
+                      {item.power.canPowerOn ? <Button size="sm" variant="success" icon={<Power size={16} />} disabled={powerBusy || servers.loading} onClick={() => handlePower(item.id, 'power-on')} aria-label={`روشن کردن ${item.name}`}>روشن کردن</Button> : null}
+                      {item.power.canPowerOff ? <Button size="sm" variant="danger" icon={<Power size={16} />} disabled={powerBusy || servers.loading} onClick={() => handlePower(item.id, 'power-off')} aria-label={`خاموش کردن ${item.name}`}>خاموش کردن</Button> : null}
+                      {item.power.pendingAction ? <span>در انتظار نتیجه عملیات برق</span> : null}
+                      {item.power.billingBlocked ? <>
+                        <p>اعتبار یک ساعت آینده کافی نیست. موجودی لازم در کیف پول پرداخت: {formatToman(item.power.requiredBalanceToman ?? 0)}</p>
+                        <LinkButton to="/wallet" variant="secondary" size="sm">افزایش موجودی</LinkButton>
+                      </> : null}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </Table>

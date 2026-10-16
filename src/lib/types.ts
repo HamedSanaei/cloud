@@ -22,6 +22,14 @@ export interface Server {
   disk: string
   ip?: string
   createdAt?: string
+  power: {
+    canPowerOn: boolean
+    canPowerOff: boolean
+    canReboot: boolean
+    billingBlocked: boolean
+    requiredBalanceToman: number | null
+    pendingAction: 'power_on' | 'power_off' | 'reboot' | null
+  }
 }
 
 export interface CreateServerPayload {
@@ -198,6 +206,8 @@ export interface Session {
 export interface AppNotification {
   id: string
   title: string
+  body: string | null
+  type: string
   read: boolean
   createdAt?: string
 }

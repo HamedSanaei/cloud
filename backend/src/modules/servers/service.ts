@@ -1,10 +1,12 @@
-import { eq } from 'drizzle-orm'
+import { randomUUID } from 'node:crypto'
+import { and, eq, inArray } from 'drizzle-orm'
 import type { DbClient, DbOrTx } from '../../db/index.js'
-import { providerOperations, servers } from '../../db/schema.js'
+import { providerOperations, servers, subscriptions, users } from '../../db/schema.js'
 import { ConflictError, NotFoundError } from '../../lib/errors.js'
 import { writeAudit } from '../audit/service.js'
 import { getProvider } from '../providers/registry.js'
 import type { ProviderServerView } from '../providers/provider.interface.js'
+import { assertPowerOnFunding, loadFundingFleet, serverPowerPolicy } from '../billing/funding.js'
 
 export interface CreateServerRecordInput {
   userId: string
@@ -76,17 +78,38 @@ export async function failServer(db: DbClient, serverId: string, error: string) 
   await db.update(servers).set({ status: 'failed', providerMetadata: { error } as never, lastSyncedAt: new Date() }).where(eq(servers.id, serverId))
 }
 
-export async function updateServerFromView(db: DbClient, serverId: string, view: ProviderServerView) {
-  const update: Record<string, unknown> = { lastSyncedAt: new Date() }
-  if (view.state === 'active' && view.ipv4) update.ipv4 = view.ipv4
-  if (view.state === 'active' && view.ipv6) update.ipv6 = view.ipv6
-  if (view.hostname) update.hostname = view.hostname
-  if (view.trafficUsedGb !== undefined) update.trafficUsedGb = view.trafficUsedGb
-  if (view.metadata) update.providerMetadata = view.metadata as never
-  if (view.state === 'suspended') update.status = 'suspended'
-  if (view.state === 'terminated') update.status = 'terminated'
-  if (view.state === 'active') update.status = 'active'
-  await db.update(servers).set(update).where(eq(servers.id, serverId))
+export async function updateServerFromView(db: DbOrTx, serverId: string, view: ProviderServerView) {
+  const owner = await db.query.servers.findFirst({ where: (t) => eq(t.id, serverId) })
+  if (!owner) return
+  await db.transaction(async (tx) => {
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, owner.userId)).for('no key update')
+    const [server] = await tx.select().from(servers).where(eq(servers.id, serverId)).for('update')
+    if (!server) return
+    const update: Partial<typeof servers.$inferInsert> = { lastSyncedAt: new Date() }
+    if (view.state === 'active' && view.ipv4) update.ipv4 = view.ipv4
+    if (view.state === 'active' && view.ipv6) update.ipv6 = view.ipv6
+    if (view.hostname) update.hostname = view.hostname
+    if (view.trafficUsedGb !== undefined) update.trafficUsedGb = view.trafficUsedGb
+    if (view.metadata) update.providerMetadata = view.metadata
+    if (view.state === 'suspended' || view.state === 'terminated' || view.state === 'active') update.status = view.state
+    let billingBlocked = server.billingPowerBlocked
+    if (view.state === 'active' && billingBlocked) {
+      billingBlocked = serverPowerPolicy(server, await loadFundingFleet(tx, server.userId)).billingBlocked
+      if (!billingBlocked) {
+        update.billingPowerBlocked = false
+        update.billingPowerBlockedAt = null
+      }
+    }
+    await tx.update(servers).set(update).where(eq(servers.id, serverId))
+    if (server.subscriptionId && (view.state === 'suspended' || (view.state === 'active' && !billingBlocked))) {
+      // Hourly subscriptions do not keep charging while the provider proves the server is off.
+      await tx.update(subscriptions).set({ status: view.state === 'active' ? 'active' : 'suspended', updatedAt: new Date() }).where(and(
+        eq(subscriptions.id, server.subscriptionId),
+        eq(subscriptions.billingInterval, 'HOURLY'),
+        inArray(subscriptions.status, ['active', 'grace', 'suspended']),
+      ))
+    }
+  })
 }
 
 /**
@@ -94,24 +117,34 @@ export async function updateServerFromView(db: DbClient, serverId: string, view:
  * responsible for enqueueing the job; this creates the provider operation
  * record BEFORE the provider is contacted (idempotency + audit trail).
  */
-export async function createServerActionOperation(db: DbClient, serverId: string, action: 'power_on' | 'power_off' | 'reboot') {
-  const server = await db.query.servers.findFirst({ where: (t) => eq(t.id, serverId) })
-  if (!server) throw new NotFoundError('سرور یافت نشد')
-  if (!server.providerServerId) throw new ConflictError('سرور هنوز در سرویس‌دهنده ثبت نشده است')
-  const provider = getProvider(server.provider)
-  provider.require(action)
-
-  const businessKey = `${server.provider}:${action}:server:${server.id}`
-  const existing = await db.query.providerOperations.findFirst({ where: (t) => eq(t.businessKey, businessKey) })
-  if (existing) {
-    if (existing.status === 'succeeded') return existing
-    if (existing.status === 'running' || existing.status === 'pending') return existing // another worker is on it
-    // failed/unknown => allow a new attempt
-  }
-
-  const [op] = await db
-    .insert(providerOperations)
-    .values({
+export async function createServerActionOperation(
+  db: DbOrTx,
+  serverId: string,
+  action: 'power_on' | 'power_off' | 'reboot',
+  opts: { businessKey?: string; reason?: 'low_balance' } = {},
+) {
+  const owner = await db.query.servers.findFirst({ where: (t) => eq(t.id, serverId) })
+  if (!owner) throw new NotFoundError('سرور یافت نشد')
+  return db.transaction(async (tx) => {
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, owner.userId)).for('no key update')
+    const [server] = await tx.select().from(servers).where(eq(servers.id, serverId)).for('update')
+    if (!server?.providerServerId) throw new ConflictError('سرور هنوز در سرویس‌دهنده ثبت نشده است')
+    if (server.status !== 'active' && server.status !== 'suspended') throw new ConflictError('وضعیت سرور برای عملیات برق مناسب نیست')
+    if (action === 'power_on' && server.status !== 'suspended') throw new ConflictError('فقط سرور خاموش را می‌توان روشن کرد')
+    if (action === 'reboot' && server.status !== 'active') throw new ConflictError('فقط سرور روشن را می‌توان راه‌اندازی مجدد کرد')
+    getProvider(server.provider).require(action)
+    if (action === 'power_on' || action === 'reboot') await assertPowerOnFunding(tx, server)
+    const pending = await tx.query.providerOperations.findFirst({
+      where: (t) => and(eq(t.kind, 'server_action'), eq(t.referenceId, server.id), inArray(t.status, ['pending', 'running', 'unknown'])),
+    })
+    if (pending) {
+      if (pending.action !== action || pending.status === 'unknown') throw new ConflictError('عملیات قبلی سرور هنوز نهایی نشده است')
+      return pending
+    }
+    const businessKey = opts.businessKey ?? `${server.provider}:${action}:server:${server.id}:${randomUUID()}`
+    const existing = await tx.query.providerOperations.findFirst({ where: (t) => eq(t.businessKey, businessKey) })
+    if (existing) return existing
+    const [operation] = await tx.insert(providerOperations).values({
       provider: server.provider,
       kind: 'server_action',
       action,
@@ -119,11 +152,11 @@ export async function createServerActionOperation(db: DbClient, serverId: string
       referenceId: server.id,
       businessKey,
       status: 'pending',
-      requestMetadata: { providerServerId: server.providerServerId },
-    })
-    .onConflictDoNothing()
-    .returning()
-  return op ?? (await db.query.providerOperations.findFirst({ where: (t) => eq(t.businessKey, businessKey) }))
+      requestMetadata: { providerServerId: server.providerServerId, reason: opts.reason },
+    }).returning()
+    if (!operation) throw new Error('failed to create server action operation')
+    return operation
+  })
 }
 
 export async function recordServerActionAudit(db: DbClient, userId: string, serverId: string, action: string, ok: boolean) {

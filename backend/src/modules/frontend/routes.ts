@@ -62,7 +62,7 @@ export const registerFrontendCompatRoutes: FastifyPluginAsync<{ ctx: AppContext 
       orderBy: (t, { desc }) => [desc(t.createdAt)],
       limit: 50,
     })
-    return { data: rows.map((n) => ({ id: n.id, title: n.title, read: n.read, createdAt: n.createdAt.toISOString() })) }
+    return { data: rows.map((n) => ({ id: n.id, title: n.title, body: n.body, type: n.type, read: n.read, createdAt: n.createdAt.toISOString() })) }
   })
 
   app.patch('/notifications/read', async (request) => {

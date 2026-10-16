@@ -9,6 +9,7 @@
  * (active|building|inactive, pending|paid|cancelled|refunded, ...).
  */
 import { rialToToman } from './money.js'
+import type { ServerPowerPolicy } from '../modules/billing/funding.js'
 
 export function serverToDto(server: {
   id: string
@@ -22,7 +23,7 @@ export function serverToDto(server: {
   ipv4?: string | null
   operatingSystem: string
   createdAt: Date
-}) {
+}, power: ServerPowerPolicy) {
   return {
     id: server.id,
     name: server.name ?? server.hostname,
@@ -34,6 +35,7 @@ export function serverToDto(server: {
     ip: server.ipv4 ?? undefined,
     os: server.operatingSystem,
     createdAt: server.createdAt.toISOString(),
+    power,
   }
 }
 

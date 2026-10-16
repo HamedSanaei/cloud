@@ -67,6 +67,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     const response = await fetch(`${baseUrl}${path.startsWith('/') ? path : `/${path}`}`, {
       ...rest,
       signal: controller.signal,
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',

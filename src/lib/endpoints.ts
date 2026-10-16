@@ -96,6 +96,11 @@ export async function listServers(): Promise<Server[]> {
   return unwrapList<Server>(payload)
 }
 
+export async function changeServerPower(serverId: string, action: 'power-on' | 'power-off'): Promise<void> {
+  if (noApi()) throw new Error('اتصال به کنترل سرور پیکربندی نشده است.')
+  await apiPost(`/servers/${encodeURIComponent(serverId)}/actions/${action}`, {})
+}
+
 export async function getStorefrontCatalog(): Promise<StorefrontCatalog> {
   if (noApi()) throw new Error('اتصال به سرویس کاتالوگ پیکربندی نشده است.')
   const payload = await apiGet<{ data: StorefrontCatalog }>('/catalog/storefront')

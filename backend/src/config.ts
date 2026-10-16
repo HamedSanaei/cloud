@@ -31,6 +31,30 @@ const envSchema = z.object({
 
   CORS_ORIGIN: z.string().default(''), // comma-separated list; empty = same-origin only
 
+  // ---- Authentication delivery and OAuth ---------------------------------
+  FRONTEND_URL: z.string().url().default('http://localhost:5173'),
+  AUTH_DELIVERY_MODE: z.enum(['live', 'log']).default('log'),
+  AUTH_OTP_TTL_SECONDS: z.coerce.number().int().min(120).max(900).default(300),
+  AUTH_OTP_RESEND_SECONDS: z.coerce.number().int().min(30).max(300).default(45),
+  AUTH_OTP_MAX_ATTEMPTS: z.coerce.number().int().min(3).max(10).default(5),
+  AUTH_OTP_MAX_RESENDS: z.coerce.number().int().min(1).max(10).default(4),
+
+  SMTP_HOST: z.string().default(''),
+  SMTP_PORT: z.coerce.number().int().positive().default(587),
+  SMTP_SECURE: z.string().default('false').transform((v) => v === 'true' || v === '1'),
+  SMTP_USER: z.string().default(''),
+  SMTP_PASSWORD: z.string().default(''),
+  SMTP_FROM: z.string().default('ServerHub <no-reply@example.com>'),
+
+  PARSGREEN_SIGNATURE: z.string().default(''),
+  PARSGREEN_FROM: z.string().default(''),
+  PARSGREEN_ENDPOINT: z.string().url().default('https://login.parsgreen.com/Api/SendSMS.asmx'),
+  PARSGREEN_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
+
+  GOOGLE_CLIENT_ID: z.string().default(''),
+  GOOGLE_CLIENT_SECRET: z.string().default(''),
+  GOOGLE_REDIRECT_URI: z.string().url().default('http://localhost:8000/api/v1/auth/google/callback'),
+
   // ---- Leaseweb ------------------------------------------------------------
   // Modes: mock (default, safe) | live. Real ordering additionally requires
   // LEASEWEB_ORDERING_ENABLED=true. Never enable automatically.
@@ -52,6 +76,10 @@ const envSchema = z.object({
   // New retail quotes are refused when the provider catalog is older than
   // this (stale provider price data must never be sold). 0 disables the check.
   CATALOG_MAX_AGE_MINUTES: z.coerce.number().int().min(0).default(1440),
+
+  // Public USDT/IRT quote; USD retail pricing is pegged 1:1 to USDT.
+  USDT_RATE_API_BASE_URL: z.string().url().default('https://api.abantether.com'),
+  USDT_RATE_MAX_AGE_SECONDS: z.coerce.number().int().positive().default(300),
 
   // Renewal job horizon (days ahead to look for due subscriptions).
   RENEWAL_LOOKAHEAD_DAYS: z.coerce.number().int().positive().default(3),
@@ -105,6 +133,9 @@ export function redactSecrets(input: string): string {
   const secrets = [
     c.AUTH_SECRET, c.DATABASE_URL, c.REDIS_URL, c.LEASEWEB_API_KEY,
     c.PROVIDERS.asiatech.apiKey,
+    c.SMTP_PASSWORD,
+    c.PARSGREEN_SIGNATURE,
+    c.GOOGLE_CLIENT_SECRET,
     ...Object.values(c.PROVIDERS).flatMap((provider) =>
       'accounts' in provider ? provider.accounts.flatMap((account) => [account.apiKey ?? '', account.apiToken ?? '']) : []),
   ].filter((secret) => secret.length > 0).sort((a, b) => b.length - a.length)

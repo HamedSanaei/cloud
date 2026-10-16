@@ -108,11 +108,20 @@ export const users = pgTable(
     role: userRoleEnum('role').notNull().default('user'),
     status: userStatusEnum('status').notNull().default('active'),
     emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
+    mobileVerifiedAt: timestamp('mobile_verified_at', { withTimezone: true }),
+    totpSecretEncrypted: text('totp_secret_encrypted'),
+    twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
+    recoveryCodesHash: jsonb('recovery_codes_hash').$type<string[]>(),
     timezone: text('timezone').default('Asia/Tehran'),
+    lowBalanceWarnedAt: timestamp('low_balance_warned_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('users_email_lower_idx').on(sql`lower(${t.email})`), index('users_role_idx').on(t.role)],
+  (t) => [
+    uniqueIndex('users_email_lower_idx').on(sql`lower(${t.email})`),
+    uniqueIndex('users_mobile_unique_idx').on(t.mobile),
+    index('users_role_idx').on(t.role),
+  ],
 )
 
 export const sessions = pgTable(
@@ -131,6 +140,48 @@ export const sessions = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('sessions_token_hash_idx').on(t.tokenHash), index('sessions_user_idx').on(t.userId)],
+)
+
+export const authChallenges = pgTable(
+  'auth_challenges',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tokenHash: text('token_hash').notNull(),
+    kind: varchar('kind', { length: 40 }).notNull(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    identifier: text('identifier').notNull(),
+    codeHash: text('code_hash').notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>(),
+    attempts: integer('attempts').notNull().default(0),
+    maxAttempts: integer('max_attempts').notNull().default(5),
+    resendCount: integer('resend_count').notNull().default(0),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    resendAfter: timestamp('resend_after', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('auth_challenges_token_hash_idx').on(t.tokenHash),
+    index('auth_challenges_identifier_idx').on(t.identifier),
+    index('auth_challenges_expiry_idx').on(t.expiresAt),
+  ],
+)
+
+export const oauthAccounts = pgTable(
+  'oauth_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    provider: varchar('provider', { length: 30 }).notNull(),
+    providerAccountId: text('provider_account_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('oauth_accounts_provider_subject_idx').on(t.provider, t.providerAccountId),
+    index('oauth_accounts_user_idx').on(t.userId),
+  ],
 )
 
 // ---------------------------------------------------------------------------
@@ -595,6 +646,8 @@ export const servers = pgTable(
     trafficLimitGb: integer('traffic_limit_gb'),
     trafficUsedGb: integer('traffic_used_gb').notNull().default(0),
     providerMetadata: jsonb('provider_metadata'),
+    billingPowerBlocked: boolean('billing_power_blocked').notNull().default(false),
+    billingPowerBlockedAt: timestamp('billing_power_blocked_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     activatedAt: timestamp('activated_at', { withTimezone: true }),
     terminatedAt: timestamp('terminated_at', { withTimezone: true }),
