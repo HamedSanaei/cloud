@@ -29,6 +29,10 @@ PostgreSQL 17 and Redis 7, explicit test/mock configuration, unit and integratio
 tests, Drizzle migration application, lint/typecheck and a built-image readiness
 smoke. It never contacts real provider APIs. Workflow/shell validation is a
 required gate. Essential failures are not masked with `continue-on-error`.
+CI requires ShellCheck before running actionlint. For local workflow verification
+use Linux with ShellCheck installed; Windows-only actionlint can otherwise omit
+the runner's shell diagnostics. Remote credential expansion must remain remote,
+and the wrapper smoke checks cleanup on login/deployment success and failure.
 
 ## Shared target and private connectivity
 

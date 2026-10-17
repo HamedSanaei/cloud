@@ -67,6 +67,7 @@ jobs:
 
       - name: Validate workflows and deployment scripts
         run: |
+          command -v shellcheck >/dev/null || { echo "::error::ShellCheck is required"; exit 1; }
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           for script in deploy/scripts/deploy.sh deploy/scripts/server-bootstrap.sh deploy/scripts/status.sh; do
             bash -n "$script"
@@ -231,7 +232,7 @@ jobs:
             "${IMAGE_ID}" >/dev/null
           trap 'docker rm -f tofan-cloud-api-smoke >/dev/null 2>&1 || true' EXIT
           ready=0
-          for attempt in $(seq 1 45); do
+          for ((attempt=0; attempt<45; attempt++)); do
             if curl -fsS http://127.0.0.1:8902/api/health/ready >/dev/null 2>&1; then
               ready=1
               break
@@ -279,9 +280,11 @@ jobs:
           REPO_LOWER="${{ github.repository }}"
           REPO_LOWER="${REPO_LOWER,,}"
           SHA="${{ github.sha }}"
-          echo "ref=ghcr.io/${REPO_LOWER}:sha-${SHA}"       >>"$GITHUB_OUTPUT"
-          echo "api_ref=ghcr.io/${REPO_LOWER}-api:sha-${SHA}" >>"$GITHUB_OUTPUT"
-          echo "sha=${SHA}"                                  >>"$GITHUB_OUTPUT"
+          {
+            echo "ref=ghcr.io/${REPO_LOWER}:sha-${SHA}"
+            echo "api_ref=ghcr.io/${REPO_LOWER}-api:sha-${SHA}"
+            echo "sha=${SHA}"
+          } >>"$GITHUB_OUTPUT"
           echo "configured web image: ghcr.io/${REPO_LOWER}:sha-${SHA}"
           echo "configured api image: ghcr.io/${REPO_LOWER}-api:sha-${SHA}"
 
@@ -420,9 +423,9 @@ jobs:
           [[ "${SKIP:-false}" != true ]] || skip=1
           printf -v invoke 'COMPOSE_DIR=%q CLOUD_PORT=%q RELEASE_SHA=%q API_IMAGE=%q bash %q %q %q %q' \
             "$DEPLOY_PATH" "$CLOUD_PORT" "$RELEASE_SHA" "$API_IMAGE" "$script" "$IMAGE" "$PUBLIC_URL" "$skip"
-          printf -v registry 'printf "%%s" "$registry_token" | docker login ghcr.io -u %q --password-stdin >/dev/null' "$GHCR_ACTOR"
-          printf -v cleanup 'rm -rf -- "$DOCKER_CONFIG"; rm -f -- %q' "$script"
-          printf -v remote 'set -Eeuo pipefail; DOCKER_CONFIG="$(mktemp -d)"; export DOCKER_CONFIG; trap %q EXIT; IFS= read -r registry_token; %s; unset registry_token GHCR_TOKEN; %s' "$cleanup" "$registry" "$invoke"
+          printf -v registry "printf '%%s' \"\$registry_token\" | docker login ghcr.io -u %q --password-stdin >/dev/null" "$GHCR_ACTOR"
+          printf -v cleanup "rm -rf -- \"\$DOCKER_CONFIG\"; rm -f -- %q" "$script"
+          printf -v remote "set -Eeuo pipefail; DOCKER_CONFIG=\"\$(mktemp -d)\"; export DOCKER_CONFIG; trap %q EXIT; IFS= read -r registry_token; %s; unset registry_token GHCR_TOKEN; %s" "$cleanup" "$registry" "$invoke"
           printf '%s\n' "$GHCR_TOKEN" | ssh -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -i "$HOME/.ssh/deploy_key" \
             -p "$port" "$target" "$remote"
