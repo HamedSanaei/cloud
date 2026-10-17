@@ -66,8 +66,10 @@ services:
         condition: service_healthy
     networks:
       - tofan-cloud_net
+      - platform-bridge
     environment:
       NODE_ENV: production
+      APP_ENV: production
       HOST: 0.0.0.0
       PORT: "8000"
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set (postgres://...)}
@@ -76,7 +78,7 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       CORS_ORIGIN: ${CORS_ORIGIN:-}
       FRONTEND_URL: ${FRONTEND_URL:?FRONTEND_URL must be set}
-      PLATFORM_API_URL: ${PLATFORM_API_URL:-}
+      PLATFORM_API_URL: ${PLATFORM_API_URL:?PLATFORM_API_URL must select the canonical API}
       AUTH_DELIVERY_MODE: ${AUTH_DELIVERY_MODE:-live}
       AUTH_OTP_TTL_SECONDS: ${AUTH_OTP_TTL_SECONDS:-300}
       AUTH_OTP_RESEND_SECONDS: ${AUTH_OTP_RESEND_SECONDS:-45}
@@ -240,3 +242,6 @@ volumes:
 networks:
   tofan-cloud_net:
     name: tofan-cloud_net
+  platform-bridge:
+    external: true
+    name: cloud-platform-production-bridge

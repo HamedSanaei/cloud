@@ -47,6 +47,7 @@ DB_HEAD_BEFORE=""
 EXPECTED_DB_HEAD=""
 CANDIDATE=""
 GPG_HOME=""
+PREFLIGHT_LOG=""
 
 CC_Y="\033[1;33m"; CC_G="\033[1;32m"; CC_R="\033[1;31m"; CC_C="\033[1;36m"; CC_N="\033[0m"
 log()  { printf "${CC_C}[i]${CC_N} %s\n" "$*"; }
@@ -93,6 +94,7 @@ ENV_FILE="${COMPOSE_DIR}/.env"
 
 cleanup() {
   [[ -z "$CANDIDATE" || ! -f "$CANDIDATE" ]] || rm -f -- "$CANDIDATE"
+  [[ -z "$PREFLIGHT_LOG" || ! -f "$PREFLIGHT_LOG" ]] || rm -f -- "$PREFLIGHT_LOG"
   if [[ -n "$GPG_HOME" ]]; then
     GNUPGHOME="$GPG_HOME" gpgconf --kill gpg-agent >/dev/null 2>&1 || true
     rm -rf -- "$GPG_HOME"
@@ -536,7 +538,13 @@ EXPECTED_DB_HEAD="$(docker run --rm "$API_IMAGE" node --input-type=module -e \
 [[ "$EXPECTED_DB_HEAD" =~ ^[0-9]+$ ]] || { die "Image has no valid migration head"; exit 1; }
 CANDIDATE="${COMPOSE_DIR}/.compose.${RELEASE_SHA}.$$.candidate.yml"
 write_compose "$IMAGE" "$API_IMAGE" "$CANDIDATE"
-compose "$CANDIDATE" config --quiet
+PREFLIGHT_LOG="$(mktemp "${COMPOSE_DIR}/.preflight.XXXXXX")"
+if ! compose "$CANDIDATE" config --quiet 2>"$PREFLIGHT_LOG"; then
+  # Compose errors may interpolate sensitive values. Expose only field names.
+  missing_keys="$(grep -oE '[A-Z][A-Z0-9_]+ is missing a value' "$PREFLIGHT_LOG" | sort -u || true)"
+  die "Compose preflight rejected server configuration before stopping services. ${missing_keys:-Check required environment keys privately.}"
+  exit 1
+fi
 docker network inspect "$PLATFORM_NETWORK" >/dev/null || {
   die "Deploy the matching canonical platform environment first"; exit 1;
 }
@@ -545,12 +553,26 @@ docker network inspect "$PLATFORM_NETWORK" >/dev/null || {
 compose "$CANDIDATE" run --rm --no-deps cloud-api node --input-type=module -e '
   import {loadConfig} from "./dist/config.js";
   import {assertPlatformCompatibility} from "./dist/modules/integration/platform.js";
+  import {assertAuthenticationReady} from "./dist/modules/auth/readiness.js";
   const c = loadConfig();
   if (!c.PLATFORM_API_URL) throw new Error("Unified deployment requires PLATFORM_API_URL");
-  if (c.AUTH_DELIVERY_MODE !== "live") throw new Error("Live authentication delivery is required");
   await assertPlatformCompatibility();
+  const denied = await fetch(new URL("/v1/console/wallet", c.PLATFORM_API_URL), {
+    headers: { "x-platform-contract": "1", "x-platform-environment": c.APP_ENV ?? c.NODE_ENV },
+    redirect: "error", signal: AbortSignal.timeout(3000),
+  });
+  if (denied.status !== 401) throw new Error("Canonical wallet did not enforce bearer authentication");
+  console.log("Canonical Docker DNS, readiness, API contract, IRT/USDT policy and authorization verified");
+  assertAuthenticationReady(c);
 '
 compose "$CANDIDATE" up -d --wait cloud-postgres cloud-redis
+# Existing balances/contracts must be reconciled before any downtime or migration.
+compose "$CANDIDATE" run --rm --no-deps cloud-api node --input-type=module -e '
+  import {createDb} from "./dist/db/index.js";
+  import {assertUnifiedCutoverReady} from "./dist/modules/integration/platform.js";
+  const handle = createDb();
+  try { await assertUnifiedCutoverReady(handle.db); } finally { await handle.pool.end(); }
+'
 DB_HEAD_BEFORE="$(database_head "$CANDIDATE")"
 if [[ "$DB_HEAD_BEFORE" != base && ( ! "$DB_HEAD_BEFORE" =~ ^[0-9]+$ || "$DB_HEAD_BEFORE" -gt "$EXPECTED_DB_HEAD" ) ]]; then
   die "Database is newer than the candidate; refusing an application/schema downgrade"; exit 1

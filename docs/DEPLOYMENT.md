@@ -209,3 +209,23 @@ configured `PORT`, including the non-default CI smoke port.
 In unified mode, catalog, provider logos/accounts/locations, hourly/daily offers,
 wallets, operations and notices come from the canonical platform. Do not restore
 an obsolete provider-TOML mount or legacy web financial worker as a fallback.
+
+## Integration release prerequisites
+
+Before changing the live configuration, run `deploy/scripts/backup-verify.py`
+on the deployment host with the confirmed website/platform paths and a NEW
+recovery output directory. It encrypts configuration and effective container
+metadata with the existing server-owned backup key, dumps both databases,
+restores each dump into a temporary database in its existing PostgreSQL
+container and removes only that freshly created recovery database. A manifest
+records encrypted checksums and successful restores. Never publish the archives
+or backup key. Archive verification is not a license to overwrite production data.
+
+The canonical platform must create the Compose-owned production bridge and
+`cloud-platform-api` alias first. Website deployment preflights the actual API
+contract, IRT/USDT policy, real live-authentication configuration, and residual
+legacy balances/contracts BEFORE stopping application writers or migrating.
+Missing SMTP, ParsGreen or Google credentials are deployment blockers, not
+reasons to use log delivery or fabricated values. Existing session and encryption
+keys must be preserved. Re-run the same exact-SHA pipeline after the operator
+securely supplies the missing server configuration.

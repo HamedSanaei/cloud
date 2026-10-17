@@ -73,6 +73,9 @@ jobs:
             bash -n "$script"
           done
 
+      - name: Validate recovery target and archive safety
+        run: python3 -m unittest discover -s deploy/tests -v
+
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
