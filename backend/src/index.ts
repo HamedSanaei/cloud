@@ -5,6 +5,7 @@ import { migrate } from './db/migrate.js'
 import { createCloudQueues } from './jobs/queue.js'
 import { registerConfiguredProviders } from './modules/providers/registry.js'
 import { buildApp } from './app.js'
+import { assertUnifiedCutoverReady } from './modules/integration/platform.js'
 
 async function main() {
   loadConfig()
@@ -12,9 +13,10 @@ async function main() {
   const logger = createLogger('cloud-api')
 
   await migrate()
-  registerConfiguredProviders()
+  if (!config.PLATFORM_API_URL) registerConfiguredProviders()
 
   const dbHandle = createDb()
+  await assertUnifiedCutoverReady(dbHandle.db)
   const queues = createCloudQueues()
 
 

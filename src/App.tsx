@@ -11,6 +11,7 @@ import { CreateServerPage, RegisterDomainPage } from './pages/WizardPages'
 import { ProtectedRoute } from './auth/AuthContext'
 import { AuthPage, GoogleCallbackPage } from './pages/AuthPages'
 import { LandingPage } from './pages/LandingPage'
+import { PlatformGate, PlatformPage } from './pages/PlatformPage'
 
 export function App() {
   return (
@@ -22,13 +23,14 @@ export function App() {
       <Route path="auth/callback" element={<GoogleCallbackPage />} />
       <Route element={<ProtectedRoute />}>
         <Route element={<AppShell />}>
-          <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="dashboard" element={<PlatformGate fallback={<DashboardPage />} />} />
+          <Route path="platform" element={<PlatformPage />} />
           <Route path="tickets" element={<TicketsPage />} />
-          <Route path="wallet" element={<WalletPage />} />
-          <Route path="invoices" element={<InvoicesPage />} />
-          <Route path="charge-requests" element={<ChargeRequestsPage />} />
-          <Route path="servers" element={<ServersPage />} />
-          <Route path="servers/create" element={<CreateServerPage />} />
+          <Route path="wallet" element={<PlatformGate fallback={<WalletPage />} />} />
+          <Route path="invoices" element={<PlatformGate fallback={<InvoicesPage />} />} />
+          <Route path="charge-requests" element={<PlatformGate fallback={<ChargeRequestsPage />} />} />
+          <Route path="servers" element={<PlatformGate fallback={<ServersPage />} />} />
+          <Route path="servers/create" element={<PlatformGate fallback={<CreateServerPage />} />} />
           <Route path="ips" element={<IpsPage />} />
           <Route path="traffic-packages" element={<TrafficPackagesPage />} />
           <Route path="domains" element={<DomainsPage />} />

@@ -142,6 +142,14 @@ export const sessions = pgTable(
   (t) => [uniqueIndex('sessions_token_hash_idx').on(t.tokenHash), index('sessions_user_idx').on(t.userId)],
 )
 
+// Revocable Python-platform tokens stay encrypted in the backend, never in the SPA.
+export const platformLinks = pgTable('platform_links', {
+  userId: uuid('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  platformUserId: uuid('platform_user_id').notNull().unique(),
+  tokenEncrypted: text('token_encrypted').notNull(),
+  linkedAt: timestamp('linked_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
 export const authChallenges = pgTable(
   'auth_challenges',
   {

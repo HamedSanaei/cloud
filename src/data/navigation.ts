@@ -33,6 +33,7 @@ export const navGroups: NavGroup[] = [
     label: 'ناحیه کاربری',
     items: [
       { label: 'داشبورد', path: '/dashboard', icon: Gauge, keywords: ['خانه', 'آمار'] },
+      { label: 'پلتفرم مشترک', path: '/platform', icon: Network, keywords: ['تلگرام', 'ربات', 'اتصال حساب', 'مدیریت سرور'] },
       { label: 'تیکت‌ها', path: '/tickets', icon: LifeBuoy, keywords: ['پشتیبانی'] },
     ],
   },

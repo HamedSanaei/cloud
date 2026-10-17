@@ -17,6 +17,7 @@ import type { SessionUser } from './modules/auth/service.js'
 import { AUTH_COOKIE } from './http/auth.js'
 import { registerHealthRoutes } from './modules/health/routes.js'
 import { registerAuthRoutes } from './modules/auth/routes.js'
+import { installPlatformIntegration } from './modules/integration/platform.js'
 import { registerUserRoutes } from './modules/users/routes.js'
 import { registerWalletRoutes } from './modules/wallets/routes.js'
 import { registerCatalogRoutes } from './modules/catalog/routes.js'
@@ -135,6 +136,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   })
 
   // ---- routes ---------------------------------------------------------------
+  installPlatformIntegration(app, ctx)
   const v1 = {
     prefix: '/api/v1',
     ctx,

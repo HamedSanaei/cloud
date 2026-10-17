@@ -1,15 +1,23 @@
-name: Cloud Production Pipeline
+name: Cloud CI and Deployment
 
 on:
   push:
     branches:
       - main
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
+      - staging
   pull_request:
+    branches: [main, staging]
   workflow_dispatch:
     inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [staging, production]
+        default: staging
+      confirm_production:
+        description: Explicitly approve a Production deployment
+        type: boolean
+        default: false
       skip_public_healthcheck:
         description: >-
           Skip public health checks. Set to true ONLY for the initial bootstrap
@@ -20,26 +28,68 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: cloud-pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  deployment-policy:
+    name: Validate deployment request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse ambiguous or unapproved manual deployment
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          APPROVED: ${{ inputs.confirm_production }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == workflow_dispatch ]]; then
+            case "$TARGET_ENVIRONMENT:$REF:$APPROVED" in
+              staging:refs/heads/staging:*) ;;
+              production:refs/heads/main:true) ;;
+              *) echo "::error::Target branch or explicit Production approval is invalid"; exit 1 ;;
+            esac
+          fi
+
   # ==========================================================================
   # JOB 1 — test-build (frontend)
-  # Runs for PR, push to main, and workflow_dispatch. Never pushes or deploys.
+  # Runs for PRs, pushes to main/staging, and workflow_dispatch. Never deploys.
   # ==========================================================================
   test-build:
     name: Test, build, and smoke-test (frontend)
     runs-on: ubuntu-latest
+    needs: deployment-policy
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      - name: Validate workflows and deployment scripts
+        run: |
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          for script in deploy/scripts/deploy.sh deploy/scripts/server-bootstrap.sh deploy/scripts/status.sh; do
+            bash -n "$script"
+          done
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Install shared lint toolchain
+        working-directory: backend
+        run: npm ci
+
+      - name: Lint frontend with the existing backend toolchain
+        run: npm run lint
 
       - name: Typecheck
         run: npm run typecheck
@@ -48,17 +98,17 @@ jobs:
         run: npm run build
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build production image (validation)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
           load: true
           tags: tofan-cloud:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=cloud-web
+          cache-to: type=gha,scope=cloud-web,mode=max
 
       - name: Smoke-test the built image
         run: |
@@ -83,13 +133,14 @@ jobs:
 
   # ==========================================================================
   # JOB 2 — backend-check
-  # Runs for PR, push to main, and workflow_dispatch against ephemeral
-  # PostgreSQL + Redis service containers. Never pushes or deploys, and never
-  # contacts the real Leaseweb API (mock mode only).
+  # Runs for PRs and pushes to main/staging, plus manual requests, against
+  # ephemeral PostgreSQL + Redis. Never pushes or deploys, and never contacts
+  # the real Leaseweb API (mock mode only).
   # ==========================================================================
   backend-check:
     name: Backend typecheck, lint, tests, migrations
     runs-on: ubuntu-latest
+    needs: deployment-policy
     services:
       postgres:
         image: postgres:17-alpine
@@ -112,12 +163,18 @@ jobs:
     env:
       DATABASE_URL: postgres://cloud:cloud@127.0.0.1:5432/cloud
       REDIS_URL: redis://127.0.0.1:6379
+      NODE_ENV: test
+      APP_ENV: test
+      AUTH_DELIVERY_MODE: log
+      LEASEWEB_MODE: mock
+      LEASEWEB_ORDERING_ENABLED: "false"
+      PLATFORM_API_URL: ""
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -148,31 +205,44 @@ jobs:
         run: npm run test:integration
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build backend image (validation)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: backend
           push: false
           load: true
           tags: tofan-cloud-api:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=cloud-api
+          cache-to: type=gha,scope=cloud-api,mode=max
 
       - name: Smoke-test backend image (health endpoints)
         run: |
           set -euo pipefail
-          IMAGE_ID="$(docker images -q tofan-cloud-api:ci | head -n1)"
+          IMAGE_ID="$(docker image inspect tofan-cloud-api:ci --format '{{.Id}}')"
           [[ -n "$IMAGE_ID" ]] || { echo "::error::backend image not found"; exit 1; }
           docker rm -f tofan-cloud-api-smoke >/dev/null 2>&1 || true
-          docker run -d --rm --name tofan-cloud-api-smoke -p 127.0.0.1:8902:8000 \
+          docker run -d --name tofan-cloud-api-smoke --network host \
+            -e HOST=127.0.0.1 -e PORT=8902 \
             -e NODE_ENV=test -e DATABASE_URL="$DATABASE_URL" -e REDIS_URL="$REDIS_URL" \
             -e AUTH_SECRET=ci-smoke-secret-0123456789abcdef \
             -e LEASEWEB_MODE=mock \
             "${IMAGE_ID}" >/dev/null
           trap 'docker rm -f tofan-cloud-api-smoke >/dev/null 2>&1 || true' EXIT
-          sleep 8
+          ready=0
+          for attempt in $(seq 1 45); do
+            if curl -fsS http://127.0.0.1:8902/api/health/ready >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != 1 ]]; then
+            docker logs tofan-cloud-api-smoke
+            echo "::error::backend never became ready against PostgreSQL and Redis"
+            exit 1
+          fi
           echo "--- /api/health/live ---"
           curl -fsS http://127.0.0.1:8902/api/health/live
           echo
@@ -182,15 +252,15 @@ jobs:
 
   # ==========================================================================
   # JOB 3 — build-push (web + api images)
-  # Runs ONLY for push to main and workflow_dispatch (never for pull_request).
-  # Both images are pushed with immutable SHA tags plus a convenience latest in
-  # the SAME BuildKit operation per image. Deploys always use the SHA tags.
+  # Runs for pushes to main/staging and workflow_dispatch, never pull requests.
+  # Both images use only immutable full-SHA tags; no rolling production alias
+  # is changed by staging builds.
   # ==========================================================================
   build-push:
     name: Build & push images to GHCR
-    needs: [test-build, backend-check]
+    needs: [deployment-policy, test-build, backend-check]
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
     permissions:
       contents: read
       packages: write
@@ -200,10 +270,10 @@ jobs:
       sha: ${{ steps.image.outputs.sha }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # GHCR image names must be lowercase. Repo = HamedSanaei/cloud -> hamedsanaei/cloud
-      - name: Compute image references (immutable SHA + convenience latest)
+      - name: Compute immutable image references
         id: image
         run: |
           REPO_LOWER="${{ github.repository }}"
@@ -211,191 +281,152 @@ jobs:
           SHA="${{ github.sha }}"
           echo "ref=ghcr.io/${REPO_LOWER}:sha-${SHA}"       >>"$GITHUB_OUTPUT"
           echo "api_ref=ghcr.io/${REPO_LOWER}-api:sha-${SHA}" >>"$GITHUB_OUTPUT"
-          # convenience tags — never used as the deployment source
-          echo "latest=ghcr.io/${REPO_LOWER}:latest"        >>"$GITHUB_OUTPUT"
-          echo "api_latest=ghcr.io/${REPO_LOWER}-api:latest" >>"$GITHUB_OUTPUT"
           echo "sha=${SHA}"                                  >>"$GITHUB_OUTPUT"
           echo "configured web image: ghcr.io/${REPO_LOWER}:sha-${SHA}"
           echo "configured api image: ghcr.io/${REPO_LOWER}-api:sha-${SHA}"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR (for push)
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & push web image (immutable SHA + convenience latest)
-        uses: docker/build-push-action@v6
+      - name: Build & push web image
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
           tags: |
             ${{ steps.image.outputs.ref }}
-            ${{ steps.image.outputs.latest }}
           labels: |
             org.opencontainers.image.title=tofan-cloud
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=cloud-web
+          cache-to: type=gha,scope=cloud-web,mode=max
 
-      - name: Build & push backend image (immutable SHA + convenience latest)
-        uses: docker/build-push-action@v6
+      - name: Build & push backend image
+        uses: docker/build-push-action@v7
         with:
           context: backend
           push: true
           tags: |
             ${{ steps.image.outputs.api_ref }}
-            ${{ steps.image.outputs.api_latest }}
           labels: |
             org.opencontainers.image.title=cloud-server-backend
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=cloud-api
+          cache-to: type=gha,scope=cloud-api,mode=max
 
-  # ==========================================================================
-  # JOB 4 — deploy-production
-  # Runs ONLY for push to main and workflow_dispatch (never for pull_request).
-  # Bound to the 'production' GitHub Environment so its secrets are exposed.
-  # ==========================================================================
-  deploy-production:
-    name: Deploy to production over SSH (with rollback)
+  # Staging automatically updates the SAME live runtime after CI.
+  # The main release lane remains manual and protected by owner review.
+  deploy:
+    name: Deploy tested release
     needs: build-push
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/staging') ||
+      (github.event_name == 'workflow_dispatch' &&
+       ((inputs.environment == 'staging' && github.ref == 'refs/heads/staging') ||
+        (inputs.environment == 'production' && github.ref == 'refs/heads/main' && inputs.confirm_production)))
+    environment: ${{ github.ref == 'refs/heads/staging' && 'staging' || 'production' }}
     concurrency:
-      group: cloud-production
+      group: cloud-production-deploy
       cancel-in-progress: false
-    # Bind to the 'production' GitHub Environment so its environment-level
-    # secrets (DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS,
-    # GHCR_USERNAME/GHCR_TOKEN) are exposed to this job.
-    environment: production
-    if: github.event_name != 'pull_request'
+    env:
+      RELEASE_BRANCH: ${{ github.ref_name }}
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      CLOUD_PORT: ${{ vars.CLOUD_PORT }}
+      PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+      RELEASE_SHA: ${{ needs.build-push.outputs.sha }}
     steps:
-      - name: Checkout (for deploy scripts)
-        uses: actions/checkout@v4
-
-      - name: Validate required SSH secrets
+      - name: Recheck branch HEAD after any Environment approval
         env:
-          H: ${{ secrets.DEPLOY_HOST }}
-          U: ${{ secrets.DEPLOY_USER }}
-          K: ${{ secrets.DEPLOY_SSH_KEY }}
-          KH: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          [[ -n "$H" ]]  || { echo "::error::DEPLOY_HOST is not set"; exit 1; }
-          [[ -n "$U" ]]  || { echo "::error::DEPLOY_USER is not set"; exit 1; }
-          [[ -n "$K" ]]  || { echo "::error::DEPLOY_SSH_KEY is not set"; exit 1; }
-          [[ -n "$KH" ]] || { echo "::error::DEPLOY_KNOWN_HOSTS is not set"; exit 1; }
-          # GHCR auth is optional: only the pushing side needs write; the puller
-          # can use a PUBLIC package, or GHCR_USERNAME/GHCR_TOKEN (read:packages)
-          # for a PRIVATE package. They are validated & installed below if present.
-          echo "All required SSH deploy secrets present."
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${RELEASE_BRANCH}" --jq '.object.sha')"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ && "$current" == "$RELEASE_SHA" ]] || {
+            echo "::error::Only the tested current branch HEAD may deploy"; exit 1;
+          }
 
-      - name: Write SSH config (key + known_hosts)
+      - name: Check out the exact tested release
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build-push.outputs.sha }}
+          persist-credentials: false
+
+      - name: Validate shared live target and install ephemeral SSH material
         env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          [[ -n "$DEPLOY_SSH_KEY" ]] || { echo "::error::DEPLOY_SSH_KEY is empty"; exit 1; }
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          # Preconfigured known_hosts — NO ssh-keyscan, NO StrictHostKeyChecking=no.
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-          ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null   # validate it's a real key
-          echo "SSH key + known_hosts written and validated."
+          [[ -n "$DEPLOY_HOST" && -n "$DEPLOY_USER" && -n "$SSH_KEY" && -n "$KNOWN_HOSTS" ]] || {
+            echo "::error::This Environment needs its own DEPLOY_* SSH secrets"; exit 1;
+          }
+          [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]] || {
+            echo "::error::DEPLOY_PATH must select the existing live website"; exit 1;
+          }
+          [[ "$CLOUD_PORT" =~ ^[0-9]+$ && "$CLOUD_PORT" -gt 0 && "$CLOUD_PORT" -le 65535 ]] || {
+            echo "::error::CLOUD_PORT must be configured for this Environment"; exit 1;
+          }
+          [[ "$PUBLIC_URL" == https://* ]] || {
+            echo "::error::PUBLIC_URL must explicitly name this Environment's HTTPS ingress"; exit 1;
+          }
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/deploy_key" >/dev/null
 
-      - name: Install deploy script on server
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      - name: Deliver the complete release script
         run: |
           set -euo pipefail
-          PORT="${DEPLOY_PORT:-22}"
-          TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
-          SSHCOMMON="-o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -i ~/.ssh/deploy_key"
-          ssh ${SSHCOMMON} -p "${PORT}" "${TARGET}" "mkdir -p /opt/tofan/cloud/scripts"
-          scp ${SSHCOMMON} -P "${PORT}" deploy/scripts/deploy.sh "${TARGET}:/opt/tofan/cloud/scripts/deploy.sh"
-          ssh ${SSHCOMMON} -p "${PORT}" "${TARGET}" "chmod +x /opt/tofan/cloud/scripts/deploy.sh && rm -f /opt/tofan/cloud/.ghcr.env && echo 'deploy.sh installed'"
+          port="${DEPLOY_PORT:-22}"
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          script=".deploy-${RELEASE_SHA}-${GITHUB_RUN_ID}.sh"
+          common=(-o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -i "$HOME/.ssh/deploy_key")
+          ssh "${common[@]}" -p "$port" "$target" "test -d '$DEPLOY_PATH' && test -f '$DEPLOY_PATH/.env'"
+          scp "${common[@]}" -P "$port" deploy/scripts/deploy.sh "${target}:${DEPLOY_PATH}/${script}"
+          read -r checksum _ < <(sha256sum deploy/scripts/deploy.sh)
+          actual="$(ssh "${common[@]}" -p "$port" "$target" "sha256sum '$DEPLOY_PATH/$script'")"
+          [[ "${actual%% *}" == "$checksum" ]] || {
+            echo "::error::Release script integrity check failed"; exit 1;
+          }
 
-      - name: Detect GHCR auth dependencies (PRIVATE package only)
-        # GitHub Actions does NOT allow `secrets` in an `if:` conditional, and a
-        # step's own `env` is unavailable to that same step's `if:` (it is
-        # evaluated first). So we detect secret presence here and expose a plain
-        # boolean output, then gate the next step on that output. This keeps
-        # GHCR_TOKEN scoped to exactly one step and never prints it.
-        id: ghcr_auth
+      - name: Deploy with ephemeral registry authentication
         env:
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-        run: |
-          set -euo pipefail
-          if [[ -n "$GHCR_USERNAME" ]]; then
-            echo "required=true" >> "$GITHUB_OUTPUT"
-            echo "GHCR package is PRIVATE: authenticated pull will be configured."
-          else
-            echo "required=false" >> "$GITHUB_OUTPUT"
-            echo "No GHCR credentials configured; assuming a PUBLIC GHCR package."
-          fi
-
-      - name: Install GHCR credentials on server (PRIVATE package only)
-        # Runs only when the detection step above found GHCR_USERNAME set.
-        # GHCR_TOKEN is written to a temporary 0600 file, used for an
-        # authenticated `docker login` by deploy.sh, then removed. The token
-        # value is never echoed.
-        if: ${{ steps.ghcr_auth.outputs.required == 'true' }}
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
-        run: |
-          set -euo pipefail
-          PORT="${DEPLOY_PORT:-22}"
-          TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
-          SSHCOMMON="-o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -i ~/.ssh/deploy_key"
-          printf 'GHCR_USERNAME=%s\nGHCR_TOKEN=%s\n' "$GHCR_USERNAME" "$GHCR_TOKEN" > "$RUNNER_TEMP/.ghcr.env"
-          chmod 600 "$RUNNER_TEMP/.ghcr.env"
-          scp ${SSHCOMMON} -P "${PORT}" "$RUNNER_TEMP/.ghcr.env" "${TARGET}:/opt/tofan/cloud/.ghcr.env"
-          ssh ${SSHCOMMON} -p "${PORT}" "${TARGET}" "chmod 600 /opt/tofan/cloud/.ghcr.env && echo 'ghcr creds staged on server (removed after deploy)'"
-
-      - name: Run deploy (with automatic rollback)
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_ACTOR: ${{ github.actor }}
           IMAGE: ${{ needs.build-push.outputs.image }}
           API_IMAGE: ${{ needs.build-push.outputs.api_image }}
-          SHA: ${{ needs.build-push.outputs.sha }}
           SKIP: ${{ inputs.skip_public_healthcheck }}
         run: |
           set -euo pipefail
-          PORT="${DEPLOY_PORT:-22}"
-          TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
-          SKIP_PUBLIC="${SKIP:-false}"
-          # bootstrap-only flag; strict (0) is the default for all other runs
-          if [[ "$SKIP_PUBLIC" == "true" ]]; then
-            FLAG='SKIP_PUBLIC_HEALTHCHECK=1'
-            echo "NOTE: SKIP_PUBLIC_HEALTHCHECK=1 (initial bootstrap) — public checks skipped."
-          else
-            FLAG='SKIP_PUBLIC_HEALTHCHECK=0'
-          fi
-          echo "Deploying web image: ${IMAGE} (sha ${SHA})"
-          echo "Deploying api image: ${API_IMAGE}"
-          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-              -o ConnectTimeout=30 -i ~/.ssh/deploy_key \
-              -p "${PORT}" \
-              "${TARGET}" \
-              "set -a && source /opt/tofan/cloud/.ghcr.env 2>/dev/null || true; set +a; \
-               COMPOSE_DIR=/opt/tofan/cloud CLOUD_PORT=8540 API_IMAGE='${API_IMAGE}' ${FLAG} \
-               bash /opt/tofan/cloud/scripts/deploy.sh '${IMAGE}' 'https://cloud.tofanservice.ir'; \
-               rc=\$?; rm -f /opt/tofan/cloud/.ghcr.env; exit \$rc"
+          port="${DEPLOY_PORT:-22}"
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          script="${DEPLOY_PATH}/.deploy-${RELEASE_SHA}-${GITHUB_RUN_ID}.sh"
+          skip=0
+          [[ "${SKIP:-false}" != true ]] || skip=1
+          printf -v invoke 'COMPOSE_DIR=%q CLOUD_PORT=%q RELEASE_SHA=%q API_IMAGE=%q bash %q %q %q %q' \
+            "$DEPLOY_PATH" "$CLOUD_PORT" "$RELEASE_SHA" "$API_IMAGE" "$script" "$IMAGE" "$PUBLIC_URL" "$skip"
+          printf -v registry 'printf "%%s" "$registry_token" | docker login ghcr.io -u %q --password-stdin >/dev/null' "$GHCR_ACTOR"
+          printf -v cleanup 'rm -rf -- "$DOCKER_CONFIG"; rm -f -- %q' "$script"
+          printf -v remote 'set -Eeuo pipefail; DOCKER_CONFIG="$(mktemp -d)"; export DOCKER_CONFIG; trap %q EXIT; IFS= read -r registry_token; %s; unset registry_token GHCR_TOKEN; %s' "$cleanup" "$registry" "$invoke"
+          printf '%s\n' "$GHCR_TOKEN" | ssh -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -i "$HOME/.ssh/deploy_key" \
+            -p "$port" "$target" "$remote"
+
+      - name: Remove ephemeral SSH credentials
+        if: always()
+        run: rm -f "$HOME/.ssh/deploy_key"

@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, ChevronDown, Clock3, Globe2, Menu, Network, Server, Settings2, ShieldCheck, X } from 'lucide-react'
+import { ArrowLeft, Check, ChevronDown, Clock3, Globe2, Menu, Network, Settings2, X } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 

@@ -3,7 +3,6 @@ import {
   CheckCircle2,
   Cpu,
   Database,
-  Globe2,
   HardDrive,
   Network,
   Search,

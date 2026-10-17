@@ -10,6 +10,16 @@ async function main() {
   loadConfig()
   const config = getConfig()
   const logger = createLogger('cloud-worker')
+  if (config.PLATFORM_API_URL) {
+    logger.info('Unified mode: billing and provider jobs belong to the Python platform; legacy worker disabled')
+    await new Promise<void>(resolve => {
+      const idle = setInterval(() => {}, 60_000)
+      const stop = () => { clearInterval(idle); resolve() }
+      process.once('SIGTERM', stop)
+      process.once('SIGINT', stop)
+    })
+    return
+  }
   logger.info('starting cloud worker (env=%s, leaseweb_mode=%s)', config.NODE_ENV, config.LEASEWEB_MODE)
 
   await migrate()

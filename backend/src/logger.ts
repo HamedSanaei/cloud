@@ -1,10 +1,10 @@
 import { pino } from 'pino'
-import { getConfig, isProduction } from './config.js'
+import { getConfig } from './config.js'
 
 /**
- * Structured logger. In development we pretty-print; in production we emit
- * plain JSON lines. Secrets are redacted from any logged message via the
- * redact paths below plus explicit redaction in the config module.
+ * Structured logger. Only development uses the optional pretty-printer.
+ * Tests and deployed images emit JSON without requiring dev dependencies.
+ * Secrets are redacted below and explicitly by the config module.
  */
 export function createLogger(name = 'cloud-server') {
   const config = getConfig()
@@ -26,7 +26,7 @@ export function createLogger(name = 'cloud-server') {
       ],
       censor: '***REDACTED***',
     },
-    transport: isProduction() ? undefined : { target: 'pino-pretty', options: { colorize: true, translateTime: 'HH:MM:ss' } },
+    transport: config.NODE_ENV === 'development' ? { target: 'pino-pretty', options: { colorize: true, translateTime: 'HH:MM:ss' } } : undefined,
   })
 }
 

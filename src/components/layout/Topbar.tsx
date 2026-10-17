@@ -106,7 +106,7 @@ export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
 
       <Link to="/wallet" className="wallet-summary">
         <WalletCards size={19} />
-        <span><small>کیف پول پیش‌فرض</small><strong>{wallet.loading ? '...' : formatToman(wallet.data?.totalBalance ?? 0)}</strong></span>
+        <span><small>کیف پول پیش‌فرض</small><strong>{wallet.loading ? '...' : wallet.error || !wallet.data ? 'دریافت نشد' : formatToman(wallet.data.totalBalance)}</strong></span>
       </Link>
 
       <div className="topbar__actions">

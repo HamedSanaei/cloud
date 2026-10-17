@@ -10,6 +10,7 @@ export type { ProviderAccount, HetznerConfig, LeasewebConfig, AsiatechConfig } f
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  APP_ENV: z.enum(['development', 'test', 'staging', 'production']).optional(),
 
   HOST: z.string().default('0.0.0.0'),
   // 0 = ephemeral port (useful for tests); production sets an explicit port.
@@ -33,6 +34,8 @@ const envSchema = z.object({
 
   // ---- Authentication delivery and OAuth ---------------------------------
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
+  // When enabled, the Telegram platform is the only wallet/catalog/compute authority.
+  PLATFORM_API_URL: z.union([z.literal(''), z.string().url()]).default(''),
   AUTH_DELIVERY_MODE: z.enum(['live', 'log']).default('log'),
   AUTH_OTP_TTL_SECONDS: z.coerce.number().int().min(120).max(900).default(300),
   AUTH_OTP_RESEND_SECONDS: z.coerce.number().int().min(30).max(300).default(45),
@@ -105,7 +108,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     const details = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')
     throw new Error(`Invalid environment configuration: ${details}`)
   }
-  cached = { ...parsed.data, ...loadProviderConfig(env, env === process.env) }
+  // Unified mode never loads provider credentials or starts a second price authority.
+  const providerEnv: NodeJS.ProcessEnv = parsed.data.PLATFORM_API_URL ? {
+    NODE_ENV: parsed.data.NODE_ENV,
+    LEASEWEB_ENABLED: 'false', HETZNER_ENABLED: 'false', ASIATECH_ENABLED: 'false',
+    CATALOG_SYNC_ENABLED: 'false',
+  } : env
+  cached = { ...parsed.data, ...loadProviderConfig(providerEnv, providerEnv === process.env) }
   return cached
 }
 

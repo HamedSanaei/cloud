@@ -54,13 +54,14 @@ LABEL org.opencontainers.image.created="${IMAGE_CREATED}"
 LABEL org.opencontainers.image.revision="${IMAGE_REVISION}"
 LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
 LABEL org.opencontainers.image.title="cloud-server-backend"
+LABEL io.servercloud.platform-contract="1"
 
 USER cloud
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=20s --timeout=4s --start-period=15s --retries=3 \
-    CMD node -e "fetch('http://127.0.0.1:8000/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+    CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||'8000')+'/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
 # The default command runs the API. The worker uses `npm run start:worker`.
 CMD ["npm", "run", "start"]

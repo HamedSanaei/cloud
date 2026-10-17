@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
 # tofan-cloud deploy script
-# Runs ON the production server. Idempotent, immutable, with automatic
-# rollback on any failure. Driven by GitHub Actions (over SSH) or an operator.
+# Both release branches update the same production runtime. Images are built in CI.
+# Rollback never downgrades data or restarts an incompatible financial authority.
 #
 # Usage:
 #   deploy.sh <IMAGE> [<PUBLIC_URL>] [<SKIP_PUBLIC_HEALTHCHECK>]
@@ -21,9 +21,9 @@
 #   GHCR_USERNAME   username for authenticated GHCR pull (private package)
 #   GHCR_TOKEN      token with read:packages for that user (private package)
 #
-# Infrastructure/auth secrets live in ${COMPOSE_DIR}/.env (NEVER in git).
-# Provider credentials live in ${COMPOSE_DIR}/configuration.toml, mounted
-# read-only into API and worker. Neither file is included in an image.
+# Infrastructure/auth secrets and BACKUP_ENCRYPTION_KEY live in
+# ${COMPOSE_DIR}/.env (NEVER in git). Provider credentials stay exclusively
+# in the canonical platform's server-owned configuration.toml.
 #
 # GHCR access:
 #   - Anonymous `docker pull` is attempted first -> works for PUBLIC packages.
@@ -34,12 +34,19 @@
 # =============================================================================
 set -Eeuo pipefail
 
+PROJECT="tofan-cloud"
 COMPOSE_DIR="${COMPOSE_DIR:-/opt/tofan/cloud}"
 CLOUD_PORT="${CLOUD_PORT:-8540}"
-PROJECT="tofan-cloud"
-CONTAINER="tofan-cloud"
-API_CONTAINER="tofan-cloud-api"
-WORKER_CONTAINER="tofan-cloud-worker"
+CONTAINER="$PROJECT"
+API_CONTAINER="${PROJECT}-api"
+WORKER_CONTAINER="${PROJECT}-worker"
+PLATFORM_NETWORK="cloud-platform-production-bridge"
+RELEASE_SHA="${RELEASE_SHA:?Set RELEASE_SHA to the approved full commit SHA}"
+MIGRATION_STARTED=""
+DB_HEAD_BEFORE=""
+EXPECTED_DB_HEAD=""
+CANDIDATE=""
+GPG_HOME=""
 
 CC_Y="\033[1;33m"; CC_G="\033[1;32m"; CC_R="\033[1;31m"; CC_C="\033[1;36m"; CC_N="\033[0m"
 log()  { printf "${CC_C}[i]${CC_N} %s\n" "$*"; }
@@ -82,6 +89,48 @@ FINAL="${COMPOSE_DIR}/compose.yml"
 HEALTH="http://127.0.0.1:${CLOUD_PORT}/healthz"
 SPA="http://127.0.0.1:${CLOUD_PORT}/dashboard"
 API_HEALTH="http://127.0.0.1:${CLOUD_PORT}/api/health/ready"
+ENV_FILE="${COMPOSE_DIR}/.env"
+
+cleanup() {
+  [[ -z "$CANDIDATE" || ! -f "$CANDIDATE" ]] || rm -f -- "$CANDIDATE"
+  if [[ -n "$GPG_HOME" ]]; then
+    GNUPGHOME="$GPG_HOME" gpgconf --kill gpg-agent >/dev/null 2>&1 || true
+    rm -rf -- "$GPG_HOME"
+  fi
+}
+trap cleanup EXIT
+
+compose() {
+  docker compose --project-name "$PROJECT" --env-file "$ENV_FILE" -f "$1" "${@:2}"
+}
+
+database_head() {
+  local file="$1" exists
+  exists="$(compose "$file" exec -T cloud-postgres psql -U cloud -d cloud -Atc \
+    "SELECT to_regclass('drizzle.__drizzle_migrations') IS NOT NULL")" || return 1
+  if [[ "$exists" != t ]]; then printf 'base\n'; return; fi
+  compose "$file" exec -T cloud-postgres psql -U cloud -d cloud -Atc \
+    "SELECT COALESCE(max(created_at)::text, 'base') FROM drizzle.__drizzle_migrations"
+}
+
+backup_database() {
+  local backup
+  install -d -m 0700 "${COMPOSE_DIR}/backups"
+  GPG_HOME="$(mktemp -d "${COMPOSE_DIR}/.gpg.XXXXXX")" || return 1
+  chmod 0700 "$GPG_HOME"
+  backup="${COMPOSE_DIR}/backups/pre-${RELEASE_SHA}-$(date -u +%Y%m%dT%H%M%S)-$$.dump.gpg"
+  if ! compose "$CANDIDATE" exec -T cloud-postgres pg_dump -U cloud -d cloud -Fc |
+    GNUPGHOME="$GPG_HOME" gpg --batch --yes --pinentry-mode loopback --no-symkey-cache \
+      --symmetric --cipher-algo AES256 --compress-algo none --passphrase-fd 3 \
+      --output "$backup" 3<<<"$BACKUP_ENCRYPTION_KEY"; then
+    rm -f -- "$backup"
+    die "Encrypted backup failed; migration was not started"
+    return 1
+  fi
+  chmod 0600 "$backup"
+  unset BACKUP_ENCRYPTION_KEY
+  good "Encrypted pre-migration backup: $backup"
+}
 
 # ---------------------------------------------------------------------------
 # Image pull with optional authenticated GHCR login (never echo the token).
@@ -159,8 +208,10 @@ services:
         condition: service_healthy
     networks:
       - ${PROJECT}_net
+      - platform-bridge
     environment:
       NODE_ENV: production
+      APP_ENV: production
       HOST: 0.0.0.0
       PORT: "8000"
       DATABASE_URL: \${DATABASE_URL:?DATABASE_URL must be set in ${COMPOSE_DIR}/.env}
@@ -168,20 +219,22 @@ services:
       AUTH_SECRET: \${AUTH_SECRET:?AUTH_SECRET must be set in ${COMPOSE_DIR}/.env}
       COOKIE_SECURE: \${COOKIE_SECURE:-true}
       CORS_ORIGIN: \${CORS_ORIGIN:-}
-      CLOUD_PLATFORM_CONFIG_FILE: /etc/tofan-cloud/configuration.toml
-      USDT_RATE_API_BASE_URL: \${USDT_RATE_API_BASE_URL:-https://api.abantether.com}
-      USDT_RATE_MAX_AGE_SECONDS: \${USDT_RATE_MAX_AGE_SECONDS:-300}
-      QUOTE_TTL_MINUTES: \${QUOTE_TTL_MINUTES:-15}
-      RENEWAL_LOOKAHEAD_DAYS: \${RENEWAL_LOOKAHEAD_DAYS:-3}
-      RENEWAL_GRACE_DAYS: \${RENEWAL_GRACE_DAYS:-3}
+      PLATFORM_API_URL: \${PLATFORM_API_URL:?PLATFORM_API_URL must point to the canonical platform}
+      FRONTEND_URL: \${FRONTEND_URL:?FRONTEND_URL must be configured}
+      AUTH_DELIVERY_MODE: \${AUTH_DELIVERY_MODE:-live}
+      SMTP_HOST: \${SMTP_HOST:-}
+      SMTP_PORT: \${SMTP_PORT:-587}
+      SMTP_SECURE: \${SMTP_SECURE:-false}
+      SMTP_USER: \${SMTP_USER:-}
+      SMTP_PASSWORD: \${SMTP_PASSWORD:-}
+      SMTP_FROM: \${SMTP_FROM:-}
+      PARSGREEN_SIGNATURE: \${PARSGREEN_SIGNATURE:-}
+      PARSGREEN_FROM: \${PARSGREEN_FROM:-}
+      PARSGREEN_ENDPOINT: \${PARSGREEN_ENDPOINT:-https://login.parsgreen.com/Api/SendSMS.asmx}
+      GOOGLE_CLIENT_ID: \${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: \${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: \${GOOGLE_REDIRECT_URI:-${PUBLIC_URL%/}/api/v1/auth/google/callback}
       LOG_LEVEL: \${LOG_LEVEL:-info}
-    volumes:
-      - type: bind
-        source: ${COMPOSE_DIR}/configuration.toml
-        target: /etc/tofan-cloud/configuration.toml
-        read_only: true
-        bind:
-          create_host_path: false
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8000/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 20s
@@ -212,25 +265,15 @@ services:
         condition: service_healthy
     networks:
       - ${PROJECT}_net
+      - platform-bridge
     environment:
       NODE_ENV: production
+      APP_ENV: production
       DATABASE_URL: \${DATABASE_URL:?DATABASE_URL must be set in ${COMPOSE_DIR}/.env}
       REDIS_URL: \${REDIS_URL:?REDIS_URL must be set in ${COMPOSE_DIR}/.env}
       AUTH_SECRET: \${AUTH_SECRET:?AUTH_SECRET must be set in ${COMPOSE_DIR}/.env}
-      CLOUD_PLATFORM_CONFIG_FILE: /etc/tofan-cloud/configuration.toml
-      USDT_RATE_API_BASE_URL: \${USDT_RATE_API_BASE_URL:-https://api.abantether.com}
-      USDT_RATE_MAX_AGE_SECONDS: \${USDT_RATE_MAX_AGE_SECONDS:-300}
-      QUOTE_TTL_MINUTES: \${QUOTE_TTL_MINUTES:-15}
-      RENEWAL_LOOKAHEAD_DAYS: \${RENEWAL_LOOKAHEAD_DAYS:-3}
-      RENEWAL_GRACE_DAYS: \${RENEWAL_GRACE_DAYS:-3}
+      PLATFORM_API_URL: \${PLATFORM_API_URL:?PLATFORM_API_URL must point to the canonical platform}
       LOG_LEVEL: \${LOG_LEVEL:-info}
-    volumes:
-      - type: bind
-        source: ${COMPOSE_DIR}/configuration.toml
-        target: /etc/tofan-cloud/configuration.toml
-        read_only: true
-        bind:
-          create_host_path: false
     command: ["npm", "run", "start:worker"]
     healthcheck:
       disable: true
@@ -247,7 +290,7 @@ services:
 
   cloud-postgres:
     image: postgres:17-alpine
-    container_name: tofan-cloud-postgres
+    container_name: ${PROJECT}-postgres
     restart: unless-stopped
     networks:
       - ${PROJECT}_net
@@ -276,7 +319,7 @@ services:
 
   cloud-redis:
     image: redis:7-alpine
-    container_name: tofan-cloud-redis
+    container_name: ${PROJECT}-redis
     restart: unless-stopped
     networks:
       - ${PROJECT}_net
@@ -307,6 +350,9 @@ volumes:
 networks:
   ${PROJECT}_net:
     name: ${PROJECT}_net
+  platform-bridge:
+    external: true
+    name: ${PLATFORM_NETWORK}
 YAML
   mv -f "$tmp" "$out"
 }
@@ -365,6 +411,15 @@ rollback() {
   local reason="$1"
   ROLLED_BACK=1   # prevent the ERR trap from re-entering rollback
   warn "ROLLBACK triggered: ${reason}"
+  if [[ -f "$FINAL" ]]; then
+    compose "$FINAL" stop -t 30 cloud-api cloud-worker || {
+      die "Cannot stop candidate writers; manual intervention required"; return 1;
+    }
+  fi
+  if [[ -n "$MIGRATION_STARTED" && "$DB_HEAD_BEFORE" != "$EXPECTED_DB_HEAD" ]]; then
+    die "Schema transition attempted. Writers remain stopped; restore the encrypted backup to an isolated database for operator recovery."
+    return 1
+  fi
   if [[ -z "${PREV_IMAGE}" || -z "${PREV_API_IMAGE}" ]]; then
     die "No previous image pair recorded — cannot roll back. Manual intervention required."
     return 1
@@ -378,9 +433,15 @@ rollback() {
     die "Could not pull previous api image ${PREV_API_IMAGE} during rollback."
     return 1
   fi
+  local previous_contract
+  previous_contract="$(docker image inspect --format '{{index .Config.Labels "io.servercloud.platform-contract"}}' "$PREV_API_IMAGE")"
+  if [[ "$previous_contract" != 1 ]]; then
+    die "Previous image cannot prove canonical-wallet compatibility. Writers remain stopped."
+    return 1
+  fi
 
   write_compose "${PREV_IMAGE}" "${PREV_API_IMAGE}" "${FINAL}"
-  if docker compose -f "${FINAL}" up -d; then
+  if compose "$FINAL" up -d; then
     if wait_healthy && wait_api_healthy && current_healthy && api_healthy; then
       meta_set image "${PREV_IMAGE}"
       meta_set api_image "${PREV_API_IMAGE}"
@@ -401,6 +462,37 @@ rollback() {
 command -v docker >/dev/null 2>&1 || { die "docker not found on server"; exit 1; }
 docker compose version >/dev/null 2>&1 || { die "docker compose v2 not available"; exit 1; }
 mkdir -p "$COMPOSE_DIR"
+command -v flock >/dev/null 2>&1 || { die "flock is required"; exit 1; }
+command -v gpg >/dev/null 2>&1 || { die "gpg is required for encrypted migration backups"; exit 1; }
+[[ -f "$ENV_FILE" ]] || { die "Missing server-owned .env"; exit 1; }
+BACKUP_KEY_LINE="$(grep '^BACKUP_ENCRYPTION_KEY=' "$ENV_FILE" | tail -n 1 || true)"
+BACKUP_ENCRYPTION_KEY="${BACKUP_KEY_LINE#*=}"
+case "$BACKUP_ENCRYPTION_KEY" in
+  \"*\"|\'*\') BACKUP_ENCRYPTION_KEY="${BACKUP_ENCRYPTION_KEY:1:${#BACKUP_ENCRYPTION_KEY}-2}" ;;
+esac
+unset BACKUP_KEY_LINE
+[[ ${#BACKUP_ENCRYPTION_KEY} -ge 32 ]] || {
+  die "BACKUP_ENCRYPTION_KEY must contain at least 32 characters; nothing was stopped"; exit 1;
+}
+[[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { die "RELEASE_SHA must be a full commit SHA"; exit 1; }
+[[ "$CLOUD_PORT" =~ ^[0-9]+$ && "$CLOUD_PORT" -ge 1024 && "$CLOUD_PORT" -le 65535 ]] || { die "Invalid CLOUD_PORT"; exit 1; }
+exec 9>"${COMPOSE_DIR}/.deployment.lock"
+flock -n 9 || { die "Another deployment is running for this target"; exit 1; }
+umask 077
+exec 8>/var/lock/servercloud-platform-release.lock || {
+  die "Cannot open the shared website/platform release lock"; exit 1;
+}
+flock -w 600 8 || {
+  die "Another website/platform release is still active; retry the current SHA"; exit 1;
+}
+existing_projects="$(docker ps -a \
+  --filter "label=com.docker.compose.project.working_dir=${COMPOSE_DIR}" \
+  --format '{{.Label "com.docker.compose.project"}}')"
+while IFS= read -r existing_project; do
+  if [[ -n "$existing_project" && "$existing_project" != "$PROJECT" ]]; then
+    die "Deployment path belongs to another environment/project; nothing was stopped"; exit 1
+  fi
+done <<< "$existing_projects"
 
 # Backend image is required for the full topology.
 if [[ -z "$API_IMAGE" ]]; then
@@ -432,19 +524,50 @@ if ! pull_image "${API_IMAGE}"; then
   exit 1
 fi
 
-# From here on we are mutating the running deployment; enable the rollback trap.
+for candidate_image in "$IMAGE" "$API_IMAGE"; do
+  revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$candidate_image")"
+  contract="$(docker image inspect --format '{{index .Config.Labels "io.servercloud.platform-contract"}}' "$candidate_image")"
+  [[ "$revision" == "$RELEASE_SHA" && "$contract" == 1 ]] || {
+    die "Image revision/contract does not match the approved release"; exit 1;
+  }
+done
+EXPECTED_DB_HEAD="$(docker run --rm "$API_IMAGE" node --input-type=module -e \
+  "import {readFileSync} from 'node:fs'; console.log(JSON.parse(readFileSync('drizzle/meta/_journal.json','utf8')).entries.at(-1).when)")"
+[[ "$EXPECTED_DB_HEAD" =~ ^[0-9]+$ ]] || { die "Image has no valid migration head"; exit 1; }
+CANDIDATE="${COMPOSE_DIR}/.compose.${RELEASE_SHA}.$$.candidate.yml"
+write_compose "$IMAGE" "$API_IMAGE" "$CANDIDATE"
+compose "$CANDIDATE" config --quiet
+docker network inspect "$PLATFORM_NETWORK" >/dev/null || {
+  die "Deploy the matching canonical platform environment first"; exit 1;
+}
+# No DB mutation: fail before draining writers if the canonical API is absent,
+# financially incompatible, insecure, or belongs to another environment.
+compose "$CANDIDATE" run --rm --no-deps cloud-api node --input-type=module -e '
+  import {loadConfig} from "./dist/config.js";
+  import {assertPlatformCompatibility} from "./dist/modules/integration/platform.js";
+  const c = loadConfig();
+  if (!c.PLATFORM_API_URL) throw new Error("Unified deployment requires PLATFORM_API_URL");
+  if (c.AUTH_DELIVERY_MODE !== "live") throw new Error("Live authentication delivery is required");
+  await assertPlatformCompatibility();
+'
+compose "$CANDIDATE" up -d --wait cloud-postgres cloud-redis
+DB_HEAD_BEFORE="$(database_head "$CANDIDATE")"
+if [[ "$DB_HEAD_BEFORE" != base && ( ! "$DB_HEAD_BEFORE" =~ ^[0-9]+$ || "$DB_HEAD_BEFORE" -gt "$EXPECTED_DB_HEAD" ) ]]; then
+  die "Database is newer than the candidate; refusing an application/schema downgrade"; exit 1
+fi
 UPDATING=1
-
-# --- write config + deploy -----------------------------------------------------
-write_compose "$IMAGE" "$API_IMAGE" "$FINAL"
-if ! docker compose -f "$FINAL" up -d; then
+if [[ -f "$FINAL" ]]; then compose "$FINAL" stop -t 30 cloud-api cloud-worker; fi
+backup_database
+MIGRATION_STARTED=1
+compose "$CANDIDATE" run --rm --no-deps cloud-api node dist/db/migrate.js
+[[ "$(database_head "$CANDIDATE")" == "$EXPECTED_DB_HEAD" ]] || {
+  rollback "Migration head does not match the candidate image" || exit 1; exit 2;
+}
+mv -f "$CANDIDATE" "$FINAL"
+if ! compose "$FINAL" up -d; then
   rollback "docker compose up failed for ${IMAGE} + ${API_IMAGE}" || exit 1
   exit 2
 fi
-
-# mark attempted images (so a failed state still records what we tried)
-meta_set image "${IMAGE}"
-meta_set api_image "${API_IMAGE}"
 
 # --- health + local verification ------------------------------------------------
 if ! wait_healthy; then
@@ -480,6 +603,15 @@ else
   exit 2
 fi
 
+# In unified mode the web worker intentionally does not run a second billing
+# authority. Its process must nevertheless stay alive without restart churn.
+worker_restarts="$(docker inspect --format '{{.RestartCount}}' "$WORKER_CONTAINER")"
+sleep 5
+if [[ "$(docker inspect --format '{{.State.Running}}:{{.RestartCount}}' "$WORKER_CONTAINER")" != "true:${worker_restarts}" ]]; then
+  rollback "Unified web worker is not stable" || exit 1
+  exit 2
+fi
+
 # --- public verification --------------------------------------------------------
 # STRICT by default (SKIP_PUBLIC != 1). A failed public check marks this deploy
 # failed and rolls back. Public checks are ONLY skipped for the initial
@@ -509,15 +641,17 @@ else
 fi
 
 # --- success ---------------------------------------------------------------------
-CUR_SHA="${IMAGE##*:}"
 meta_set image "$IMAGE"
 meta_set api_image "$API_IMAGE"
-meta_set sha "$CUR_SHA"
+meta_set sha "$RELEASE_SHA"
 meta_set deployed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 meta_set public_url "$PUBLIC_URL"
+meta_set environment production
+meta_set platform_contract 1
+meta_set database_head "$EXPECTED_DB_HEAD"
 
 good "DEPLOYMENT SUCCEEDED"
-printf "%-32s : %s\n" "Commit SHA" "$CUR_SHA"
+printf "%-32s : %s\n" "Commit SHA" "$RELEASE_SHA"
 printf "%-32s : %s\n" "Web image" "$IMAGE"
 printf "%-32s : %s\n" "API image" "$API_IMAGE"
 printf "%-32s : %s\n" "Web container" "$(docker inspect --format='{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo unknown)"

@@ -76,6 +76,7 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       CORS_ORIGIN: ${CORS_ORIGIN:-}
       FRONTEND_URL: ${FRONTEND_URL:?FRONTEND_URL must be set}
+      PLATFORM_API_URL: ${PLATFORM_API_URL:-}
       AUTH_DELIVERY_MODE: ${AUTH_DELIVERY_MODE:-live}
       AUTH_OTP_TTL_SECONDS: ${AUTH_OTP_TTL_SECONDS:-300}
       AUTH_OTP_RESEND_SECONDS: ${AUTH_OTP_RESEND_SECONDS:-45}
@@ -141,6 +142,7 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set (postgres://...)}
+      PLATFORM_API_URL: ${PLATFORM_API_URL:-}
       REDIS_URL: ${REDIS_URL:?REDIS_URL must be set (redis://...)}
       AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET must be set}
       CLOUD_PLATFORM_CONFIG_FILE: /etc/tofan-cloud/configuration.toml
