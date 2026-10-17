@@ -78,7 +78,7 @@ export async function sendParsGreenSms(to: string, message: string): Promise<{ d
     <signature>${xmlEscape(config.PARSGREEN_SIGNATURE)}</signature>
     <from>${xmlEscape(config.PARSGREEN_FROM)}</from>
     <to><string>${xmlEscape(to)}</string></to>
-    <text>${xmlEscape(message)}</text><isFlash>false</isFlash><udh></udh><success>0</success><retStr><long>0</long></retStr>
+    <text>${xmlEscape(message)}</text><isFlash>false</isFlash><udh></udh><success>0</success><retStr />
   </SendGroupSMS></soap:Body>
 </soap:Envelope>`
   try {
