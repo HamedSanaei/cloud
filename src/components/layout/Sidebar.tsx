@@ -1,8 +1,9 @@
-import { LogOut, X } from 'lucide-react'
+import { Home, LogOut, Settings, X } from 'lucide-react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { accountLinks, navGroups } from '../../data/navigation'
+import { accountLinks, navGroups, settingsLinks } from '../../data/navigation'
 import { useToast } from '../ui/Toast'
 import { useAuth } from '../../auth/AuthContext'
+import { BRAND_NAME, BrandMark } from '../Brand'
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { showToast } = useToast()
@@ -26,9 +27,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       />
       <aside className={`sidebar ${open ? 'sidebar--open' : ''}`}>
         <div className="sidebar__brand">
-          <div className="brand-mark">م</div>
+          <BrandMark className="brand-mark" />
           <div>
-            <strong>کلود سرور</strong>
+            <strong>{BRAND_NAME}</strong>
             <span>کنسول مدیریت زیرساخت</span>
           </div>
           <button type="button" className="icon-button sidebar__close" onClick={onClose} aria-label="بستن منو">
@@ -56,6 +57,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </nav>
 
         <div className="sidebar__account">
+          <NavLink to="/" end className="nav-item nav-item--compact" onClick={onClose}><Home size={18} /><span>صفحه اصلی سایت</span></NavLink>
           {accountLinks.map(({ label, path, icon: Icon }) => (
             <NavLink
               to={path}
@@ -67,6 +69,10 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               <span>{label}</span>
             </NavLink>
           ))}
+          <details className="sidebar-settings">
+            <summary className="nav-item nav-item--compact"><Settings size={18} /><span>اتصال‌ها و مدیریت پنل</span></summary>
+            {settingsLinks.map(({ label, path, icon: Icon }) => <NavLink to={path} key={path} onClick={onClose} className={({ isActive }) => `nav-item nav-item--compact ${isActive ? 'nav-item--active' : ''}`}><Icon size={17} /><span>{label}</span></NavLink>)}
+          </details>
           <button type="button" className="nav-item nav-item--compact nav-item--danger" onClick={() => void logout()}>
             <LogOut size={18} />
             <span>خروج</span>

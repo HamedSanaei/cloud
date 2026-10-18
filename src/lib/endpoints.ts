@@ -1,4 +1,5 @@
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut, isApiConfigured } from './apiClient'
+import { platformGet, platformPost } from './platformClient'
 import type {
   AppNotification,
   ChargeRequest,
@@ -103,16 +104,28 @@ export async function changeServerPower(serverId: string, action: 'power-on' | '
 
 export async function getStorefrontCatalog(): Promise<StorefrontCatalog> {
   if (noApi()) throw new Error('اتصال به سرویس کاتالوگ پیکربندی نشده است.')
-  const payload = await apiGet<{ data: StorefrontCatalog }>('/catalog/storefront')
+  const payload = await apiGet<{ data: StorefrontCatalog }>('/catalog/storefront', { timeoutMs: 50000 })
   return payload.data
 }
 
 export async function createServer(payload: CreateServerPayload): Promise<Server> {
   if (noApi()) throw new Error('اتصال به سرویس ایجاد سرور پیکربندی نشده است.')
+  if (payload.pricing) {
+    const result = await platformPost<{ serverId: string }>('/orders', {
+      offerId: payload.offerId, image: payload.os, ...payload.pricing,
+    }, payload.idempotencyKey)
+    if (!result.serverId) throw new Error('پاسخ ثبت سفارش معتبر نیست؛ پیش از تکرار، وضعیت سرورها را بررسی کنید.')
+    return { id: result.serverId } as Server
+  }
   const created = await apiPost<Server | { data: Server }>('/servers', payload)
   const server = 'data' in created ? created.data : created
   if (!server?.id) throw new Error('پاسخ سرویس ایجاد سرور معتبر نیست.')
   return server
+}
+
+export async function getOfferImages(offerId: string): Promise<Array<{ id: string; label: string; family?: string }>> {
+  const images = await platformGet<Array<{ id: string; name: string }>>(`/offers/${encodeURIComponent(offerId)}/images`)
+  return images.map(image => ({ id: image.id, label: image.name }))
 }
 
 export async function listIps(): Promise<IpAddress[]> {

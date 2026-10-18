@@ -1,0 +1,82 @@
+/* Desktop geometry from Penpot 02 · Screens (1440 × 900).
+   Keep responsive rules in styles.css; never hard-code financial/data states. */
+:root { --sidebar-width: 248px; --topbar-height: 72px; }
+.sidebar__brand .public-brand-mark { display: inline-flex; flex-shrink: 0; margin: 0; }
+.sidebar__brand .public-brand-mark i { width: 100%; }
+
+@media (min-width: 1200px) {
+  .app-shell .topbar { background: var(--surface); }
+  .app-shell .page-container { padding: 28px 64px 60px 48px; }
+  .app-shell .page-header__title-row h1 { font-size: 28px; font-weight: 700; line-height: 1.5; }
+  .app-shell .card--elevated, .app-shell .metric-card { box-shadow: 0 4px 14px -4px rgb(15 23 42 / 10%); }
+  .app-shell .page-header { width: calc(100% + 12px); align-self: flex-end; }
+  .app-shell .page-header p { margin-top: 4px; line-height: 1.5; }
+  .app-shell .page-header__actions { direction: ltr; gap: 14px; padding-top: 6px; }
+  .app-shell .page-header__actions .button { direction: rtl; min-height: 46px; border-radius: 12px; }
+  .app-shell .page-header__actions .button--primary { min-width: 180px; }
+  .app-shell .page-header__actions .button--success { min-width: 170px; }
+  .app-shell .metrics-grid { direction: ltr; gap: 16px; }
+  .app-shell .metrics-grid > * { direction: rtl; }
+  .app-shell .metrics-grid--six { width: calc(100% - 16px); align-self: flex-end; }
+  .app-shell .metrics-grid--four { width: calc(100% - 20px); gap: 20px; align-self: flex-end; }
+  .app-shell .metric-card { height: 108px; min-height: 108px; padding: 14px 10px; border-radius: 14px; }
+  .app-shell .metric-card .metric-card__icon { width: 24px; height: 24px; margin: 0; border-radius: 0; background: transparent; }
+  .app-shell .metric-card strong { font-size: 24px; line-height: 1.5; }
+  .app-shell .metric-card > span:not(.metric-card__icon) { margin: 0; font-size: 12px; line-height: 1.5; }
+
+  .dashboard-grid { direction: ltr; margin-top: 4px; grid-template-rows: minmax(132px, auto) minmax(148px, auto); }
+  .dashboard-grid > * { direction: rtl; }
+  .dashboard-servers { min-height: 300px; }
+  .dashboard-servers .section-heading h2 { color: var(--brand-500); font-size: 18px; }
+  .dashboard-servers .empty-state { min-height: 200px; padding: 12px 0; }
+  .dashboard-servers .empty-state p { display: none; }
+  .dashboard-servers .empty-state h3 { color: var(--muted); font-size: 14px; font-weight: 500; }
+  .wallet-overview, .recent-tickets { padding: 18px 24px; }
+  .wallet-overview .section-heading { margin-bottom: 4px; }
+  .wallet-overview .section-heading h2 { color: var(--success); }
+  .wallet-overview .wallet-balance { padding: 0; line-height: 1.5; }
+  .recent-tickets .section-heading h2 { color: var(--purple); }
+  .recent-tickets .section-heading > a { display: none; }
+  .recent-tickets .empty-state { min-height: 64px; padding: 0; }
+  .recent-tickets .empty-state__icon { display: none; }
+  .recent-tickets .empty-state h3 { font-size: 13px; font-weight: 400; color: var(--muted); }
+  .dashboard-quick { margin-top: 4px; padding: 18px 24px 24px; min-height: 170px; }
+  .dashboard-quick .section-heading { margin-bottom: 17px; }
+  .dashboard-quick .section-heading h2 { font-size: 18px; line-height: 1.5; }
+  .dashboard-quick .quick-grid { width: 1005px; max-width: 100%; margin-right: auto; margin-left: 0; direction: ltr; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 20px; }
+  .dashboard-quick .quick-card { direction: rtl; min-height: 82px; border-radius: 12px; }
+  .dashboard-quick .quick-card span { color: var(--ink); }
+
+  .wallet-page { gap: 24px; }
+  .wallet-page .page-header { margin-bottom: -2px; }
+  .wallet-page .metrics-grid { margin-bottom: 8px; }
+  .wallet-balances { min-height: 210px; }
+  .wallet-transactions { min-height: 250px; }
+  .wallet-transactions .table-empty td { height: 54px; }
+  .wallet-transactions .segmented-filter { margin-bottom: 6px; }
+
+  .financial-list-page .filter-panel, .resource-list-page .filter-panel {
+    grid-template-columns: 1fr; grid-template-rows: 46px 44px;
+    gap: 14px; padding: 22px 30px 10px; min-height: 138px;
+  }
+  .financial-list-page .filter-panel__controls .field, .resource-list-page .filter-panel__controls .field { min-width: 230px; }
+  .resource-empty-card { align-self: center; width: 500px; max-width: 100%; min-height: 260px; margin-top: 40px; padding: 0; transform: translateX(2px); }
+  .resource-empty-card > .section-heading { display: none; }
+  .resource-empty-card .empty-state { min-height: 258px; justify-content: flex-start; padding: 39px 24px 12px; }
+  .resource-empty-card .empty-state__icon { width: 84px; height: 63px; margin-bottom: 7px; border-radius: 12px; background: transparent; }
+  .resource-empty-card .empty-state__icon svg { width: 32px; height: 32px; }
+  .resource-empty-card .empty-state h3 { font-size: 18px; line-height: 27px; }
+  .resource-empty-card .empty-state p { margin-top: 15px; line-height: 20px; }
+  .resource-empty-card .empty-state__action { margin-top: 30px; }
+  .resource-empty-card .button { min-width: 180px; min-height: 44px; }
+
+  .server-storefront .wizard-card { display: flex; flex-direction: column; min-height: 500px; margin-top: -12px; }
+  .server-storefront .wizard-card__header { min-height: 110px; padding: 24px 48px; }
+  .server-storefront .stepper { min-height: 96px; padding: 20px 24px 15px; background: var(--surface); }
+  .server-storefront .stepper__circle { width: 36px; height: 36px; }
+  .server-storefront .stepper__label { font-size: 10px; line-height: 1.5; }
+  .server-storefront .wizard-card__content { flex: 1; min-height: 0; padding: 28px 32px; }
+  .server-storefront .storefront-footer { direction: ltr; margin-top: 12px; padding: 0; background: transparent; border: 0; }
+  .server-storefront .storefront-footer .button { direction: rtl; min-height: 46px; border-radius: 12px; min-width: 140px; }
+  .server-storefront .storefront-footer .button--primary { min-width: 180px; }
+}

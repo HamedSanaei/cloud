@@ -1,0 +1,41 @@
+{
+  "toleranceCssPx": 1,
+  "note": "Select Penpot shapes by stable id/name from penpot-reference.json, never copy rendered application geometry into the reference.",
+  "screens": {
+    "/dashboard": {
+      ".sidebar": "Navigation / Sidebar / Navigation / Sidebar",
+      ".topbar": "Navigation / Topbar / Navigation / Topbar",
+      ".metric-card": "Metric / سرور فعال",
+      ".dashboard-servers": "Dashboard / Recent Servers",
+      ".wallet-overview": "Dashboard / Wallet",
+      ".recent-tickets": "Dashboard / Recent Tickets",
+      ".dashboard-quick": "Dashboard / Quick Access"
+    },
+    "/wallet": {
+      ".sidebar": "Navigation / Sidebar / Navigation / Sidebar",
+      ".topbar": "Navigation / Topbar / Navigation / Topbar",
+      ".metric-card": "Metric / موجودی کل",
+      ".wallet-balances": "Wallet / Empty Wallets",
+      ".wallet-transactions": "Wallet / Transactions"
+    },
+    "/servers": {
+      ".sidebar": "Navigation / Sidebar / Navigation / Sidebar",
+      ".filter-panel": "Filter / List / Filter / List",
+      ".resource-empty-card": "Card / Empty State / State / Empty"
+    },
+    "/invoices": {
+      ".sidebar": "Navigation / Sidebar / Navigation / Sidebar",
+      ".filter-panel": "Filter / List / Filter / List",
+      ".resource-empty-card": "Card / Empty State / State / Empty"
+    },
+    "/charge-requests": {
+      ".sidebar": "Navigation / Sidebar / Navigation / Sidebar",
+      ".filter-panel": "Filter / List / Filter / List",
+      ".resource-empty-card": "Card / Empty State / State / Empty"
+    },
+    "/servers/create": {
+      ".sidebar": "Navigation / Sidebar / Navigation / Sidebar",
+      ".wizard-card": "Create Server / Main"
+    }
+  }
+}

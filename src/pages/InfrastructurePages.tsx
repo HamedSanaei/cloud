@@ -32,6 +32,8 @@ import {
   transferDomain,
 } from '../lib/endpoints'
 import { formatCount, formatToman } from '../lib/format'
+import { ServerManagement } from '../components/ui/ServerManagement'
+import { getIntegrationStatus } from '../lib/platformClient'
 
 type ResourceKind = 'server' | 'ip'
 
@@ -43,6 +45,8 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
   const server = kind === 'server'
   const [buying, setBuying] = useState(false)
   const [powerBusy, setPowerBusy] = useState(false)
+  const [managedId, setManagedId] = useState<string | null>(null)
+  const integration = useApiQuery(getIntegrationStatus)
 
   const servers = useApiQuery(listServers, [kind])
   const ips = useApiQuery(listIps, [kind])
@@ -111,7 +115,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
   }
 
   return (
-    <div className="page-stack">
+    <div className="page-stack resource-list-page">
       <PageHeader
         title={server ? 'مدیریت سرورها' : 'مدیریت آی‌پی‌ها'}
         subtitle={server ? 'سرورهای خود را مدیریت کنید و سرورهای جدید ایجاد کنید.' : 'لیست تمام آی‌پی‌های شما و سرورهای متصل به آن‌ها'}
@@ -127,10 +131,10 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
         <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="وضعیت"><option value="all">همه وضعیت‌ها</option><option value="inactive">غیرفعال</option><option value="active">فعال</option>{!server ? <option value="reserved">رزرو شده</option> : null}</Select>
         <Select value={secondary} onChange={(event) => setSecondary(event.target.value)} aria-label={server ? 'دیتاسنتر' : 'نوع آی‌پی'}>
           <option value="all">{server ? 'همه دیتاسنترها' : 'همه انواع'}</option>
-          {server ? <><option value="تهران">تهران</option><option value="آلمان">آلمان</option></> : <><option value="IPv4">IPv4</option><option value="IPv6">IPv6</option></>}
+          {server ? [...new Set((servers.data ?? []).map(item => item.datacenter))].map(name => <option key={name} value={name}>{name}</option>) : <><option value="IPv4">IPv4</option><option value="IPv6">IPv6</option></>}
         </Select>
       </FilterPanel>
-      <Card>
+      <Card className={!active.loading && !active.error && (server ? filteredServers : filteredIps).length === 0 ? 'resource-empty-card' : undefined}>
         <SectionHeading title={server ? 'لیست سرورها' : 'لیست آی‌پی‌ها'} />
         {active.loading && !active.data ? (
           <LoadingState label="در حال دریافت..." />
@@ -147,6 +151,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
                   <td>{[item.cpu, item.ram, item.disk].filter(Boolean).join(' · ') || '—'}</td>
                   <td>
                     <div className="server-power-controls">
+                      {integration.data?.enabled && <Button size="sm" variant="secondary" onClick={() => setManagedId(item.id)}>مدیریت و نتیجه عملیات</Button>}
                       {item.power.canPowerOn ? <Button size="sm" variant="success" icon={<Power size={16} />} disabled={powerBusy || servers.loading} onClick={() => handlePower(item.id, 'power-on')} aria-label={`روشن کردن ${item.name}`}>روشن کردن</Button> : null}
                       {item.power.canPowerOff ? <Button size="sm" variant="danger" icon={<Power size={16} />} disabled={powerBusy || servers.loading} onClick={() => handlePower(item.id, 'power-off')} aria-label={`خاموش کردن ${item.name}`}>خاموش کردن</Button> : null}
                       {item.power.pendingAction ? <span>در انتظار نتیجه عملیات برق</span> : null}
@@ -187,6 +192,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
           />
         )}
       </Card>
+      {managedId && <ServerManagement key={managedId} serverId={managedId} onClose={() => { setManagedId(null); refreshServers() }} />}
     </div>
   )
 }

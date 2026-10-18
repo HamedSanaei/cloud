@@ -35,7 +35,8 @@ export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
     }
     const timer = window.setInterval(refresh, 60000)
     window.addEventListener('focus', refresh)
-    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh) }
+    window.addEventListener('integration-changed', refresh)
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh); window.removeEventListener('integration-changed', refresh) }
   }, [refreshNotifications, refreshWallet])
 
   useEffect(() => {

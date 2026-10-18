@@ -6,7 +6,6 @@ import {
   LifeBuoy,
   Network,
   Plus,
-  Settings,
   WalletCards,
   Zap,
 } from 'lucide-react'
@@ -27,7 +26,6 @@ const quickLinks = [
   { label: 'کیف پول', icon: WalletCards, path: '/wallet', accent: 'green' },
   { label: 'فاکتورها', icon: FileText, path: '/invoices', accent: 'red' },
   { label: 'تیکت پشتیبانی', icon: LifeBuoy, path: '/tickets', accent: 'cyan' },
-  { label: 'تنظیمات', icon: Settings, path: '/settings', accent: 'amber' },
 ]
 
 function statusTone(status: string): 'success' | 'warning' | 'neutral' {
@@ -52,7 +50,7 @@ export function DashboardPage() {
   ]
 
   return (
-    <div className="page-stack">
+    <div className="page-stack dashboard-page">
       <PageHeader
         title="خوش آمدید 👋"
         subtitle="از اینجا می‌توانید سرویس‌های خود را مدیریت کنید."
@@ -67,7 +65,7 @@ export function DashboardPage() {
       <div className="metrics-grid metrics-grid--six">
         {metrics.map((metric) => (
           <Link to={metric.path} key={metric.label} className="metric-link">
-            <MetricCard {...metric} />
+            <MetricCard {...metric} value={summary.loading ? '…' : summary.error ? '—' : metric.value} />
           </Link>
         ))}
       </div>
@@ -108,7 +106,7 @@ export function DashboardPage() {
             <QueryError message={summary.error} onRetry={summary.refetch} />
           ) : (
             <>
-              <div className="wallet-balance"><strong>{formatToman(data?.walletBalance ?? 0)}</strong><span>مجموع موجودی کیف پول‌های شما</span></div>
+              <div className="wallet-balance"><strong>{formatToman(data?.walletBalance ?? 0)}</strong></div>
               <Link to="/wallet" className="card-link">برای شارژ کلیک کنید</Link>
             </>
           )}
@@ -135,7 +133,7 @@ export function DashboardPage() {
         </Card>
       </div>
 
-      <Card>
+      <Card className="dashboard-quick">
         <SectionHeading title="دسترسی سریع" icon={<Zap size={20} />} />
         <div className="quick-grid">
           {quickLinks.map(({ label, icon: Icon, path, accent }) => (

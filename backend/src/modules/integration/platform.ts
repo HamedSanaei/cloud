@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { eq, ne, notInArray } from 'drizzle-orm'
+import { and, eq, ne, notInArray } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppContext } from '../../app.js'
 import { getConfig } from '../../config.js'
@@ -9,10 +9,12 @@ import type { DbClient } from '../../db/index.js'
 import { requireUser } from '../../http/auth.js'
 import { parse } from '../../http/validate.js'
 import { AppError, BadRequestError, ConflictError } from '../../lib/errors.js'
+import { storefrontProjection, type ConsoleOffer } from './storefront.js'
 
 export function platformEnabled(): boolean { return Boolean(getConfig().PLATFORM_API_URL) }
 
 const PLATFORM_CONTRACT_VERSION = '1'
+export const REQUIRED_PLATFORM_FEATURES = ['website-link-revoke:v1', 'website-charge-requests:v1'] as const
 
 /** Refuse a cutover that would hide existing balances/contracts or abandon work. */
 export async function assertUnifiedCutoverReady(db: DbClient): Promise<void> {
@@ -72,12 +74,26 @@ export async function assertPlatformCompatibility(): Promise<void> {
   if (!platformEnabled()) return
   const config = getConfig()
   const [{ data }, readiness] = await Promise.all([
-    platformRequest<{ data: { version: string; environment: string; walletCurrency: string; headerIdentityEnabled: boolean; usdUsdtParity: string; usdtSettlementEnabled: boolean; displayCurrency: string; confirmationSigningConfigured: boolean } }>('', '/link/contract', 'GET', undefined, undefined, 3_000),
+    platformRequest<{ data: { version: string; environment: string; walletCurrency: string; headerIdentityEnabled: boolean; usdUsdtParity: string; usdtSettlementEnabled: boolean; displayCurrency: string; confirmationSigningConfigured: boolean; features?: string[] } }>('', '/link/contract', 'GET', undefined, undefined, 3_000),
     fetch(new URL('/health/ready', config.PLATFORM_API_URL), { redirect: 'error', signal: AbortSignal.timeout(3_000) }),
   ])
   if (!readiness.ok) throw new AppError(503, 'platform_unavailable', 'سرویس مرجع برای پردازش درخواست آماده نیست')
   if (data.version !== PLATFORM_CONTRACT_VERSION || data.environment !== (config.APP_ENV ?? config.NODE_ENV) || data.walletCurrency !== 'IRT' || data.displayCurrency !== 'IRT' || data.headerIdentityEnabled || data.usdUsdtParity !== '1' || !data.usdtSettlementEnabled || !data.confirmationSigningConfigured) {
     throw new AppError(503, 'platform_contract', 'محیط، واحد تومانی یا سیاست USD/USDT پلتفرم برای اتصال امن آماده نیست')
+  }
+  if (!Array.isArray(data.features) || REQUIRED_PLATFORM_FEATURES.some(feature => !data.features?.includes(feature))) {
+    throw new AppError(503, 'platform_features_missing', 'نسخه سرویس مرجع از قطع اتصال و گزارش شارژ پشتیبانی نمی‌کند؛ ابتدا نسخه سازگار پلتفرم را منتشر کنید')
+  }
+  // Probe endpoint presence and auth without a bearer: never revoke a real
+  // credential or read a customer's records as a deployment/readiness test.
+  for (const [path, method] of [['/link/revoke', 'POST'], ['/charge-requests', 'GET']] as const) {
+    try {
+      await platformRequest('', path, method, method === 'POST' ? {} : undefined, method === 'POST' ? 'compatibility-probe-no-bearer' : undefined, 3_000)
+    } catch (error) {
+      if (error instanceof AppError && error.status === 401 && error.code === 'unauthorized') continue
+      throw new AppError(503, 'platform_feature_probe_failed', 'Endpointهای لازم سرویس مرجع یا حفاظت احراز هویت آن‌ها تأیید نشد')
+    }
+    throw new AppError(503, 'platform_feature_probe_failed', 'Endpoint سرویس مرجع درخواست بدون اعتبارنامه را پذیرفت')
   }
 }
 
@@ -91,7 +107,7 @@ function assertSafeFinancialInput(path: string, body: unknown): void {
 async function linkedToken(ctx: AppContext, request: FastifyRequest): Promise<string> {
   const user = requireUser(request)
   const link = await ctx.db.query.platformLinks.findFirst({ where: t => eq(t.userId, user.id) })
-  if (!link) throw new AppError(409, 'platform_link_required', 'ابتدا حساب تلگرام را در بخش «پلتفرم مشترک» متصل کنید')
+  if (!link?.tokenEncrypted) throw new AppError(409, 'platform_link_required', 'ابتدا حساب تلگرام را از تنظیمات ← اتصال تلگرام متصل کنید')
   return decryptPlatformToken(link.tokenEncrypted, user.id)
 }
 
@@ -102,7 +118,7 @@ export function serverProjection(s: PlatformServer) {
 
 // Reject currency reinterpretation rather than display USD cents as toman.
 export function requireToman(balance: { currency: string; balance_minor: number }): number {
-  if (balance.currency !== 'IRT') throw new ConflictError('کیف پول مشترک هنوز به تومان منتقل نشده است؛ موجودی را در پلتفرم مشترک با واحد اصلی ببینید')
+  if (balance.currency !== 'IRT') throw new ConflictError('واحد کیف پول مشترک با پنل تومانی سازگار نیست؛ واحد اصلی حساب را با پشتیبانی بررسی کنید')
   if (!Number.isSafeInteger(balance.balance_minor)) throw new ConflictError('مبلغ خارج از محدوده نمایش است')
   return balance.balance_minor
 }
@@ -112,7 +128,7 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
   app.get(prefix + '/integration/status', async request => {
     const user = requireUser(request)
     const link = await ctx.db.query.platformLinks.findFirst({ where: t => eq(t.userId, user.id) })
-    return { data: { enabled: platformEnabled(), linked: Boolean(link), platformUserId: link?.platformUserId ?? null } }
+    return { data: { enabled: platformEnabled(), linked: Boolean(link?.tokenEncrypted), platformUserId: link?.platformUserId ?? null } }
   })
   app.post(prefix + '/integration/connect', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => {
     const user = requireUser(request)
@@ -126,6 +142,24 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
     if (!saved.length) throw new ConflictError('حساب دیگری هم‌زمان متصل شده است؛ تغییر هویت متصل مجاز نیست')
     reply.header('Cache-Control', 'no-store')
     return { data: { linked: true, platformUserId: account.data.id } }
+  })
+  app.post(prefix + '/integration/disconnect', async (request, reply) => {
+    const user = requireUser(request)
+    if (!platformEnabled()) throw new BadRequestError('اتصال پلتفرم فعال نیست')
+    const link = await ctx.db.query.platformLinks.findFirst({ where: t => eq(t.userId, user.id) })
+    if (link?.tokenEncrypted) {
+      try {
+        const result = await platformRequest<{ data: { revoked: boolean } }>(decryptPlatformToken(link.tokenEncrypted, user.id), '/link/revoke', 'POST', {}, randomBytes(16).toString('hex'))
+        if (result.data?.revoked !== true) throw new AppError(502, 'platform_revoke_unconfirmed', 'لغو اعتبارنامه توسط سرویس مرجع تأیید نشد')
+      } catch (error) {
+        // An already-revoked token is safe to erase. Transport failures are not success.
+        if (!(error instanceof AppError) || error.status !== 401) throw error
+      }
+      // Preserve identity binding: disconnect must not enable moving someone else's funds.
+      await ctx.db.update(platformLinks).set({ tokenEncrypted: '' }).where(and(eq(platformLinks.userId, user.id), eq(platformLinks.tokenEncrypted, link.tokenEncrypted)))
+    }
+    reply.header('Cache-Control', 'no-store')
+    return { data: { linked: false } }
   })
   }
 
@@ -142,6 +176,10 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
       const supplied = request.headers['idempotency-key']
       if (request.method !== 'GET' && (typeof supplied !== 'string' || supplied.length < 8 || supplied.length > 128)) throw new BadRequestError('کلید یکتای درخواست الزامی است')
       if (request.method !== 'GET') assertSafeFinancialInput(path, request.body)
+      if (request.method === 'POST' && path === '/recharge') {
+        const wallet = await platformRequest<{ data: { balance: { currency: string; balance_minor: number } } }>(token, '/wallet')
+        requireToman(wallet.data.balance)
+      }
       const data = await platformRequest(token, path, request.method, request.body, typeof supplied === 'string' ? supplied : undefined)
       reply.header('Cache-Control', 'no-store')
       return reply.send(data)
@@ -149,16 +187,30 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
     const economic = /^\/api\/(wallets|servers|catalog|quotes|orders|subscriptions|invoices|charge-requests|dashboard|notifications|admin)(\/|$)/.test(pathname)
     if (!economic) return
     const token = await linkedToken(ctx, request)
-    if (request.method !== 'GET') throw new ConflictError('این عملیات را در بخش «پلتفرم مشترک» انجام دهید؛ دفترکل قدیمی غیرفعال است')
+    if (request.method !== 'GET') throw new ConflictError('دفترکل قدیمی غیرفعال است؛ از جریان خرید، شارژ یا مدیریت سرور در همین پنل استفاده کنید')
+    reply.header('Cache-Control', 'no-store')
+    if (pathname === '/api/catalog/storefront') {
+      const { data } = await platformRequest<{ data: ConsoleOffer[] }>(token, '/offers')
+      return reply.send({ data: storefrontProjection(data) })
+    }
+    if (pathname === '/api/charge-requests') {
+      return reply.send(await platformRequest(token, '/charge-requests'))
+    }
+    if (pathname === '/api/invoices') {
+      throw new AppError(501, 'invoices_unavailable', 'سرویس مرجع فعلاً فاکتور رسمی صادر نمی‌کند. سوابق واقعی پرداخت در «درخواست‌های شارژ» و گردش حساب در «کیف پول» قابل مشاهده است.')
+    }
     if (pathname === '/api/servers') {
       const data = await platformRequest<{ data: PlatformServer[] }>(token, '/servers')
       return reply.send({ data: data.data.map(serverProjection) })
     }
     if (['/api/wallets', '/api/wallets/summary', '/api/wallets/transactions'].includes(pathname)) {
-      const { data } = await platformRequest<{ data: { balance: { balance_minor: number; currency: string }; history: { items: Array<{ entry_id: string; amount_minor: number; currency: string; description: string; entry_type: string; created_at: string }> } } }>(token, '/wallet')
+      const { data } = await platformRequest<{ data: { balance: { balance_minor: number; currency: string }; history: { items: Array<{ entry_id: string; amount_minor: number; currency: string; formatted: string; description: string; entry_type: string; created_at: string }> } } }>(token, '/wallet')
       const amount = requireToman(data.balance)
       if (pathname.endsWith('/summary')) return reply.send({ data: { totalBalance: amount, wallets: 1, defaultWallet: 'مشترک تلگرام و سایت', connectedProducts: 0 } })
-      if (pathname.endsWith('/transactions')) return reply.send({ data: data.history.items.map(item => ({ id: item.entry_id, amount: requireToman({ currency: item.currency, balance_minor: item.amount_minor }), description: item.description, type: item.entry_type, date: item.created_at, status: 'success' })) })
+      if (pathname.endsWith('/transactions')) return reply.send({ data: data.history.items.map(item => {
+        if (!Number.isSafeInteger(item.amount_minor)) throw new ConflictError('مبلغ تراکنش خارج از محدوده نمایش است')
+        return { id: item.entry_id, amount: item.amount_minor, formattedAmount: item.formatted, description: item.description, wallet: 'مشترک تلگرام و سایت', type: item.entry_type, date: item.created_at, status: 'success' }
+      }) })
       return reply.send({ data: [{ id: 'platform', name: 'مشترک تلگرام و سایت', balance: amount, isDefault: true }] })
     }
     if (pathname === '/api/notifications') {
@@ -172,7 +224,7 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
       ])
       return reply.send({ data: { activeServers: fleet.filter(s => s.state === 'running').length, ips: fleet.filter(s => s.ip).length, domains: 0, trafficPackages: 0, openTickets: 0, unpaidInvoices: 0, walletBalance: requireToman(wallet.balance) } })
     }
-    throw new ConflictError('این اطلاعات از بخش «پلتفرم مشترک» در دسترس است')
+    throw new ConflictError('این گزارش در قرارداد فعلی سرویس مرجع پشتیبانی نمی‌شود')
   })
   // Fastify resolves wildcard routes before preHandler; forwarding remains allowlisted above.
   app.all('/api/platform/*', async () => { throw new BadRequestError('اتصال پلتفرم فعال نیست') })

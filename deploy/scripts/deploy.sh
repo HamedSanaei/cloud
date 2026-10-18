@@ -562,7 +562,7 @@ compose "$CANDIDATE" run --rm --no-deps cloud-api node --input-type=module -e '
     redirect: "error", signal: AbortSignal.timeout(3000),
   });
   if (denied.status !== 401) throw new Error("Canonical wallet did not enforce bearer authentication");
-  console.log("Canonical Docker DNS, readiness, API contract, IRT/USDT policy and authorization verified");
+  console.log("Canonical Docker DNS, readiness, API contract, versioned website capabilities, endpoint authorization and IRT/USDT policy verified");
   assertAuthenticationReady(c);
 '
 compose "$CANDIDATE" up -d --wait cloud-postgres cloud-redis

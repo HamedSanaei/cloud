@@ -9,7 +9,7 @@ import {
   Server,
   WalletCards,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button, LinkButton } from '../components/ui/Button'
 import { Card, SectionHeading } from '../components/ui/Card'
@@ -18,7 +18,7 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { Stepper } from '../components/ui/Stepper'
 import { useToast } from '../components/ui/Toast'
 import { isApiConfigured } from '../lib/apiClient'
-import { checkDomainAvailability, createServer, getStorefrontCatalog, listWallets, registerDomain } from '../lib/endpoints'
+import { checkDomainAvailability, createServer, getOfferImages, getStorefrontCatalog, listWallets, registerDomain } from '../lib/endpoints'
 import { formatFaNumber } from '../lib/format'
 import { useApiQuery } from '../hooks/useApiQuery'
 import type { BillingPeriod } from '../lib/types'
@@ -39,6 +39,8 @@ export function CreateServerPage() {
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod | ''>('')
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
+  const purchaseKey = useRef(crypto.randomUUID())
+  const submitLock = useRef(false)
   const navigate = useNavigate()
   const { showToast } = useToast()
   const catalog = useApiQuery(getStorefrontCatalog)
@@ -50,7 +52,11 @@ export function CreateServerPage() {
   const periods = periodOrder.filter((period) => provider?.billingPeriods.includes(period) && locationOffers.some((item) => item.prices.some((price) => price.period === period)))
   const visibleOffers = locationOffers.filter((item) => item.prices.some((price) => price.period === billingPeriod))
   const offer = visibleOffers.find((item) => item.id === offerId)
-  const selectedOs = offer?.operatingSystems.find((item) => item.id === os)
+  const shared = catalog.data?.source === 'platform'
+  const loadImages = useCallback(() => shared && offerId ? getOfferImages(offerId) : Promise.resolve([]), [shared, offerId])
+  const images = useApiQuery(loadImages, [shared, offerId])
+  const operatingSystems = shared ? images.loading || images.error ? [] : images.data ?? [] : offer?.operatingSystems ?? []
+  const selectedOs = operatingSystems.find((item) => item.id === os)
   const price = offer?.prices.find((item) => item.period === billingPeriod)
   const wallet = wallets.data?.find((item) => item.id === walletId)
   const catalogReady = isApiConfigured() && !catalog.loading && !catalog.error && !!catalog.data
@@ -58,7 +64,7 @@ export function CreateServerPage() {
   const periodValid = billingPeriod !== '' && periods.includes(billingPeriod)
   const offerValid = !!offer && !!price
   const walletValid = !wallets.loading && !wallets.error && !!wallet
-  const nameValid = /^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]$/.test(name.trim())
+  const nameValid = shared || /^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]$/.test(name.trim())
   const allValid = catalogReady && locationValid && periodValid && offerValid && !!selectedOs && walletValid && nameValid
   const canContinue = catalogReady && [
     locationValid,
@@ -68,24 +74,26 @@ export function CreateServerPage() {
     locationValid && periodValid && offerValid && !!selectedOs && walletValid,
     allValid,
   ][step]
-  const resetOffer = () => { setOfferId(''); setOs(''); setWalletId(''); setSubmitError('') }
+  const resetOffer = () => { setOfferId(''); setOs(''); setWalletId(''); setSubmitError(''); purchaseKey.current = crypto.randomUUID() }
   const reloadCatalog = () => {
     setProviderId(''); setLocation(''); setBillingPeriod(''); resetOffer(); setStep(0); catalog.refetch()
   }
   const next = async () => {
-    if (submitting || !canContinue) return
+    if (submitLock.current || submitting || !canContinue) return
     if (step < serverSteps.length - 1) { setStep((value) => value + 1); return }
     if (!allValid || !billingPeriod || !offer || !selectedOs || !wallet) return
     setSubmitting(true)
+    submitLock.current = true
     setSubmitError('')
     try {
-      await createServer({ name: name.trim(), offerId: offer.id, os: selectedOs.id, walletId: wallet.id, billingPeriod })
+      await createServer({ name: name.trim(), offerId: offer.id, os: selectedOs.id, walletId: wallet.id, billingPeriod, pricing: offer.canonicalPricing, idempotencyKey: purchaseKey.current })
       showToast('سرور با موفقیت به صف ساخت اضافه شد.')
       navigate('/servers')
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : 'ایجاد سرور ناموفق بود.')
     } finally {
       setSubmitting(false)
+      submitLock.current = false
     }
   }
   const locationLabel = selectedLocation ? [selectedLocation.city, selectedLocation.country, selectedLocation.code].filter(Boolean).join(' · ') : 'انتخاب نشده'
@@ -149,24 +157,26 @@ export function CreateServerPage() {
               {!visibleOffers.length ? <div className="storefront-state"><p>محصول قابل سفارشی با این انتخاب‌ها موجود نیست.</p><Button variant="secondary" onClick={reloadCatalog}>دریافت دوباره کاتالوگ</Button></div> : null}
             </div> : null}
             {step === 3 ? <div className="storefront-stack">
-              <div className="choice-grid storefront-grid">{offer?.operatingSystems.map((item) => (
-                <button type="button" key={item.id} aria-pressed={os === item.id} className={`choice-card os-card ${os === item.id ? 'choice-card--selected' : ''}`} onClick={() => { setOs(item.id); setSubmitError('') }}>
+              {shared && images.loading ? <p role="status">در حال دریافت سیستم‌عامل‌های قابل نصب…</p> : images.error ? <div role="alert"><p>{images.error}</p><Button variant="secondary" onClick={images.refetch}>تلاش دوباره</Button></div> : null}
+              <div className="choice-grid storefront-grid">{operatingSystems.map((item) => (
+                <button type="button" key={item.id} aria-pressed={os === item.id} className={`choice-card os-card ${os === item.id ? 'choice-card--selected' : ''}`} onClick={() => { if (os !== item.id) purchaseKey.current = crypto.randomUUID(); setOs(item.id); setSubmitError('') }}>
                   <HardDrive size={26} /><strong dir="auto">{item.label || item.id}</strong>{item.family ? <span dir="auto">{item.family}</span> : null}
                 </button>
               ))}</div>
-              {!offer?.operatingSystems.length ? <div className="storefront-state"><p>سیستم عامل قابل نصبی برای این محصول موجود نیست؛ محصول دیگری انتخاب کنید.</p><Button variant="secondary" onClick={reloadCatalog}>دریافت دوباره کاتالوگ</Button></div> : null}
+              {!images.loading && !images.error && !operatingSystems.length ? <div className="storefront-state"><p>سیستم عامل قابل نصبی برای این محصول موجود نیست؛ محصول دیگری انتخاب کنید.</p><Button variant="secondary" onClick={reloadCatalog}>دریافت دوباره کاتالوگ</Button></div> : null}
             </div> : null}
             {step === 4 ? <div className="storefront-stack">
               {wallets.loading ? <div className="storefront-state" role="status">در حال دریافت کیف پول‌ها…</div> : wallets.error ? <div className="storefront-state" role="alert"><p>{wallets.error}</p><Button variant="secondary" onClick={wallets.refetch}>تلاش دوباره</Button></div> : !wallets.data?.length ? <div className="storefront-state"><p>برای ثبت سفارش ابتدا یک کیف پول ایجاد و شارژ کنید.</p><LinkButton to="/wallet" variant="secondary">مدیریت کیف پول‌ها</LinkButton><Button variant="secondary" onClick={wallets.refetch}>دریافت دوباره کیف پول‌ها</Button></div> :
-                <Select label="کیف پول پرداخت" value={walletId} onChange={(event) => { setWalletId(event.target.value); setSubmitError('') }}>
+                <Select label="کیف پول پرداخت" value={walletId} onChange={(event) => { if (walletId !== event.target.value) purchaseKey.current = crypto.randomUUID(); setWalletId(event.target.value); setSubmitError('') }}>
                   <option value="">کیف پول را انتخاب کنید</option>
                   {wallets.data.map((item) => <option key={item.id} value={item.id}>{item.name} — {formatFaNumber(item.balance)} تومان</option>)}
                 </Select>}
               <div className="info-box"><WalletCards size={20} /><span>{price ? `مبلغ ${priceLabel(price.totalRial)} برای دوره ${billingPeriod ? periodLabels[billingPeriod] : ''} از کیف پول انتخابی پرداخت می‌شود. موجودی هنگام ثبت سفارش بررسی خواهد شد.` : 'ابتدا محصول و دوره پرداخت معتبر انتخاب کنید.'}</span></div>
             </div> : null}
             {step === 5 ? <div className="review-grid">
-              <Input label="نام سرور" value={name} disabled={submitting} maxLength={63} dir="ltr" placeholder="my-server" onChange={(event) => { setName(event.target.value); setSubmitError('') }}
+              {shared ? <p className="info-box">نام اولیه سرور توسط سرویس مرجع تعیین می‌شود. مبلغ تومانی برآورد نرخ جاری است؛ تسویه با تعرفه و نرخ معتبر هنگام ثبت سفارش انجام می‌شود.</p> : <Input label="نام سرور" value={name} disabled={submitting} maxLength={63} dir="ltr" placeholder="my-server" onChange={(event) => { setName(event.target.value); setSubmitError('') }}
                 hint="۳ تا ۶۳ نویسه انگلیسی، عدد یا خط تیره؛ ابتدا و انتها حرف یا عدد باشد." error={name && !nameValid ? 'نام سرور معتبر نیست.' : undefined} />
+              }
               <div className="review-list">
                 <ReviewRow label="دیتاسنتر" value={provider?.name ?? 'انتخاب نشده'} />
                 <ReviewRow label="موقعیت" value={locationLabel} />
@@ -182,11 +192,11 @@ export function CreateServerPage() {
             </div> : null}
           </>}
         </div>
-        <div className="wizard-card__footer">
-          <Button variant="secondary" disabled={step === 0 || submitting} onClick={() => setStep((value) => Math.max(0, value - 1))}>مرحله قبل</Button>
+      </Card>
+        <div className="wizard-card__footer storefront-footer">
+          <Button variant="secondary" disabled={submitting} onClick={() => { if (step === 0) navigate('/servers'); else setStep((value) => Math.max(0, value - 1)) }}>{step === 0 ? 'انصراف' : 'مرحله قبل'}</Button>
           <Button icon={step === serverSteps.length - 1 ? <CheckCircle2 size={18} /> : undefined} disabled={submitting || !canContinue} onClick={next}>{submitting ? 'در حال ایجاد...' : step === serverSteps.length - 1 ? 'تایید و ایجاد سرور' : 'مرحله بعد'}</Button>
         </div>
-      </Card>
     </div>
   )
 }

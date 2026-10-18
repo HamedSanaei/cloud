@@ -203,6 +203,24 @@ textarea:focus-visible {
   padding: 13px 12px;
 }
 
+.sidebar-settings > summary { cursor: pointer; list-style: none; }
+.sidebar-settings > summary::-webkit-details-marker { display: none; }
+.sidebar-settings > a { margin-inline-start: 18px; font-size: 12px; }
+.integration-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  margin-block-end: 20px;
+  background: var(--brand-50);
+  border: 1px solid var(--brand-200);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+}
+.server-confirmation { border: 1px solid var(--danger); border-radius: var(--radius-md); padding: 16px; }
+
 .nav-group + .nav-group {
   margin-top: 12px;
 }

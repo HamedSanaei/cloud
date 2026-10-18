@@ -98,6 +98,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Verify independent pages and guided checkout
+        run: npm test
+
       - name: Build (Vite)
         run: npm run build
 

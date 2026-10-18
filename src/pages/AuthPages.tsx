@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { ArrowLeft, Check, Eye, EyeOff, KeyRound, LockKeyhole, Mail, Phone, RefreshCw, Server, ShieldCheck } from 'lucide-react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { BRAND_NAME, BrandMark } from '../components/Brand'
 import {
   getGoogleLoginUrl,
   resendChallenge,
@@ -19,10 +20,6 @@ import {
 
 type AuthIntent = 'login' | 'register' | 'forgot'
 type LoginMethod = 'email' | 'phone'
-
-function BrandMark() {
-  return <span className="public-brand-mark" aria-hidden="true"><i /><i /><i /></span>
-}
 
 function AuthBrandPanel() {
   return (
@@ -195,7 +192,7 @@ export function AuthPage({ intent }: { intent: AuthIntent }) {
         <AuthBrandPanel />
         <section className="auth-card">
           <header className="auth-card-header">
-            <Link className="public-logo" to="/"><BrandMark /><strong>سرورهاب</strong></Link>
+            <Link className="public-logo" to="/"><BrandMark /><strong>{BRAND_NAME}</strong></Link>
             <span><ShieldCheck size={17} /> ورود امن</span>
           </header>
 
