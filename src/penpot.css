@@ -72,8 +72,7 @@
 
   .server-storefront .wizard-card { display: flex; flex-direction: column; min-height: 500px; margin-top: -12px; }
   .server-storefront .wizard-card__header { min-height: 110px; padding: 24px 48px; }
-  .server-storefront .stepper { min-height: 96px; padding: 20px 24px 15px; background: var(--surface); }
-  .server-storefront .stepper__circle { width: 36px; height: 36px; }
+  .server-storefront .stepper { --stepper-circle-size: 36px; min-height: 96px; padding: 20px 24px 15px; background: var(--surface); }
   .server-storefront .stepper__label { font-size: 10px; line-height: 1.5; }
   .server-storefront .wizard-card__content { flex: 1; min-height: 0; padding: 28px 32px; }
   .server-storefront .storefront-footer { direction: ltr; margin-top: 12px; padding: 0; background: transparent; border: 0; }

@@ -493,6 +493,13 @@ textarea:focus-visible {
   box-shadow: var(--shadow-lg);
 }
 
+.popover--profile {
+  /* The avatar is at the left edge of the RTL topbar: expand inward. */
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+  width: min(240px, calc(100vw - 32px));
+}
+
 .popover--notifications {
   inset-inline-start: auto;
   inset-inline-end: 0;
@@ -541,6 +548,15 @@ textarea:focus-visible {
 .popover__user strong,
 .popover__user small {
   display: block;
+}
+
+.popover__user span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.popover__user > svg {
+  flex-shrink: 0;
 }
 
 .popover__user strong {
@@ -1470,6 +1486,8 @@ textarea:focus-visible {
 }
 
 .stepper {
+  --stepper-circle-size: 34px;
+  --stepper-line-gap: 4px;
   display: flex;
   padding: 22px 24px 20px;
   border-block: 1px solid var(--border);
@@ -1481,6 +1499,7 @@ textarea:focus-visible {
   position: relative;
   display: flex;
   flex: 1;
+  min-width: 0;
   flex-direction: column;
   align-items: center;
   gap: 8px;
@@ -1491,8 +1510,9 @@ textarea:focus-visible {
   position: relative;
   z-index: 2;
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: var(--stepper-circle-size);
+  height: var(--stepper-circle-size);
+  flex-shrink: 0;
   border: 1px solid var(--border-strong);
   border-radius: 50%;
   background: var(--surface);
@@ -1505,15 +1525,13 @@ textarea:focus-visible {
 .stepper__line {
   position: absolute;
   z-index: 1;
-  top: 16px;
-  right: 50%;
-  width: 100%;
+  /* Each item owns its incoming connector; logical end points to the previous
+     item in both RTL and LTR. Leave a small gap at each circle's edge. */
+  top: calc(var(--stepper-circle-size) / 2 - 1px);
+  inset-inline-end: calc(50% + var(--stepper-circle-size) / 2 + var(--stepper-line-gap));
+  width: calc(100% - var(--stepper-circle-size) - 2 * var(--stepper-line-gap));
   height: 2px;
   background: var(--border);
-}
-
-.stepper__item:first-child .stepper__line {
-  display: none;
 }
 
 .stepper__label {

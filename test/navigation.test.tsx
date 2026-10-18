@@ -37,6 +37,22 @@ async function reviewOrder(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('Penpot routes with canonical integration ENABLED', () => {
+  it('opens the account dropdown and closes it after selecting a destination', async () => {
+    const user = userEvent.setup()
+    open('/dashboard')
+    const avatar = await screen.findByRole('button', { name: 'منوی کاربری' })
+    expect(avatar.getAttribute('aria-expanded')).toBe('false')
+    await user.click(avatar)
+    expect(avatar.getAttribute('aria-expanded')).toBe('true')
+    const menu = document.getElementById(avatar.getAttribute('aria-controls')!)!
+    expect(menu.classList.contains('popover--profile')).toBe(true)
+    expect(within(menu).getByRole('link', { name: 'نشست‌ها' }).getAttribute('href')).toBe('/sessions')
+    await user.click(within(menu).getByRole('link', { name: 'نشست‌ها' }))
+    await screen.findByRole('heading', { level: 1, name: /نشست/ })
+    expect(document.getElementById('profile-menu')).toBeNull()
+    expect(avatar.getAttribute('aria-expanded')).toBe('false')
+  })
+
   it('isolates landing typography and buttons from reusable console components', () => {
     const css = readFileSync('src/public.css', 'utf8')
     expect(css).not.toMatch(/(^|[},])\s*\.section-heading\b/)
