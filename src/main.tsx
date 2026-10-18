@@ -12,6 +12,8 @@ import { AuthProvider } from './auth/AuthContext'
 import './styles.css'
 import './penpot.css'
 import './public.css'
+import './auth-layout.css'
+import './panel-layout.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

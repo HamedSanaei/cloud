@@ -37,6 +37,34 @@ async function reviewOrder(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('Penpot routes with canonical integration ENABLED', () => {
+  it('preserves both login methods and Google entry while changing the auth layout', async () => {
+    const user = userEvent.setup()
+    open('/login')
+    expect(await screen.findByRole('button', { name: /ورود با حساب گوگل/ })).toBeTruthy()
+    expect(screen.getByLabelText('آدرس ایمیل')).toBeTruthy()
+    expect(document.querySelector('input[type="password"]')).toBeTruthy()
+    await user.click(screen.getByRole('tab', { name: /شماره همراه/ }))
+    expect(screen.getByLabelText('شماره همراه')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'ارسال کد پیامکی' })).toBeTruthy()
+    await user.click(screen.getByRole('tab', { name: /ایمیل و رمز عبور/ }))
+    expect(screen.getByRole('button', { name: /ورود با حساب گوگل/ })).toBeTruthy()
+    expect(requests.filter(request => request.method === 'POST')).toHaveLength(0)
+  })
+
+  it('keeps errors and login controls available when auth content grows', async () => {
+    const original = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => url.endsWith('/auth/login/start')
+      ? Promise.resolve(new Response(JSON.stringify({ message: 'خطای آزمایشی ورود' }), { status: 400, headers: { 'content-type': 'application/json' } })) : original(url, init)))
+    const user = userEvent.setup()
+    open('/login')
+    await user.type(await screen.findByLabelText('آدرس ایمیل'), 'preview@example.test')
+    await user.type(document.querySelector('input[type="password"]')!, 'fixture-password-only')
+    await user.click(screen.getByRole('button', { name: 'ورود به حساب', exact: true }))
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'ورود به حساب', exact: true })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /ورود با حساب گوگل/ })).toBeTruthy()
+  })
+
   it('opens the account dropdown and closes it after selecting a destination', async () => {
     const user = userEvent.setup()
     open('/dashboard')
@@ -90,10 +118,38 @@ describe('Penpot routes with canonical integration ENABLED', () => {
   it.each([
     ['/dashboard', 'خوش آمدید 👋'], ['/wallet', 'کیف پول 💰'], ['/invoices', 'فاکتورها 📄'],
     ['/charge-requests', 'درخواست‌های شارژ 💳'], ['/servers', 'مدیریت سرورها'], ['/servers/create', 'ایجاد سرور جدید'],
+    ['/tickets', 'تیکت‌ها'], ['/ips', 'مدیریت آی‌پی‌ها'], ['/traffic-packages', 'بسته ترافیک 📦'],
+    ['/domains', 'مدیریت دامنه‌ها'], ['/domains/register', 'ثبت دامنه جدید'],
+    ['/profile/update', 'پروفایل کاربری 👤'], ['/sessions', 'نشست‌های فعال 🔐'], ['/settings', 'تنظیمات'],
   ])('%s retains its own page instead of the shared console', async (path, title) => {
     open(path)
     expect(await screen.findByRole('heading', { name: title, level: 1 })).toBeTruthy()
     expect(screen.queryByText('پلتفرم مشترک سایت و تلگرام')).toBeNull()
+  })
+
+  it('keeps long wallet history intact rather than truncating it to fit the viewport', async () => {
+    const original = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => url.endsWith('/wallets/transactions')
+      ? Promise.resolve(new Response(JSON.stringify({ data: Array.from({ length: 40 }, (_, index) => ({
+        id: `history-${index}`, description: `Fixture transaction ${index + 1}`, wallet: 'shared',
+        amount: 100, date: new Date().toISOString(), status: 'success',
+      })) }), { headers: { 'content-type': 'application/json' } })) : original(url, init)))
+    open('/wallet')
+    await screen.findByText('Fixture transaction 40')
+    const history = within(document.querySelector('.wallet-transactions') as HTMLElement)
+    expect(history.getAllByRole('row')).toHaveLength(41)
+    expect(history.getByRole('button', { name: 'دانلود' }).hasAttribute('disabled')).toBe(false)
+    expect(requests.filter(request => request.method === 'POST')).toHaveLength(0)
+  })
+
+  it('keeps expanded profile fields and the save action available in the shared layout', async () => {
+    const user = userEvent.setup()
+    open('/profile/update')
+    await user.click(await screen.findByRole('switch', { name: 'غیرفعال' }))
+    expect(screen.getByLabelText('نام شرکت')).toBeTruthy()
+    expect(screen.getByLabelText('کد اقتصادی')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'ذخیره تغییرات' })).toBeTruthy()
+    expect(requests.filter(request => request.method === 'POST')).toHaveLength(0)
   })
 
   it('keeps the public landing accessible to an authenticated user', async () => {

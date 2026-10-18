@@ -76,6 +76,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--canvas);
   color: var(--ink);
 }
@@ -205,7 +206,7 @@ textarea:focus-visible {
 
 .sidebar-settings > summary { cursor: pointer; list-style: none; }
 .sidebar-settings > summary::-webkit-details-marker { display: none; }
-.sidebar-settings > a { margin-inline-start: 18px; font-size: 12px; }
+.sidebar-settings > a { width: calc(100% - 18px); margin-inline-start: 18px; font-size: 14px; }
 .integration-notice {
   display: flex;
   flex-wrap: wrap;
@@ -228,15 +229,15 @@ textarea:focus-visible {
 .nav-group__label {
   display: block;
   padding: 6px 12px 7px;
-  color: var(--faint);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .nav-item {
   position: relative;
   display: flex;
   width: 100%;
-  min-height: 42px;
+  min-height: 44px;
   align-items: center;
   gap: 11px;
   margin: 2px 0;
@@ -246,10 +247,15 @@ textarea:focus-visible {
   background: transparent;
   color: var(--ink);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 500;
+  line-height: 1.6;
   text-align: right;
   transition: 160ms ease;
+}
+
+.nav-item > svg {
+  flex-shrink: 0;
 }
 
 .nav-item:hover {
@@ -280,8 +286,8 @@ textarea:focus-visible {
 }
 
 .nav-item--compact {
-  min-height: 38px;
-  font-size: 12px;
+  min-height: 40px;
+  font-size: 14px;
 }
 
 .nav-item--danger:hover {

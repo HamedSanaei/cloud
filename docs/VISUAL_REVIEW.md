@@ -78,6 +78,42 @@ browser observations or a pixel-diff suite.
   requires that missing design page/board to be available; current landing
   screenshots cannot be declared a comparison against a nonexistent baseline.
 
+## Viewport-height correction (local follow-up, 2026-10-18)
+
+`src/panel-layout.css` adapts shared panel whitespace to short windows. The shell
+uses flex layout and dynamic viewport height, so its minimum height does not
+add a second assumed header height. The 900px desktop Penpot spacing stays in
+place. No font scaling, content truncation or page overflow lock is used.
+
+Checked in the current Chrome, using **only synthetic preview data**:
+
+| Viewport | Page/state | Document height before → after |
+| --- | --- | --- |
+| 1707 × 791 | Dashboard, empty services | 900 → 791 |
+| 1707 × 791 | Tickets, empty | 886 → 791 |
+| 1707 × 791 | Wallet, one wallet / empty history | 895 → 791 |
+| 1366 × 768 | Same three pages | 768 after correction |
+| 1366 × 768 | Servers, IPs, traffic, domains, invoices (fixture), charge requests | 768 after correction |
+| 1366 × 768 | Initial server/domain wizard, sessions, settings, Telegram settings, profile guard, collapsed profile | 768 after correction |
+| 1440 × 900 | Wallet | 900, original card positions/heights retained |
+
+Expanded legal profile fields correctly grow beyond the window; all four extra
+fields and the save action remain in document flow. A 40-transaction fixture
+test verifies all rows and the download action are retained. Unit tests do not
+measure browser layout. The complete frontend suite now contains 36 passing
+tests; frontend build and lint passed.
+
+On mobile the cards stack, and tables scroll horizontally within their own
+containers, not the document. At 390 × 844 the dashboard, tickets and wallet
+were measured and the wallet was visually inspected. These naturally require
+vertical scrolling. A very short 1366 × 640 window also needs some vertical
+scrolling: fitting every card would require hiding/rearranging content or
+reducing readable text/control sizes. This is intentional, not a claim that
+every route/data volume fits every viewport. Long release notes, expanded
+forms, errors and real populated lists must remain scrollable.
+
+No production data, deployment, commit or push was involved in this follow-up.
+
 ## Release safety
 
 Targeted local validation: `npm test` (19), backend platform-integration and

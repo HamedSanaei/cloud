@@ -1,0 +1,106 @@
+/* The shell fills the actual viewport, not a fixed-height design board. Content
+   stays in document flow: long tables, notices and expanded forms can grow. */
+.app-shell,
+.app-shell__main {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.app-shell__main {
+  display: flex;
+  flex-direction: column;
+}
+
+.app-shell .topbar {
+  flex-shrink: 0;
+}
+
+.app-shell .page-container {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Preserve the 900px Penpot spacing on tall screens. On shorter windows reduce
+   whitespace, not font sizes or controls. Never constrain content with a fixed
+   height/overflow, including the mobile single-column layouts. */
+@media (max-height: 899px) {
+  .app-shell {
+    --panel-gap: clamp(12px, calc(5vh - 23px), 22px);
+    --panel-inset: clamp(16px, calc(3vh - 5px), 22px);
+  }
+
+  .app-shell .page-container {
+    padding-top: clamp(12px, calc(8vh - 44px), 28px);
+    padding-bottom: clamp(24px, calc(22vh - 138px), 60px);
+  }
+
+  .app-shell .page-stack { gap: var(--panel-gap); }
+  .app-shell .page-header { min-height: clamp(60px, calc(14vh - 38px), 88px); }
+  .app-shell .card--md { padding: var(--panel-inset); }
+  .app-shell .card--lg { padding: clamp(20px, calc(5vh - 15px), 30px); }
+  .app-shell .section-heading { margin-bottom: var(--panel-gap); }
+  .app-shell .empty-state {
+    min-height: clamp(230px, calc(35vh - 15px), 300px);
+    padding-block: var(--panel-inset);
+  }
+  .app-shell .empty-state--compact { min-height: clamp(140px, calc(25vh - 35px), 190px); }
+  .app-shell .loading-state { min-height: clamp(140px, calc(30vh - 50px), 220px); }
+  .app-shell .form-grid { gap: var(--panel-gap); }
+  .app-shell .guard-page,
+  .app-shell .not-found-card { min-height: 0; }
+
+  .app-shell .wizard-card__header { padding-block: var(--panel-inset); }
+  .app-shell .wizard-card__content { min-height: 0; padding-block: var(--panel-inset); }
+}
+
+/* Desktop-only refinements keep the existing two-column dashboard and each
+   page's own design. Narrow layouts must stack and scroll naturally. */
+@media (min-width: 1200px) and (max-height: 899px) {
+  .app-shell .metric-card {
+    height: auto;
+    min-height: clamp(92px, calc(8vh + 36px), 108px);
+    padding-block: 10px;
+  }
+
+  .app-shell .dashboard-grid {
+    margin-top: 0;
+    row-gap: var(--panel-gap);
+    grid-template-rows: minmax(112px, auto) minmax(118px, auto);
+  }
+  .app-shell .dashboard-servers { min-height: 0; }
+  .app-shell .dashboard-servers .empty-state { min-height: 170px; padding-block: 8px; }
+  .app-shell .wallet-overview .section-heading { margin-bottom: 4px; }
+  .app-shell .recent-tickets .empty-state { min-height: 48px; padding: 0; }
+  .app-shell .dashboard-quick { margin-top: 0; min-height: 0; }
+  .app-shell .dashboard-quick .quick-card { min-height: 72px; }
+
+  .app-shell .wallet-page .page-header,
+  .app-shell .wallet-page .metrics-grid { margin-bottom: 0; }
+  .app-shell .wallet-balances,
+  .app-shell .wallet-transactions { min-height: 0; }
+
+  .app-shell .financial-list-page .filter-panel,
+  .app-shell .resource-list-page .filter-panel {
+    min-height: 0;
+    padding-block: var(--panel-inset);
+    gap: var(--panel-gap);
+  }
+  .app-shell .resource-empty-card { min-height: 0; margin-top: var(--panel-gap); padding: 0; }
+  .app-shell .resource-empty-card .empty-state { min-height: 0; padding-block: var(--panel-inset); }
+
+  .app-shell .server-storefront .wizard-card { min-height: 0; margin-top: 0; }
+  .app-shell .server-storefront .wizard-card__header { min-height: 0; }
+  .app-shell .server-storefront .stepper { min-height: 0; padding-block: var(--panel-inset); }
+}
+
+@media (max-width: 640px) and (max-height: 899px) {
+  .app-shell {
+    --panel-gap: clamp(12px, calc(5vh - 23px), 16px);
+    --panel-inset: 16px;
+  }
+  .app-shell .page-container {
+    padding-top: clamp(12px, calc(8vh - 44px), 20px);
+    padding-bottom: clamp(24px, calc(22vh - 138px), 32px);
+  }
+  .app-shell .page-header { min-height: 0; }
+}
