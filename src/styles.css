@@ -188,6 +188,13 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.sidebar__brand .sidebar__tagline {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.7;
+}
+
 .sidebar__brand span {
   margin-top: 3px;
   color: var(--faint);
@@ -230,7 +237,9 @@ textarea:focus-visible {
   display: block;
   padding: 6px 12px 7px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.6;
 }
 
 .nav-item {
@@ -298,8 +307,10 @@ textarea:focus-visible {
 .sidebar__version {
   display: block;
   padding: 12px 20px 18px;
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.6;
   text-align: center;
 }
 

@@ -30,7 +30,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           <BrandMark className="brand-mark" />
           <div>
             <strong>{BRAND_NAME}</strong>
-            <span>کنسول مدیریت زیرساخت</span>
+            <span className="sidebar__tagline">کنسول مدیریت زیرساخت</span>
           </div>
           <button type="button" className="icon-button sidebar__close" onClick={onClose} aria-label="بستن منو">
             <X size={21} />
