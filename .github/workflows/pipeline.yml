@@ -92,6 +92,9 @@ jobs:
         working-directory: backend
         run: npm ci
 
+      - name: Audit frontend dependencies (including build tools)
+        run: npm audit --audit-level=low
+
       - name: Lint frontend with the existing backend toolchain
         run: npm run lint
 
@@ -190,6 +193,10 @@ jobs:
       - name: Install backend dependencies
         working-directory: backend
         run: npm ci
+
+      - name: Audit backend dependencies (including migration and test tools)
+        working-directory: backend
+        run: npm audit --audit-level=low
 
       - name: Typecheck
         working-directory: backend
