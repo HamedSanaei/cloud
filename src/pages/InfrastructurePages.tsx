@@ -151,7 +151,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
                   <td>{[item.cpu, item.ram, item.disk].filter(Boolean).join(' · ') || '—'}</td>
                   <td>
                     <div className="server-power-controls">
-                      {integration.data?.enabled && <Button size="sm" variant="secondary" onClick={() => setManagedId(item.id)}>مدیریت و نتیجه عملیات</Button>}
+                      {integration.data?.enabled && <Button size="sm" variant="secondary" disabled={!item.platformServerId} onClick={() => { if (item.platformServerId) setManagedId(item.platformServerId) }}>مدیریت و نتیجه عملیات</Button>}
                       {item.power.canPowerOn ? <Button size="sm" variant="success" icon={<Power size={16} />} disabled={powerBusy || servers.loading} onClick={() => handlePower(item.id, 'power-on')} aria-label={`روشن کردن ${item.name}`}>روشن کردن</Button> : null}
                       {item.power.canPowerOff ? <Button size="sm" variant="danger" icon={<Power size={16} />} disabled={powerBusy || servers.loading} onClick={() => handlePower(item.id, 'power-off')} aria-label={`خاموش کردن ${item.name}`}>خاموش کردن</Button> : null}
                       {item.power.pendingAction ? <span>در انتظار نتیجه عملیات برق</span> : null}

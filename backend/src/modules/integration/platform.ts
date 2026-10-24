@@ -14,7 +14,7 @@ import { storefrontProjection, type ConsoleOffer } from './storefront.js'
 export function platformEnabled(): boolean { return Boolean(getConfig().PLATFORM_API_URL) }
 
 const PLATFORM_CONTRACT_VERSION = '1'
-export const REQUIRED_PLATFORM_FEATURES = ['website-link-revoke:v1', 'website-charge-requests:v1'] as const
+export const REQUIRED_PLATFORM_FEATURES = ['website-link-revoke:v1', 'website-charge-requests:v1', 'website-server-delegation:v1'] as const
 
 /** Refuse a cutover that would hide existing balances/contracts or abandon work. */
 export async function assertUnifiedCutoverReady(db: DbClient): Promise<void> {
@@ -82,13 +82,15 @@ export async function assertPlatformCompatibility(): Promise<void> {
     throw new AppError(503, 'platform_contract', 'محیط، واحد تومانی یا سیاست USD/USDT پلتفرم برای اتصال امن آماده نیست')
   }
   if (!Array.isArray(data.features) || REQUIRED_PLATFORM_FEATURES.some(feature => !data.features?.includes(feature))) {
-    throw new AppError(503, 'platform_features_missing', 'نسخه سرویس مرجع از قطع اتصال و گزارش شارژ پشتیبانی نمی‌کند؛ ابتدا نسخه سازگار پلتفرم را منتشر کنید')
+    throw new AppError(503, 'platform_features_missing', 'نسخه سرویس مرجع از قابلیت‌های اتصال، گزارش شارژ و واگذاری سرور پشتیبانی نمی‌کند؛ ابتدا نسخه سازگار پلتفرم را منتشر کنید')
   }
   // Probe endpoint presence and auth without a bearer: never revoke a real
   // credential or read a customer's records as a deployment/readiness test.
-  for (const [path, method] of [['/link/revoke', 'POST'], ['/charge-requests', 'GET']] as const) {
+  const nil = '00000000-0000-0000-0000-000000000000'
+  for (const [path, method] of [['/link/revoke', 'POST'], ['/charge-requests', 'GET'], [`/admin/servers/${nil}/delegations/${nil}`, 'POST']] as const) {
     try {
-      await platformRequest('', path, method, method === 'POST' ? {} : undefined, method === 'POST' ? 'compatibility-probe-no-bearer' : undefined, 3_000)
+      const body = path.includes('/delegations/') ? { operations: ['view'], reason: 'Unauthenticated compatibility probe' } : {}
+      await platformRequest('', path, method, method === 'POST' ? body : undefined, method === 'POST' ? 'compatibility-probe-no-bearer' : undefined, 3_000)
     } catch (error) {
       if (error instanceof AppError && error.status === 401 && error.code === 'unauthorized') continue
       throw new AppError(503, 'platform_feature_probe_failed', 'Endpointهای لازم سرویس مرجع یا حفاظت احراز هویت آن‌ها تأیید نشد')
@@ -113,7 +115,8 @@ async function linkedToken(ctx: AppContext, request: FastifyRequest): Promise<st
 
 interface PlatformServer { server_id: string; state: string; display_name?: string; provider_key?: string; location_label?: string; ip?: string; operating_system?: string; cpu?: number; ram_gb?: number; storage_gb?: number }
 export function serverProjection(s: PlatformServer) {
-  return { id: s.server_id, name: s.display_name ?? s.provider_key ?? s.server_id.slice(0, 8), status: s.state === 'running' ? 'active' : s.state === 'stopped' ? 'inactive' : 'building', datacenter: s.location_label ?? s.provider_key ?? '', ip: s.ip, os: s.operating_system, cpu: `${s.cpu ?? '—'} vCPU`, ram: `${s.ram_gb ?? '—'} GB`, disk: `${s.storage_gb ?? '—'} GB`, power: { canPowerOn: false, canPowerOff: false, canReboot: false, billingBlocked: false, requiredBalanceToman: null, pendingAction: null } }
+  if (!z.string().uuid().safeParse(s.server_id).success) throw new AppError(502, 'platform_server_identity_invalid', 'شناسه سرور در پاسخ پلتفرم معتبر نیست')
+  return { id: s.server_id, platformServerId: s.server_id, name: s.display_name ?? s.provider_key ?? s.server_id.slice(0, 8), status: s.state === 'running' ? 'active' : s.state === 'stopped' ? 'inactive' : 'building', datacenter: s.location_label ?? s.provider_key ?? '', ip: s.ip, os: s.operating_system, cpu: `${s.cpu ?? '—'} vCPU`, ram: `${s.ram_gb ?? '—'} GB`, disk: `${s.storage_gb ?? '—'} GB`, power: { canPowerOn: false, canPowerOff: false, canReboot: false, billingBlocked: false, requiredBalanceToman: null, pendingAction: null } }
 }
 
 // Reject currency reinterpretation rather than display USD cents as toman.
@@ -171,7 +174,8 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
     if (pathname.startsWith('/api/platform/')) {
       const path = pathname.slice('/api/platform'.length)
       const allowed = /^\/(account|wallet|notifications|offers|servers|recharge(?:\/gateways)?|orders|admin\/users|admin\/test-server\/register)$|^\/admin\/users\/[a-f0-9-]{36}\/wallet-adjustments$|^\/offers\/[a-f0-9-]{36}\/images$|^\/servers\/[a-f0-9-]{36}(?:\/(?:images|operations)|\/(?:actions|confirmations)\/[a-z-]+|\/credentials\/(?:claim|ack))?$/
-      if (!allowed.test(path)) throw new BadRequestError('مسیر پلتفرم معتبر نیست')
+      const delegationRoute = /^\/admin\/servers\/[a-f0-9-]{36}\/delegations\/[a-f0-9-]{36}(?:\/revoke)?$/.test(path)
+      if (!allowed.test(path) && !(delegationRoute && request.method === 'POST')) throw new BadRequestError('مسیر پلتفرم معتبر نیست')
       const token = await linkedToken(ctx, request)
       const supplied = request.headers['idempotency-key']
       if (request.method !== 'GET' && (typeof supplied !== 'string' || supplied.length < 8 || supplied.length > 128)) throw new BadRequestError('کلید یکتای درخواست الزامی است')

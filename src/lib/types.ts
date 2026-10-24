@@ -14,6 +14,8 @@ export interface DashboardSummary {
 
 export interface Server {
   id: string
+  /** Canonical management identity; never inferred from a legacy database row. */
+  platformServerId?: string
   name: string
   status: ServerStatus
   datacenter: string

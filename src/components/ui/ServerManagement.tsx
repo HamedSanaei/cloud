@@ -15,6 +15,7 @@ const statuses: Record<string, string> = { pending: 'در انتظار', running
 export function ServerManagement({ serverId, onClose }: { serverId: string; onClose: () => void }) {
   const [server, setServer] = useState<Machine | null>(null)
   const [operations, setOperations] = useState<string[]>([])
+  const [credentialsAllowed, setCredentialsAllowed] = useState(false)
   const [history, setHistory] = useState<Receipt[]>([])
   const [account, setAccount] = useState<{ superadmin: boolean; testPortManagement: boolean } | null>(null)
   const [images, setImages] = useState<Array<{ ref: string; name: string }>>([])
@@ -29,12 +30,27 @@ export function ServerManagement({ serverId, onClose }: { serverId: string; onCl
   const mounted = useRef(true)
   useEffect(() => () => { mounted.current = false }, [])
   const refresh = useCallback(async () => {
-    const [detail, records, actor] = await Promise.all([
-      platformGet<{ server: Machine; operations: string[] }>(`/servers/${serverId}`),
-      platformGet<Receipt[]>(`/servers/${serverId}/operations`),
-      platformGet<{ superadmin: boolean; testPortManagement: boolean }>('/account'),
-    ])
-    if (mounted.current) { setServer(detail.server); setOperations(detail.operations); setHistory(records); setAccount(actor) }
+    try {
+      const [detail, records, actor] = await Promise.all([
+        platformGet<{ server: Machine; operations: string[]; credentialsAllowed?: boolean }>(`/servers/${serverId}`),
+        platformGet<Receipt[]>(`/servers/${serverId}/operations`),
+        platformGet<{ superadmin: boolean; testPortManagement: boolean }>('/account'),
+      ])
+      if (detail.server.server_id !== serverId) throw new Error('شناسه پاسخ پلتفرم با سرور انتخاب‌شده یکسان نیست.')
+      if (mounted.current) {
+        setServer(detail.server); setOperations(detail.operations); setHistory(records); setAccount(actor)
+        const allowCredentials = detail.credentialsAllowed ?? true
+        setCredentialsAllowed(allowCredentials)
+        if (!allowCredentials) setSecret(null)
+        if (!detail.operations.includes('reinstall')) setImages([])
+        setPending(current => current && !detail.operations.some(op => actions[op] === current.action)
+          && !(current.action === 'ssh-port' && actor.superadmin && actor.testPortManagement) ? null : current)
+      }
+    } catch (error) {
+      // Revocation/unavailability must invalidate stale capabilities and secrets.
+      if (mounted.current) { setServer(null); setOperations([]); setCredentialsAllowed(false); setPending(null); setSecret(null); setImages([]); setHistory([]); setAccount(null) }
+      throw error
+    }
   }, [serverId])
   const perform = async (work: () => Promise<void>) => {
     if (lock.current) return
@@ -79,7 +95,7 @@ export function ServerManagement({ serverId, onClose }: { serverId: string; onCl
         {operations.includes('reinstall') && <Button disabled={busy || !!pending} onClick={() => void perform(async () => setImages(await platformGet(`/servers/${serverId}/images`)))}>انتخاب سیستم‌عامل برای نصب مجدد</Button>}
         {images.length > 0 && <div className="platform-inline"><Select label="سیستم‌عامل جدید" value={image} disabled={busy || !!pending} onChange={e => setImage(e.target.value)}><option value="">انتخاب کنید</option>{images.map(item => <option key={item.ref} value={item.ref}>{item.name}</option>)}</Select><Button disabled={busy || !!pending || !image} onClick={() => void prepare('reinstall')}>آماده‌سازی نصب مجدد</Button></div>}
         {sharedTest && (account?.testPortManagement ? <div className="platform-inline"><Input label="پورت جدید SSH (۱۰۲۴ تا ۶۵۵۳۵)" type="number" min={1024} max={65535} disabled={busy || !!pending} value={port} onChange={e => setPort(e.target.value)} /><Button disabled={busy || !!pending || !Number.isInteger(Number(port)) || Number(port) < 1024 || Number(port) > 65535} onClick={() => void prepare('ssh-port')}>آماده‌سازی افزودن پورت</Button></div> : <p>مدیریت پورت نیازمند پیکربندی ابزار امن داخل سرور توسط مدیر است.</p>)}
-        <Button disabled={busy || !!pending || !!secret || !server} onClick={() => void perform(async () => setSecret(await platformPost(`/servers/${serverId}/credentials/claim`, {})))}>دریافت رمز یک‌بارمصرف</Button>
+        {credentialsAllowed && <Button disabled={busy || !!pending || !!secret || !server} onClick={() => void perform(async () => setSecret(await platformPost(`/servers/${serverId}/credentials/claim`, {})))}>دریافت رمز یک‌بارمصرف</Button>}
         {secret && <div className="platform-result"><p>رمز فقط در حافظه صفحه است؛ آن را در محل امن ذخیره کنید.</p><p dir="ltr">{secret.username}: <code>{secret.password}</code></p><Button disabled={busy} onClick={() => void perform(async () => { await platformPost(`/servers/${serverId}/credentials/ack`, { claimId: secret.claimId }); setSecret(null) })}>ذخیره کردم؛ پاک کردن رمز</Button></div>}
         {pending && <section className="server-confirmation" aria-label="تأیید عملیات سرور">
           <h3>تأیید {labels[pending.action]}</h3><p>نصب مجدد و حذف، داده‌های سرور را پاک می‌کنند. پورت جدید، پورت قبلی را حذف نمی‌کند.</p>

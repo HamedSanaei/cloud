@@ -6,6 +6,7 @@ import { AppError } from '../../src/lib/errors.js'
 import type { SessionUser } from '../../src/modules/auth/service.js'
 import { assertPlatformCompatibility, assertUnifiedCutoverReady, decryptPlatformToken, encryptPlatformToken, installPlatformIntegration, platformRequest, requireToman, REQUIRED_PLATFORM_FEATURES } from '../../src/modules/integration/platform.js'
 import { storefrontProjection } from '../../src/modules/integration/storefront.js'
+import { serverProjection } from '../../src/modules/integration/platform.js'
 
 const userId = 'b4f1fa75-2811-4d7e-9038-41ef8fcc8a70'
 const platformUserId = 'e4cf75fe-28b3-43ed-887b-cf9beae23d25'
@@ -30,6 +31,7 @@ async function harness(linked = true) {
   const legacy = vi.fn().mockResolvedValue({ legacy: true })
   app.post('/api/wallets', legacy)
   app.get('/api/wallets', legacy)
+  app.get('/api/servers', legacy)
   app.get('/api/catalog/storefront', legacy)
   app.get('/api/invoices', legacy)
   app.get('/api/charge-requests', legacy)
@@ -40,6 +42,43 @@ async function harness(linked = true) {
 }
 
 describe('platform bridge', () => {
+  it('uses only the canonical platform UUID for delegated server identity', () => {
+    const serverId = 'f07b9500-414e-4000-8000-000000000002'
+    const projected = serverProjection({ server_id: serverId, state: 'running', display_name: 'leaseweb-test' })
+    expect(projected.id).toBe(serverId)
+    expect(projected.platformServerId).toBe(serverId)
+    expect(projected.power.canPowerOn).toBe(false)
+    expect(() => serverProjection({ server_id: '12717238', state: 'running' })).toThrow()
+  })
+
+  it('projects delegated inventory without calling a local server or financial writer', async () => {
+    const serverId = 'f07b9500-414e-4000-8000-000000000002'
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ server_id: serverId, state: 'running', display_name: 'leaseweb-test' }] }), { headers: { 'X-Platform-Contract': '1' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { app, legacy, update } = await harness()
+    const response = await app.inject('/api/servers')
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data[0]).toMatchObject({ id: serverId, platformServerId: serverId })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]![0]).toBe('http://127.0.0.1:9000/v1/console/servers')
+    expect(fetchMock.mock.calls[0]![1].method).toBe('GET')
+    expect(legacy).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it('never elevates a linked caller when forwarding a delegation request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { code: 'forbidden', message: 'superadmin required' } }), { status: 403 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { app, update } = await harness()
+    const path = `/api/platform/admin/servers/${userId}/delegations/${platformUserId}`
+    expect((await app.inject({ method: 'POST', url: path, headers: { 'idempotency-key': 'fixture-key' }, payload: { operations: ['view'], reason: 'Approved access' } })).statusCode).toBe(403)
+    expect(fetchMock.mock.calls[0]![1].headers.authorization).toBe('Bearer cpt_fixture')
+    expect((await app.inject({ method: 'GET', url: path })).statusCode).toBe(400)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(update).not.toHaveBeenCalled()
+    await app.close()
+  })
   const contract = { version: '1', environment: 'test', walletCurrency: 'IRT', displayCurrency: 'IRT', headerIdentityEnabled: false, usdUsdtParity: '1', usdtSettlementEnabled: true, confirmationSigningConfigured: true, features: [...REQUIRED_PLATFORM_FEATURES] }
   function compatibilityServer(features: string[] | undefined, probeStatus = 401) {
     const fetchMock = vi.fn(async (url: string | URL) => {
@@ -65,12 +104,15 @@ describe('platform bridge', () => {
   it('requires both feature versions and authenticated endpoints, without mutating real accounts', async () => {
     const fetchMock = compatibilityServer([...REQUIRED_PLATFORM_FEATURES])
     await expect(assertPlatformCompatibility()).resolves.toBeUndefined()
-    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(fetchMock).toHaveBeenCalledTimes(5)
     const revoke = fetchMock.mock.calls.find(call => String(call[0]).endsWith('/link/revoke'))!
     const options = (revoke as unknown as [string, RequestInit])[1]
     expect(options.method).toBe('POST')
     expect((options.headers as Record<string, string>).authorization).toBe('Bearer ')
     expect(options.body).toBe('{}')
+    const delegation = fetchMock.mock.calls.find(call => String(call[0]).includes('/delegations/'))! as unknown as [string, RequestInit]
+    expect((delegation[1].headers as Record<string, string>).authorization).toBe('Bearer ')
+    expect(JSON.parse(String(delegation[1].body)).operations).toEqual(['view'])
   })
   it('preserves native pricing and only projects real supported billing periods', () => {
     const row = { id: 'offer', name: 'Plan', provider: 'hetzner', location: 'fsn1', billingModel: 'hourly', priceMinor: 4, currency: 'USD', displayCurrency: 'IRT', displayPriceMinor: 1200, cpu: 2, ramGb: 4, diskGb: 40 }

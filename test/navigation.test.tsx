@@ -37,6 +37,60 @@ async function reviewOrder(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('Penpot routes with canonical integration ENABLED', () => {
+  it('manages delegated inventory by platform UUID and drops stale access after revocation', async () => {
+    const original = globalThis.fetch
+    const canonicalId = 'f07b9500-414e-4000-8000-000000000002'
+    const legacyId = '11111111-1111-4111-8111-111111111111'
+    let revoked = false
+    const calls: Array<{ url: string; method: string }> = []
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method ?? 'GET' })
+      const json = (data: unknown) => Promise.resolve(new Response(JSON.stringify({ data }), { headers: { 'content-type': 'application/json' } }))
+      if (url.endsWith('/servers')) return json([{ id: legacyId, platformServerId: canonicalId, name: 'leaseweb-test', status: 'active', datacenter: 'Leaseweb', cpu: '2', ram: '4 GB', disk: '40 GB', power: { canPowerOn: false, canPowerOff: false } }])
+      if (url.endsWith(`/platform/servers/${canonicalId}`)) return revoked
+        ? Promise.resolve(new Response(JSON.stringify({ message: 'دسترسی لغو شد' }), { status: 404, headers: { 'content-type': 'application/json' } }))
+        : json({ server: { server_id: canonicalId, display_name: 'leaseweb-test', state: 'running' }, operations: ['view'], credentialsAllowed: false })
+      if (url.endsWith(`/platform/servers/${canonicalId}/operations`)) return json([])
+      return original(url, init)
+    }))
+    const user = userEvent.setup()
+    open('/servers')
+    await user.click(await screen.findByRole('button', { name: 'مدیریت و نتیجه عملیات' }))
+    await screen.findByRole('heading', { name: 'مدیریت leaseweb-test' })
+    expect(calls.some(call => call.url.endsWith(`/platform/servers/${canonicalId}`))).toBe(true)
+    expect(calls.some(call => call.url.includes(legacyId))).toBe(false)
+    expect(screen.queryByRole('button', { name: 'دریافت رمز یک‌بارمصرف' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'حذف سرور' })).toBeNull()
+    revoked = true
+    await user.click(screen.getByRole('button', { name: 'تازه‌سازی وضعیت' }))
+    await screen.findByText('دسترسی لغو شد')
+    expect(screen.queryByRole('heading', { name: 'مدیریت leaseweb-test' })).toBeNull()
+    expect(calls.every(call => call.method === 'GET')).toBe(true)
+  })
+
+  it('drops a prepared action when access is reduced to read-only without a 404', async () => {
+    const original = globalThis.fetch
+    const canonicalId = 'f07b9500-414e-4000-8000-000000000002'
+    let readOnly = false
+    const json = (data: unknown) => Promise.resolve(new Response(JSON.stringify({ data }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith('/servers')) return json([{ id: canonicalId, platformServerId: canonicalId, name: 'leaseweb-test', status: 'active', datacenter: 'Leaseweb', power: { canPowerOn: false, canPowerOff: false } }])
+      if (url.endsWith(`/platform/servers/${canonicalId}`)) return json({ server: { server_id: canonicalId, display_name: 'leaseweb-test', state: 'stopped' }, operations: readOnly ? ['view'] : ['start'], credentialsAllowed: false })
+      if (url.endsWith(`/platform/servers/${canonicalId}/operations`)) return json([])
+      return original(url, init)
+    }))
+    const user = userEvent.setup()
+    open('/servers')
+    await user.click(await screen.findByRole('button', { name: 'مدیریت و نتیجه عملیات' }))
+    await user.click(await screen.findByRole('button', { name: 'روشن کردن' }))
+    expect(screen.getByRole('region', { name: 'تأیید عملیات سرور' })).toBeTruthy()
+    readOnly = true
+    await user.click(screen.getByRole('button', { name: 'تازه‌سازی وضعیت' }))
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'تأیید عملیات سرور' })).toBeNull())
+    expect(screen.queryByRole('button', { name: 'روشن کردن' })).toBeNull()
+    expect(requests.filter(request => request.method === 'POST')).toHaveLength(0)
+  })
+
   it('preserves both login methods and Google entry while changing the auth layout', async () => {
     const user = userEvent.setup()
     open('/login')

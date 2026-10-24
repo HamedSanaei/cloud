@@ -75,10 +75,28 @@ write canonical data; use shared admin controls or the bot.
 ## Operator test server
 
 **leaseweb-test**, **Public IPv4 217.20.121.89**, provider **Id 12717238**, is
-reserved for configured active superadmins. The panel's **شناسایی و اتصال
+owned and funded by the operator, with configured active superadmin access.
+An explicit canonical grant may additionally expose it to a linked platform
+user without changing ownership. The panel's **شناسایی و اتصال
 leaseweb-test** button (or bot `/testserver`) verifies its live ID + IP in exactly
 one account and imports only local metadata; it never orders another VPS. Power,
 reinstall and password reset are explicit actions with visible receipts/notices.
+The new bridge requires `website-server-delegation:v1`; publish the matching
+platform (including additive migration 0061) before the website. Grant/revoke
+endpoints are superadmin-only and cannot be authorized by a website role alone.
+`view` is mandatory; this phase permits only explicitly selected read operations.
+Power, reinstall, delete, credentials/console, SSH-port and billing rights are
+not implied and cannot be delegated in this phase. Match the requested website
+account to its existing `platform_links.platform_user_id`, not by platform email.
+No live grant or resource registration is performed by the source change.
+
+Projected list rows carry both `id` and explicit `platformServerId`, equal to the
+canonical platform `server_id`. Management controls use `platformServerId`,
+never a provider resource number or legacy web database row. Detail responses
+are checked against that UUID. `credentialsAllowed=false` hides credential
+controls for delegates; failed refresh/revocation clears stale capabilities and
+secrets. Server authorization remains authoritative even if a client ignores UI.
+
 Deletion of this shared fixture is blocked in this panel. SSH port testing requires
 the separately installed/pinned guest helper described in the Python documentation;
 it is not enabled just by linking an account.
