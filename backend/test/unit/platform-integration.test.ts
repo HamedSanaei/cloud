@@ -101,6 +101,23 @@ describe('platform bridge', () => {
     compatibilityServer([...REQUIRED_PLATFORM_FEATURES], 200)
     await expect(assertPlatformCompatibility()).rejects.toMatchObject({ code: 'platform_feature_probe_failed' })
   })
+  it.each(['transport', 'unavailable'] as const)('preserves temporary %s failures at feature authorization probes', async (failure) => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL) => {
+      if (String(url).endsWith('/health/ready')) return new Response('{}')
+      if (String(url).endsWith('/link/contract')) return new Response(JSON.stringify({ data: contract }), { headers: { 'X-Platform-Contract': '1' } })
+      if (failure === 'transport') throw new TypeError('fetch failed')
+      return new Response(JSON.stringify({ error: { code: 'service_unavailable' } }), { status: 503 })
+    }))
+    await expect(assertPlatformCompatibility()).rejects.toMatchObject({ code: 'platform_unavailable' })
+  })
+  it('does not mistake malformed contracts or explicit permanent 503 codes for transport outages', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('not-json', { headers: { 'X-Platform-Contract': '1' } })))
+    await expect(assertPlatformCompatibility()).rejects.toMatchObject({ code: 'platform_contract' })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { code: 'platform_contract' } }), { status: 503 })))
+    await expect(assertPlatformCompatibility()).rejects.toMatchObject({ code: 'platform_contract' })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('gateway unavailable', { status: 503 })))
+    await expect(assertPlatformCompatibility()).rejects.toMatchObject({ code: 'platform_unavailable' })
+  })
   it('requires both feature versions and authenticated endpoints, without mutating real accounts', async () => {
     const fetchMock = compatibilityServer([...REQUIRED_PLATFORM_FEATURES])
     await expect(assertPlatformCompatibility()).resolves.toBeUndefined()

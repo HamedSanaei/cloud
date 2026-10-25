@@ -106,6 +106,12 @@ compose() {
   docker compose --project-name "$PROJECT" --env-file "$ENV_FILE" -f "$1" "${@:2}"
 }
 
+# The release inherits fd 9 so reconciliation shares, rather than bypasses,
+# the lock. Resolve from this tested bundle, not an older installed script.
+reconcile() {
+  COMPOSE_DIR="$COMPOSE_DIR" bash "$(dirname "${BASH_SOURCE[0]}")/reconcile-runtime.sh" --lock-held --require-active "$@"
+}
+
 database_head() {
   local file="$1" exists
   exists="$(compose "$file" exec -T cloud-postgres psql -U cloud -d cloud -Atc \
@@ -242,7 +248,7 @@ services:
       interval: 20s
       timeout: 5s
       retries: 4
-      start_period: 20s
+      start_period: 120s
     logging:
       driver: json-file
       options:
@@ -293,7 +299,7 @@ services:
   cloud-postgres:
     image: postgres:17-alpine
     container_name: ${PROJECT}-postgres
-    restart: unless-stopped
+    restart: always
     networks:
       - ${PROJECT}_net
     environment:
@@ -322,7 +328,7 @@ services:
   cloud-redis:
     image: redis:7-alpine
     container_name: ${PROJECT}-redis
-    restart: unless-stopped
+    restart: always
     networks:
       - ${PROJECT}_net
     command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
@@ -396,10 +402,9 @@ wait_healthy() {
 
 wait_api_healthy() {
   local i=0 st
-  for (( i=0; i<180; i++ )); do
+  for (( i=0; i<300; i++ )); do
     st="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$API_CONTAINER" 2>/dev/null || echo none)"
     [[ "$st" == "healthy" ]] && return 0
-    [[ "$st" == "unhealthy" ]] && return 1
     sleep 1
   done
   return 1
@@ -443,8 +448,8 @@ rollback() {
   fi
 
   write_compose "${PREV_IMAGE}" "${PREV_API_IMAGE}" "${FINAL}"
-  if compose "$FINAL" up -d; then
-    if wait_healthy && wait_api_healthy && current_healthy && api_healthy; then
+  if reconcile && compose "$FINAL" up -d --no-deps cloud-api cloud-worker cloud; then
+    if wait_healthy && wait_api_healthy && current_healthy && api_healthy && reconcile --check; then
       meta_set image "${PREV_IMAGE}"
       meta_set api_image "${PREV_API_IMAGE}"
       meta_set sha "${PREV_SHA}"
@@ -495,6 +500,10 @@ while IFS= read -r existing_project; do
     die "Deployment path belongs to another environment/project; nothing was stopped"; exit 1
   fi
 done <<< "$existing_projects"
+
+# Existing infrastructure only: never initialize a missing/empty replacement.
+# This also rejects maintenance mode before image pulls or writer downtime.
+reconcile
 
 # Backend image is required for the full topology.
 if [[ -z "$API_IMAGE" ]]; then
@@ -565,7 +574,7 @@ compose "$CANDIDATE" run --rm --no-deps cloud-api node --input-type=module -e '
   console.log("Canonical Docker DNS, readiness, API contract, versioned website capabilities, endpoint authorization and IRT/USDT policy verified");
   assertAuthenticationReady(c);
 '
-compose "$CANDIDATE" up -d --wait cloud-postgres cloud-redis
+reconcile --check
 # Existing balances/contracts must be reconciled before any downtime or migration.
 compose "$CANDIDATE" run --rm --no-deps cloud-api node --input-type=module -e '
   import {createDb} from "./dist/db/index.js";
@@ -586,7 +595,7 @@ compose "$CANDIDATE" run --rm --no-deps cloud-api node dist/db/migrate.js
   rollback "Migration head does not match the candidate image" || exit 1; exit 2;
 }
 mv -f "$CANDIDATE" "$FINAL"
-if ! compose "$FINAL" up -d; then
+if ! compose "$FINAL" up -d --no-deps cloud-api cloud-worker cloud; then
   rollback "docker compose up failed for ${IMAGE} + ${API_IMAGE}" || exit 1
   exit 2
 fi
@@ -660,6 +669,12 @@ else
     rollback "public /dashboard failed at ${PUBLIC_URL}/dashboard" || exit 1
     exit 2
   fi
+fi
+
+# Runtime drift or loss of health must not be recorded as a successful release.
+if ! reconcile --check; then
+  rollback "Infrastructure policy/health verification failed" || exit 1
+  exit 2
 fi
 
 # --- success ---------------------------------------------------------------------

@@ -60,7 +60,7 @@ USER cloud
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=20s --timeout=4s --start-period=15s --retries=3 \
+HEALTHCHECK --interval=20s --timeout=4s --start-period=120s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||'8000')+'/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
 # The default command runs the API. The worker uses `npm run start:worker`.

@@ -19,6 +19,17 @@ set -Eeuo pipefail
 
 COMPOSE_DIR="${COMPOSE_DIR:-/opt/tofan/cloud}"
 CLOUD_PORT="${CLOUD_PORT:-8540}"
+# Existing production: install recovery integration only, without probing the
+# occupied web port or creating/changing secrets and release metadata.
+RECOVERY_ONLY=0
+case "${1:-}" in
+  --recovery-only) RECOVERY_ONLY=1 ;;
+  "") ;;
+  *) printf 'Usage: server-bootstrap.sh [--recovery-only]\n' >&2; exit 1 ;;
+esac
+[[ "$COMPOSE_DIR" =~ ^/[A-Za-z0-9._/-]+$ && "$COMPOSE_DIR" != *..* ]] || {
+  echo 'COMPOSE_DIR must be an absolute path without whitespace or traversal' >&2; exit 1;
+}
 
 die()  { printf "[XX] %s\n" "$*" >&2; exit 1; }
 info() { printf "[i] %s\n" "$*"; }
@@ -33,11 +44,58 @@ info "Local port     : ${CLOUD_PORT}"
 
 # --- 1) Docker + Docker Compose ------------------------------------------------
 command -v docker >/dev/null 2>&1 || die "docker not found on this server — install Docker first."
-for dependency in openssl flock gpg curl; do
+for dependency in openssl flock gpg curl python3 systemctl; do
   command -v "$dependency" >/dev/null 2>&1 || die "Required dependency missing: $dependency"
 done
 docker compose version >/dev/null 2>&1 || die "docker compose (v2) not available — install the compose plugin first."
 good "docker + docker compose available"
+
+install_recovery() {
+  local source_dir
+  source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  [[ -d "$COMPOSE_DIR" ]] || die "Existing deployment directory required"
+  exec 9>"$COMPOSE_DIR/.deployment.lock"
+  flock -n 9 || die "Deployment/recovery is active; retry bootstrap later"
+  install -d -o root -g root -m 0755 "$COMPOSE_DIR/scripts"
+  for script in reconcile-runtime.sh runtime-reconcile.py; do
+    [[ -f "$source_dir/$script" ]] || die "Missing recovery bundle: $script"
+    if [[ "$source_dir/$script" != "$COMPOSE_DIR/scripts/$script" ]]; then
+      install -m 0755 -o root -g root "$source_dir/$script" "$COMPOSE_DIR/scripts/$script"
+    fi
+  done
+  cat > /etc/systemd/system/tofan-cloud-reconcile.service <<UNIT
+[Unit]
+Description=Recover verified existing tofan-cloud PostgreSQL and Redis
+Requires=docker.service
+After=docker.service
+PartOf=docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=COMPOSE_DIR=${COMPOSE_DIR}
+ExecStart=/bin/bash ${COMPOSE_DIR}/scripts/reconcile-runtime.sh
+TimeoutStartSec=900
+Restart=on-failure
+RestartSec=15
+UMask=0077
+
+[Install]
+WantedBy=docker.service multi-user.target
+UNIT
+  systemctl daemon-reload
+  # Deliberately not --now: installation must not start/stop live containers.
+  systemctl enable tofan-cloud-reconcile.service
+  flock -u 9
+  exec 9>&-
+  good "Recovery installed for boot and Docker restarts (not started)"
+}
+
+if (( RECOVERY_ONLY )); then
+  install_recovery
+  exit 0
+fi
 
 # --- 2) Verify the selected port is free (bind to 127.0.0.1 only) --------------
 # Do NOT kill or change whatever is using it — fail safely and ask for another port.
@@ -51,7 +109,7 @@ if command -v ss >/dev/null 2>&1 && ss -lnt 2>/dev/null | grep -E "[:.]${CLOUD_P
 elif command -v netstat >/dev/null 2>&1 && netstat -lnt 2>/dev/null | grep -E "[:.]${CLOUD_PORT}\b" >/dev/null; then
   port_occupied=1
   listeners="$(netstat -lntp 2>/dev/null | grep -E "[:.]${CLOUD_PORT}\b")"
-elif (exec 3<>/dev/tcp/127.0.0.1/${CLOUD_PORT}) 2>/dev/null; then
+elif (exec 3<>"/dev/tcp/127.0.0.1/${CLOUD_PORT}") 2>/dev/null; then
   exec 3<&- 3>&- 2>/dev/null || true
   port_occupied=1
   listeners="127.0.0.1:${CLOUD_PORT} is accepting TCP connections"
@@ -149,6 +207,8 @@ if [[ ! -f "${COMPOSE_DIR}/deployed.version" ]]; then
 else
   info "deployed.version already exists — leaving it untouched."
 fi
+
+install_recovery
 
 echo
 echo "=== tofan-cloud server bootstrap complete ==="

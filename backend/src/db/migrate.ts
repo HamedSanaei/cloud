@@ -3,8 +3,14 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import process from 'node:process'
 import { migrate as drizzleMigrate } from 'drizzle-orm/node-postgres/migrator'
-import { createDb } from './index.js'
+import { drizzle } from 'drizzle-orm/node-postgres'
+import pg, { type PoolClient } from 'pg'
 import { getConfig, loadConfig } from '../config.js'
+import { createLogger } from '../logger.js'
+import { retryStartup, startupFailure } from '../lib/startup.js'
+
+// Stable, database-scoped key shared by CLI, API and worker.
+const migrationLock = [1953457774, 1835624306] as const
 
 /**
  * Applies committed SQL migrations (backend/drizzle/*.sql).
@@ -14,12 +20,37 @@ import { getConfig, loadConfig } from '../config.js'
 export async function migrate(connectionString?: string): Promise<void> {
   // Load env into the config cache (a CLI run may not have called loadConfig).
   loadConfig()
-  const handle = createDb(connectionString ?? getConfig().DATABASE_URL)
-  try {
-    await drizzleMigrate(handle.db, { migrationsFolder: resolveMigrationsFolder() })
-  } finally {
-    await handle.pool.end()
-  }
+  const logger = createLogger('cloud-migrate')
+  const migrationsFolder = resolveMigrationsFolder()
+  await retryStartup('migrations', async () => {
+    const pool = new pg.Pool({
+      connectionString: connectionString ?? getConfig().DATABASE_URL,
+      max: 1, connectionTimeoutMillis: 10_000, query_timeout: 125_000,
+    })
+    pool.on('error', () => undefined)
+    let client: PoolClient | undefined
+    try {
+      client = await pool.connect()
+      client.on('error', (error) => {
+        logger.warn({ event: 'migration_connection_error', ...startupFailure(error) }, 'migration session connection failed')
+      })
+      // A checked-out client pins the advisory lock, journal reads and Drizzle's
+      // migration transaction to ONE PostgreSQL session (never the pool).
+      await client.query('select 1')
+      await client.query("set statement_timeout = '120s'")
+      await client.query("set lock_timeout = '10s'")
+      const lock = await client.query<{ acquired: boolean }>(
+        'select pg_try_advisory_lock($1::integer, $2::integer) as acquired', [...migrationLock],
+      )
+      if (!lock.rows[0]?.acquired) throw Object.assign(new Error('Migration lock is held'), { code: 'migration_lock_busy' })
+      await drizzleMigrate(drizzle(client), { migrationsFolder })
+    } finally {
+      // Destroy this session even on success: releasing a session lock this way
+      // cannot leak a held lock to a pool borrower, even after a failed rollback.
+      client?.release(true)
+      await pool.end()
+    }
+  }, logger)
 }
 
 /**
@@ -50,7 +81,7 @@ if (isDirectRun) {
     .then(() => process.exit(0))
     .catch((err) => {
       // eslint-disable-next-line no-console
-      console.error('[migrate] failed:', (err as Error).message)
+      console.error(JSON.stringify({ event: 'startup_failed', service: 'migrate', ...startupFailure(err) }))
       process.exit(1)
     })
 }

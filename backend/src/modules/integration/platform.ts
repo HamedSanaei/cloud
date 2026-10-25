@@ -19,7 +19,7 @@ export const REQUIRED_PLATFORM_FEATURES = ['website-link-revoke:v1', 'website-ch
 /** Refuse a cutover that would hide existing balances/contracts or abandon work. */
 export async function assertUnifiedCutoverReady(db: DbClient): Promise<void> {
   if (!platformEnabled()) return
-  const residual = await Promise.all([
+  const checks = await Promise.allSettled([
     db.select({ id: wallets.id }).from(wallets).where(ne(wallets.balanceRial, 0)).limit(1),
     db.select({ id: servers.id }).from(servers).where(notInArray(servers.status, ['terminated', 'failed'])).limit(1),
     db.select({ id: subscriptions.id }).from(subscriptions).where(notInArray(subscriptions.status, ['cancelled', 'expired'])).limit(1),
@@ -27,6 +27,10 @@ export async function assertUnifiedCutoverReady(db: DbClient): Promise<void> {
     db.select({ id: invoices.id }).from(invoices).where(notInArray(invoices.status, ['paid', 'void', 'refunded'])).limit(1),
     db.select({ id: providerOperations.id }).from(providerOperations).where(notInArray(providerOperations.status, ['succeeded', 'failed'])).limit(1),
   ])
+  const residual = checks.map(result => {
+    if (result.status === 'rejected') throw result.reason
+    return result.value
+  })
   if (residual.some(rows => rows.length > 0)) throw new Error('Unified cutover refused: reconcile legacy balances, contracts and pending work before enabling PLATFORM_API_URL. See docs/PLATFORM_INTEGRATION.md')
   await assertPlatformCompatibility()
 }
@@ -54,30 +58,48 @@ export async function platformRequest<T>(token: string, path: string, method = '
   if (base.username || base.password || base.search || base.hash || base.pathname !== '/' || !['https:', 'http:'].includes(base.protocol) || (config.NODE_ENV === 'production' && base.protocol !== 'https:' && !['127.0.0.1', 'localhost', 'cloud-platform-api'].includes(base.hostname))) {
     throw new AppError(503, 'platform_configuration', 'آدرس اتصال پلتفرم معتبر نیست')
   }
+  let response: Response
   try {
-    const response = await fetch(base.toString().replace(/\/$/, '') + '/v1/console' + path, {
+    response = await fetch(base.toString().replace(/\/$/, '') + '/v1/console' + path, {
       method, redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'x-platform-contract': PLATFORM_CONTRACT_VERSION, 'x-platform-environment': config.APP_ENV ?? config.NODE_ENV, ...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
-    const payload = await response.json() as { error?: { message?: string; code?: string } }
-    if (!response.ok) throw new AppError(response.status, payload.error?.code ?? 'platform_error', payload.error?.message ?? 'عملیات پلتفرم تکمیل نشد')
-    if (response.headers.get('x-platform-contract') !== PLATFORM_CONTRACT_VERSION) throw new AppError(503, 'platform_contract', 'نسخه قرارداد پلتفرم با سایت سازگار نیست')
-    return payload as T
-  } catch (error) {
-    if (error instanceof AppError) throw error
+  } catch {
     throw new AppError(502, 'platform_unavailable', 'اتصال به پلتفرم مشترک برقرار نشد؛ وضعیت درخواست را پیش از تلاش مجدد بررسی کنید')
   }
+  let payload: { error?: { message?: string; code?: string } }
+  try {
+    payload = await response.json() as typeof payload
+  } catch (error) {
+    // A malformed contract is not an outage. A failed response stream is.
+    if (error instanceof SyntaxError && ![502, 503, 504].includes(response.status)) throw new AppError(503, 'platform_contract', 'پاسخ پلتفرم با قرارداد سازگار نیست')
+    throw new AppError(502, 'platform_unavailable', 'ارتباط پلتفرم هنگام دریافت پاسخ قطع شد')
+  }
+  if (!response.ok) {
+    const code = payload?.error?.code
+    if ([502, 503, 504].includes(response.status) && (!code || ['platform_unavailable', 'unavailable', 'service_unavailable'].includes(code))) {
+      throw new AppError(response.status, 'platform_unavailable', 'سرویس مرجع برای پردازش درخواست آماده نیست')
+    }
+    throw new AppError(response.status, code ?? 'platform_error', payload?.error?.message ?? 'عملیات پلتفرم تکمیل نشد')
+  }
+  if (response.headers.get('x-platform-contract') !== PLATFORM_CONTRACT_VERSION) throw new AppError(503, 'platform_contract', 'نسخه قرارداد پلتفرم با سایت سازگار نیست')
+  return payload as T
 }
 
 export async function assertPlatformCompatibility(): Promise<void> {
   if (!platformEnabled()) return
   const config = getConfig()
-  const [{ data }, readiness] = await Promise.all([
-    platformRequest<{ data: { version: string; environment: string; walletCurrency: string; headerIdentityEnabled: boolean; usdUsdtParity: string; usdtSettlementEnabled: boolean; displayCurrency: string; confirmationSigningConfigured: boolean; features?: string[] } }>('', '/link/contract', 'GET', undefined, undefined, 3_000),
-    fetch(new URL('/health/ready', config.PLATFORM_API_URL), { redirect: 'error', signal: AbortSignal.timeout(3_000) }),
-  ])
-  if (!readiness.ok) throw new AppError(503, 'platform_unavailable', 'سرویس مرجع برای پردازش درخواست آماده نیست')
+  const { data } = await platformRequest<{ data: { version: string; environment: string; walletCurrency: string; headerIdentityEnabled: boolean; usdUsdtParity: string; usdtSettlementEnabled: boolean; displayCurrency: string; confirmationSigningConfigured: boolean; features?: string[] } }>('', '/link/contract', 'GET', undefined, undefined, 3_000)
+  const readiness = await fetch(new URL('/health/ready', config.PLATFORM_API_URL), {
+    redirect: 'error', signal: AbortSignal.timeout(3_000),
+  }).catch(() => { throw new AppError(502, 'platform_unavailable', 'اتصال به سرویس مرجع برقرار نشد') })
+  await readiness.body?.cancel()
+  if (!readiness.ok) {
+    if ([502, 503, 504].includes(readiness.status)) throw new AppError(503, 'platform_unavailable', 'سرویس مرجع برای پردازش درخواست آماده نیست')
+    throw new AppError(503, 'platform_contract', 'Endpoint آمادگی پلتفرم معتبر نیست')
+  }
+  if (!data || typeof data !== 'object') throw new AppError(503, 'platform_contract', 'پاسخ قرارداد پلتفرم معتبر نیست')
   if (data.version !== PLATFORM_CONTRACT_VERSION || data.environment !== (config.APP_ENV ?? config.NODE_ENV) || data.walletCurrency !== 'IRT' || data.displayCurrency !== 'IRT' || data.headerIdentityEnabled || data.usdUsdtParity !== '1' || !data.usdtSettlementEnabled || !data.confirmationSigningConfigured) {
     throw new AppError(503, 'platform_contract', 'محیط، واحد تومانی یا سیاست USD/USDT پلتفرم برای اتصال امن آماده نیست')
   }
@@ -93,6 +115,7 @@ export async function assertPlatformCompatibility(): Promise<void> {
       await platformRequest('', path, method, method === 'POST' ? body : undefined, method === 'POST' ? 'compatibility-probe-no-bearer' : undefined, 3_000)
     } catch (error) {
       if (error instanceof AppError && error.status === 401 && error.code === 'unauthorized') continue
+      if (error instanceof AppError && error.code === 'platform_unavailable') throw error
       throw new AppError(503, 'platform_feature_probe_failed', 'Endpointهای لازم سرویس مرجع یا حفاظت احراز هویت آن‌ها تأیید نشد')
     }
     throw new AppError(503, 'platform_feature_probe_failed', 'Endpoint سرویس مرجع درخواست بدون اعتبارنامه را پذیرفت')

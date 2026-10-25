@@ -48,8 +48,9 @@ Redis and Telegram bot. Do not create another stack, bot poller or financial aut
 | Canonical bridge network | `cloud-platform-production-bridge` |
 | Web/native application environment | `production` |
 
-Use the **existing** directory/port when they differ from these defaults. Bootstrap
-checks port ownership and refuses conflicts; do not bootstrap over an active site.
+Use the **existing** directory/port when they differ from these defaults. Full
+bootstrap refuses occupied ports. On an existing site, use `--recovery-only` to
+install recovery without probing the web port or changing secrets/metadata.
 
 The web API and native API share the production private bridge. Keep the
 native API otherwise private, or use authenticated HTTPS through trusted ingress.
@@ -98,11 +99,11 @@ sudo bash server-bootstrap.sh
 ```
 
 `COMPOSE_DIR` and `CLOUD_PORT` can explicitly override the shared defaults.
-Bootstrap requires Docker Compose v2, OpenSSL, `flock`, GPG and curl. It installs
-only this project's scripts/directories, creates a private `.env` only when
-missing, and generates database/auth/backup secrets only for a new installation. It does not
-start an application, open a public application port, alter Vendora, prune
-Docker, overwrite existing secrets or restart an unrelated service.
+Bootstrap requires Docker Compose v2, Python 3, Systemd, OpenSSL, `flock`, GPG
+and curl. Full bootstrap creates private secrets only when absent. Recovery-only
+bootstrap requires the existing directory and installs just the recovery scripts
+and `tofan-cloud-reconcile.service`. Neither mode starts the unit immediately,
+restarts Docker, prunes resources, or overwrites existing secrets.
 
 Complete the private `.env` before the first release:
 - stable existing `AUTH_SECRET`, `DATABASE_URL`/`POSTGRES_PASSWORD` and `REDIS_URL`;
@@ -196,6 +197,129 @@ For failures, correct the actual missing Environment secret/target, package
 permission, canonical readiness, database epoch or ingress cause. Retain encrypted
 backups and release metadata. Never resolve a failed rollback by manually pointing
 old images at an advanced database or by making tests/health checks optional.
+
+### Automatic infrastructure recovery
+
+PostgreSQL and Redis use `restart: always` in canonical and generated production
+Compose; web/API/worker retain `unless-stopped` so deliberately drained writers
+stay drained. Compose declarations do not prove the policy of existing containers.
+`reconcile-runtime.sh` inspects the actual policy and updates existing container
+IDs in place. It never creates, recreates, removes, or migrates a container/database.
+
+Recovery requires both exact service names, Compose project/service/working-dir
+labels, canonical named volumes and their ownership labels, matching local volume
+mountpoints, writable data mounts, and configured healthchecks. PostgreSQL must
+already contain a PostgreSQL 17 `PG_VERSION` and nonempty `global/pg_control` at
+the canonical PGDATA. Missing containers, missing/mismatched volumes, noncanonical
+PGDATA, or unproven initialization fail closed **before either service changes**.
+Do not bypass this refusal with `compose up`: inspect the historical containers,
+volume identities and encrypted recovery records privately. Fresh installations
+require explicitly reviewed infrastructure provisioning; deployment is not a
+database initialization path.
+
+The script takes `${COMPOSE_DIR}/.deployment.lock`, the same lock as deployment.
+An active release may delay recovery up to 600 seconds; health/Docker operations
+then have a shared 180-second deadline. `--check` is strictly read-only and fails
+unless both services are healthy with `always`. Deployment reconciles before
+image pulls/writer downtime and checks again before marking success; normal
+activation and rollback start only application services with `--no-deps`.
+Infrastructure containers/volumes/networks are not recreated by releases.
+
+The Systemd oneshot is enabled under both `multi-user.target` and `docker.service`,
+ordered after Docker and requiring it, with `PartOf=docker.service` and
+`RemainAfterExit=yes`. Host boot starts it after Docker; Docker service restarts
+stop/restart it as well. Failure retries after 15 seconds without changing
+unrelated Docker projects. Installation uses `enable`, **not** `enable --now`.
+
+#### Backend startup
+
+API startup gates PostgreSQL, Redis and required canonical platform connectivity
+before migrations and listening. Temporary failures receive 12 sequential
+attempts, exponential delays starting at one second and capped at ten seconds
+(85 seconds of backoff, plus bounded connection/query time). Required platform
+feature probes preserve transient unavailability; invalid contracts, authentication,
+configuration and permanent SQL/schema failures fail immediately. No indefinite
+migration retry or fallback financial authority is introduced.
+
+CLI, API and legacy worker migrations share a database-scoped advisory lock on
+the **same checked-out PostgreSQL session** used by Drizzle. The session is
+destroyed on completion/failure; retries cannot overlap a previous attempt or
+leak locks into the pool. Migration statements have a 120-second server timeout.
+Failed startup closes dependency/queue/worker handles. Unified-mode legacy
+workers remain disabled rather than becoming another billing authority.
+
+Structured `startup_retry`, `startup_ready` and `startup_failed` events expose
+stage, attempt, delay, failure class and allowlisted codes, not exception messages,
+SQL, connection URLs or credentials. API health has a 120-second startup grace;
+deployment waits up to 300 seconds for API health.
+
+Run `node backend/test/startup-recovery-smoke.mjs --integration` locally with
+Node 24, installed backend dependencies and local Docker. It starts the actual
+API with both dependencies stopped, recovers them without restarting the API,
+checks readiness, and exercises PostgreSQL migration serialization using only
+uniquely named disposable containers. Release CI runs this API smoke plus the
+backend unit/integration suites.
+
+#### Roll out to the existing site without a Docker restart
+
+1. Run release CI first. Retain the existing private `.env`, databases, volume
+   names, networks, image metadata and verified encrypted backup/restore records.
+2. From the tested release's `deploy/scripts` directory on the authorized host:
+
+   ```bash
+   sudo env COMPOSE_DIR=/opt/tofan/cloud bash server-bootstrap.sh --recovery-only
+   sudo systemctl restart tofan-cloud-reconcile.service
+   sudo env COMPOSE_DIR=/opt/tofan/cloud \
+     bash /opt/tofan/cloud/scripts/reconcile-runtime.sh --check
+   sudo systemctl status tofan-cloud-reconcile.service --no-pager
+   sudo journalctl -u tofan-cloud-reconcile.service -n 50 --no-pager
+   ```
+
+   This restarts only the recovery oneshot, not Docker or healthy containers.
+   A drifted policy is updated in place; only stopped, verified infrastructure
+   containers are started. If identity/data checks fail, stop and investigate;
+   do not replace containers or reset data.
+3. Deploy the exact tested SHA through the existing protected release lane.
+   CI transfers and verifies the complete deploy/reconcile bundle. Generated
+   production Compose now declares `always`; encrypted backups and schema-aware
+   rollback protections remain in force. On later recovery-code updates, repeat
+   recovery-only bootstrap to update the installed boot-time copy as well.
+4. Check service health, runtime policies, API readiness and stable restart counts.
+   Do not restart production Docker merely to test this change.
+
+#### Explicit maintenance override
+
+Create `/opt/tofan/cloud/.maintenance` **before** planned infrastructure downtime,
+under the deployment lock. Recovery then exits successfully without contacting
+Docker; deployment and strict checks fail. This suppresses the reconciler only:
+Docker's `always` policy still applies after a daemon restart. If maintenance
+must survive reboot, an authorized operator must additionally change the two
+verified containers' policies to `no` and stop them during that maintenance
+window. Never disable another project's policies. After maintenance, remove the
+sentinel and restart `tofan-cloud-reconcile.service`; reconciliation restores
+`always`, starts the original containers and waits for health.
+
+#### Local verification and incident evidence
+
+`python3 -m unittest discover -s deploy/tests -v` exercises drift, stopped
+dependencies, locks, maintenance, volume/data refusals and Docker failures.
+`DRILL_ALLOW_DIND=1 bash deploy/tests/runtime-recovery-drill.sh` creates a labeled
+disposable Docker-in-Docker daemon, seeds PostgreSQL/Redis markers, exercises
+policy/manual-stop recovery and restarts **only that dedicated daemon** twice.
+It verifies original container IDs, mounts/configuration, volumes and persisted
+markers, runs recovery-only bootstrap without changing fixture secrets/metadata
+or starting services, and validates the generated unit with `systemd-analyze`.
+The drill requires Linux/WSL, Bash, `systemd-analyze`, local Docker with privileged
+container support, and image/package access. CI requires it before publishing.
+
+The October 25 incident establishes observed runtime policy `no`, not how it was
+set. Repository inspection found no existing operation setting the persistent
+production PostgreSQL/Redis policy to `no`. Existing deployment stops target
+API/worker only; backup verification uses temporary restore databases, not
+container policy changes; CI's default-policy containers are disposable smoke
+and Compose one-off containers, not the persistent infrastructure. A Docker audit
+trail or external maintenance history would be needed to attribute the drift.
+
 
 ## Runtime boundaries
 
