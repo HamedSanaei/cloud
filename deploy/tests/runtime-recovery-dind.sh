@@ -17,6 +17,23 @@ wait_ready() {
   echo 'Fixture services failed to become healthy.' >&2
   return 1
 }
+# A newly initialized PostgreSQL image can report healthy briefly before the
+# entrypoint's final server restart. Probe SQL readiness across several polls
+# before issuing the fixture's first write.
+wait_sql_ready() {
+  local attempt consecutive=0
+  for (( attempt=0; attempt<90; attempt++ )); do
+    if [[ "$(docker exec tofan-cloud-postgres psql -U cloud -d cloud -Atqc 'SELECT 1' 2>/dev/null || true)" == 1 ]]; then
+      consecutive=$((consecutive + 1))
+      if (( consecutive >= 3 )); then return 0; fi
+    else
+      consecutive=0
+    fi
+    sleep 1
+  done
+  echo 'Disposable PostgreSQL fixture never reached stable SQL readiness.' >&2
+  return 1
+}
 assert_preserved() {
   python3 - <<'PY'
 import json
@@ -140,6 +157,7 @@ case "${1:?fixture phase required}" in
       --health-cmd='redis-cli ping' --health-interval=1s --health-timeout=3s --health-retries=60 \
       -v tofan-cloud_cloud-redis-data:/data redis:7-alpine redis-server --appendonly yes >/dev/null
     wait_ready
+    wait_sql_ready
     docker exec tofan-cloud-postgres psql -U cloud -d cloud -v ON_ERROR_STOP=1 -c \
       "CREATE TABLE recovery_drill (marker text NOT NULL); INSERT INTO recovery_drill VALUES ('durable-postgres-marker');" >/dev/null
     docker exec tofan-cloud-redis redis-cli SET recovery-drill durable-redis-marker >/dev/null
