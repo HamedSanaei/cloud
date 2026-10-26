@@ -49,12 +49,27 @@ class Reconciler:
     def validate(self, service: str, name: str, volume: str, target: str) -> dict:
         container = self.inspect("inspect", name)
         labels = container.get("Config", {}).get("Labels") or {}
+        # Only one known historical PostgreSQL container was created from the
+        # versioned storefront release directory. Keep its existing cluster and
+        # Docker volume instead of requiring a destructive container replacement.
+        # Every other identity, volume and initialized-PGDATA guard still applies.
+        historical_postgres_dir = str(
+            Path(self.directory) / "releases" / "provider-storefront-20261016"
+        )
+        legacy_postgres = (
+            service == "cloud-postgres"
+            and labels.get("com.docker.compose.project.working_dir") == historical_postgres_dir
+            and labels.get("com.docker.compose.project.config_files")
+            == str(Path(historical_postgres_dir) / "docker-compose.yml")
+            and (Path(historical_postgres_dir) / "docker-compose.yml").is_file()
+        )
         expected = {
             "com.docker.compose.project": PROJECT,
             "com.docker.compose.service": service,
-            "com.docker.compose.project.working_dir": self.directory,
         }
-        if any(labels.get(key) != value for key, value in expected.items()):
+        if (any(labels.get(key) != value for key, value in expected.items())
+                or (labels.get("com.docker.compose.project.working_dir") != self.directory
+                    and not legacy_postgres)):
             raise RecoveryError(f"{name}: Compose ownership mismatch")
         if container.get("Name") != "/" + name or not container.get("Id"):
             raise RecoveryError(f"{name}: container identity mismatch")

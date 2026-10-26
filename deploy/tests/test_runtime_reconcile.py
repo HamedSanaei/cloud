@@ -291,6 +291,53 @@ class RuntimeReconcileTests(unittest.TestCase):
                 self.run_reconciler(success=False)
                 self.assertEqual(self.mutations(), [])
 
+    def test_known_historical_postgres_owner_keeps_existing_container_and_volume(self):
+        historical = self.directory / "releases" / "provider-storefront-20261016"
+        historical.mkdir(parents=True)
+        (historical / "docker-compose.yml").write_text("name: tofan-cloud\n")
+        labels = self.state["containers"]["tofan-cloud-postgres"]["Config"]["Labels"]
+        labels["com.docker.compose.project.working_dir"] = str(historical)
+        labels["com.docker.compose.project.config_files"] = str(historical / "docker-compose.yml")
+        original = copy.deepcopy(self.state)
+        self.run_reconciler("--check", "--require-active")
+        self.assertEqual(self.mutations(), [])
+        self.assert_preserved(original)
+
+    def test_historical_postgres_cannot_waive_filename_or_volume_guards(self):
+        historical = self.directory / "releases" / "provider-storefront-20261016"
+        historical.mkdir(parents=True)
+        config_file = historical / "docker-compose.yml"
+        config_file.write_text("name: tofan-cloud\n")
+        for defect in ("missing-file", "wrong-config", "wrong-service", "wrong-project", "wrong-volume"):
+            with self.subTest(defect=defect):
+                self.seed()
+                labels = self.state["containers"]["tofan-cloud-postgres"]["Config"]["Labels"]
+                labels["com.docker.compose.project.working_dir"] = str(historical)
+                labels["com.docker.compose.project.config_files"] = str(config_file)
+                if defect == "missing-file":
+                    config_file.unlink()
+                elif defect == "wrong-config":
+                    labels["com.docker.compose.project.config_files"] = str(historical / "other.yml")
+                elif defect == "wrong-service":
+                    labels["com.docker.compose.service"] = "foreign"
+                elif defect == "wrong-project":
+                    labels["com.docker.compose.project"] = "foreign"
+                elif defect == "wrong-volume":
+                    self.state["containers"]["tofan-cloud-postgres"]["Mounts"][0]["Name"] = "foreign"
+                self.run_reconciler(success=False)
+                self.assertEqual(self.mutations(), [])
+                if not config_file.exists():
+                    config_file.write_text("name: tofan-cloud\n")
+
+    def test_historical_postgres_exception_does_not_apply_to_redis(self):
+        historical = self.directory / "releases" / "provider-storefront-20261016"
+        historical.mkdir(parents=True)
+        (historical / "docker-compose.yml").write_text("name: tofan-cloud\n")
+        labels = self.state["containers"]["tofan-cloud-redis"]["Config"]["Labels"]
+        labels["com.docker.compose.project.working_dir"] = str(historical)
+        labels["com.docker.compose.project.config_files"] = str(historical / "docker-compose.yml")
+        self.run_reconciler(success=False)
+        self.assertEqual(self.mutations(), [])
     def test_wrong_ownership_or_mounts_refuse_before_either_service_changes(self):
         defects = ("project", "service", "directory", "name", "oneoff", "bind", "wrong-volume", "readonly",
                    "source", "volume-project", "volume-label", "volume-driver", "volume-options",
