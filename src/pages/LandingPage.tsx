@@ -44,8 +44,10 @@ export function LandingPage() {
             <div className="console-window-bar"><span><i /><i /><i /></span><b>کنسول مدیریت سرور</b></div>
             <div className="console-summary"><strong>۳</strong><span>سرویس‌های فعال</span><i /></div>
             {providers.map((provider) => <div className="console-server" key={provider.id}><ProviderLogo alt="" provider={provider.id} /><span><b>{provider.name}</b><small>{provider.region} · IPv6</small></span><i /></div>)}
-            <span className="console-badge badge-hourly">پرداخت منعطف<br /><b>ساعتی / 24/7</b></span>
-            <span className="console-badge badge-ipv6"><b>IPv6</b><br />ایران و خارج</span>
+            <ul className="console-capabilities" aria-label="امکانات سرویس">
+              <li><Clock3 aria-hidden="true" /><span><strong>پرداخت ساعتی</strong><small>متناسب با مصرف شما</small></span></li>
+              <li><Network aria-hidden="true" /><span><strong>شبکه <bdi dir="ltr">IPv6</bdi></strong><small>در ایران و اروپا</small></span></li>
+            </ul>
           </div>
         </section>
 
@@ -92,7 +94,17 @@ export function LandingPage() {
         </section>
       </main>
 
-      <footer className="landing-footer"><div className="public-container"><div><Link className="public-logo inverse" to="/"><BrandMark /><strong>{BRAND_NAME}</strong></Link><p>میزبانی ابری در ایران و خارج، با پرداخت منعطف و امکانات شبکه روز.</p><ParserverEnamadSeal /></div><nav><a href="#servers">سرور ایران</a><a href="#servers">سرور خارج</a><a href="#hourly">سرور ساعتی</a><a href="#features">IPv6</a></nav><small>© {BRAND_NAME} — تمامی حقوق محفوظ است.</small></div></footer>
+      <footer className="landing-footer">
+        <div className="public-container">
+          <div className="landing-footer-brand">
+            <Link className="public-logo inverse" to="/"><BrandMark /><strong>{BRAND_NAME}</strong></Link>
+            <p>میزبانی ابری در ایران و خارج، با پرداخت منعطف و امکانات شبکه روز.</p>
+          </div>
+          <nav aria-label={`خدمات ${BRAND_NAME}`}><a href="#servers">سرور ایران</a><a href="#servers">سرور خارج</a><a href="#hourly">سرور ساعتی</a><a href="#features">IPv6</a></nav>
+          <div className="landing-footer-trust" aria-label="نماد اعتماد الکترونیکی"><ParserverEnamadSeal /></div>
+          <small>© {BRAND_NAME} — تمامی حقوق محفوظ است.</small>
+        </div>
+      </footer>
     </div>
   )
 }

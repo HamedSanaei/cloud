@@ -105,6 +105,34 @@ describe('Penpot routes with canonical integration ENABLED', () => {
     expect(requests.filter(request => request.method === 'POST')).toHaveLength(0)
   })
 
+  it('starts Google registration without requiring or submitting the email/password form', async () => {
+    const original = globalThis.fetch
+    const googleRequests: string[] = []
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
+      if (url.includes('/auth/google/start?')) {
+        googleRequests.push(url)
+        return Promise.resolve(new Response(JSON.stringify({ message: 'گوگل موقتاً در دسترس نیست' }), { status: 503, headers: { 'content-type': 'application/json' } }))
+      }
+      return original(url, init)
+    }))
+    const user = userEvent.setup()
+    open('/register')
+    const googleButton = await screen.findByRole('button', { name: 'ادامه با گوگل' })
+    await user.click(googleButton)
+    expect(googleRequests).toEqual(['/api/auth/google/start?redirectTo=%2Fdashboard'])
+    expect((await screen.findByRole('alert')).textContent).toContain('گوگل موقتاً در دسترس نیست')
+    expect((googleButton as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByRole('button', { name: 'ساخت حساب', exact: true })).toBeTruthy()
+    expect(requests.filter(request => request.method === 'POST')).toHaveLength(0)
+  })
+
+  it.each(['/login', '/register', '/forgot-password'])('uses the Pars Server brand on %s', async (path) => {
+    open(path)
+    expect(await screen.findByRole('link', { name: 'پارس سرور' })).toBeTruthy()
+    expect(screen.getByRole('complementary', { name: 'مزایای پارس سرور' })).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/سرور\s*هاب/)
+  })
+
   it('keeps errors and login controls available when auth content grows', async () => {
     const original = globalThis.fetch
     vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => url.endsWith('/auth/login/start')
@@ -226,14 +254,15 @@ describe('Penpot routes with canonical integration ENABLED', () => {
     expect(cta.getByRole('link', { name: 'ورود به پنل' }).getAttribute('href')).toBe('/login')
   })
 
-  it('uses the Penpot brand in both the landing and console sidebar', async () => {
+  it('uses the Pars Server brand in both the landing and console sidebar', async () => {
     const view = open('/')
-    expect(screen.getAllByRole('link', { name: 'سرورهاب' })).toHaveLength(2)
+    expect(screen.getAllByRole('link', { name: 'پارس سرور' })).toHaveLength(2)
     view.unmount()
     open('/dashboard')
     await screen.findByRole('heading', { name: 'خوش آمدید 👋' })
-    expect(document.querySelector('.sidebar__brand strong')?.textContent).toBe('سرورهاب')
+    expect(document.querySelector('.sidebar__brand strong')?.textContent).toBe('پارس سرور')
     expect(screen.queryByText('کلود سرور')).toBeNull()
+    expect(readFileSync('index.html', 'utf8')).toContain('<title>پارس سرور</title>')
   })
 
   it('filters wallet history by the chosen period without relabelling foreign amounts as toman', async () => {

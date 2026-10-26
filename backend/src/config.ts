@@ -47,7 +47,7 @@ const envSchema = z.object({
   SMTP_SECURE: z.string().default('false').transform((v) => v === 'true' || v === '1'),
   SMTP_USER: z.string().default(''),
   SMTP_PASSWORD: z.string().default(''),
-  SMTP_FROM: z.string().default('ServerHub <no-reply@example.com>'),
+  SMTP_FROM: z.string().default('پارس سرور <no-reply@example.com>'),
 
   PARSGREEN_SIGNATURE: z.string().default(''),
   PARSGREEN_FROM: z.string().default(''),

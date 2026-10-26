@@ -27,6 +27,7 @@ function decodeBase32(input: string): Buffer {
 }
 
 function encryptionKey(): Buffer {
+  // Persisted encryption salt: changing branding must not invalidate existing 2FA secrets.
   return scryptSync(getConfig().AUTH_SECRET, 'serverhub-auth-totp-v1', 32)
 }
 
@@ -73,8 +74,9 @@ export function verifyTotp(secret: string, code: string, now = Date.now()): bool
 }
 
 export function buildOtpAuthUri(secret: string, email: string): string {
-  const label = encodeURIComponent(`ServerHub:${email}`)
-  return `otpauth://totp/${label}?secret=${secret}&issuer=ServerHub&algorithm=SHA1&digits=6&period=30`
+  const issuer = 'پارس سرور'
+  const label = encodeURIComponent(`${issuer}:${email}`)
+  return `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`
 }
 
 export function createRecoveryCodes(): string[] {

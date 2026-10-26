@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { sendParsGreenSms } from '../../src/modules/auth/delivery.js'
+import { sendParsGreenSms, sendSmsOtp } from '../../src/modules/auth/delivery.js'
 
 vi.mock('../../src/config.js', () => ({
   getConfig: () => ({
@@ -15,6 +15,13 @@ vi.mock('../../src/config.js', () => ({
 afterEach(() => vi.unstubAllGlobals())
 
 describe('ParsGreen SOAP delivery contract', () => {
+  it('uses the new brand in login SMS without contacting a provider', async () => {
+    const request = vi.fn().mockResolvedValue(new Response('<SendGroupSMSResult>1</SendGroupSMSResult>'))
+    vi.stubGlobal('fetch', request)
+    await sendSmsOtp('+989000000000', '123456')
+    expect(request.mock.calls[0]![1].body).toContain('کد ورود پارس سرور: 123456')
+    expect(request.mock.calls[0]![1].body).not.toContain('سرورهاب')
+  })
   it('uses an empty ArrayOfString for retStr, not an array of long', async () => {
     // https://login.parsgreen.com/Api/SendSMS.asmx?WSDL declares
     // SendGroupSMS.retStr as tns:ArrayOfString (an output/reference argument).

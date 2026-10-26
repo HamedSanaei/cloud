@@ -37,9 +37,9 @@ export async function sendEmailOtp(to: string, code: string, purpose: 'login' | 
   if (!config.SMTP_HOST) throw new ProviderPermanentError('تنظیمات SMTP کامل نیست')
 
   const titles = {
-    login: 'کد ورود به سرورهاب',
-    register: 'تأیید ایمیل سرورهاب',
-    recovery: 'بازیابی رمز عبور سرورهاب',
+    login: 'کد ورود به پارس سرور',
+    register: 'تأیید ایمیل پارس سرور',
+    recovery: 'بازیابی رمز عبور پارس سرور',
   }
   const transport = nodemailer.createTransport({
     host: config.SMTP_HOST,
@@ -99,5 +99,5 @@ export async function sendParsGreenSms(to: string, message: string): Promise<{ d
 }
 
 export async function sendSmsOtp(to: string, code: string): Promise<{ developmentCode?: string }> {
-  return sendParsGreenSms(to, `کد ورود سرورهاب: ${code}\nاین کد را در اختیار دیگران قرار ندهید.`)
+  return sendParsGreenSms(to, `کد ورود پارس سرور: ${code}\nاین کد را در اختیار دیگران قرار ندهید.`)
 }

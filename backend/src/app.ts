@@ -58,7 +58,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   if (ctx.exposeDocs) {
     await app.register(swagger, {
       openapi: {
-        info: { title: 'Cloud Server API', version: '0.1.0', description: 'Cloud Server platform API (v1)' },
+        info: { title: 'پارس سرور API', version: '0.1.0', description: 'پارس سرور platform API (v1)' },
       },
     })
     await app.register(swaggerUi, { routePrefix: '/docs' })
