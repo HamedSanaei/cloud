@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { BRAND_NAME, BrandMark } from '../components/Brand'
+import { ParserverEnamadSeal } from '../components/ParserverEnamadSeal'
 
 const providers = [
   { id: 'asiatech', name: 'آسیاتک', logo: '/providers/asiatech.svg', region: 'ایران', title: 'سرور ابری ایران', tone: 'blue', bullets: ['میزبانی در دیتاسنتر آسیاتک', 'قابلیت استفاده از IPv4 و IPv6', 'پرداخت ساعتی متناسب با استفاده'] },
@@ -91,7 +92,7 @@ export function LandingPage() {
         </section>
       </main>
 
-      <footer className="landing-footer"><div className="public-container"><div><Link className="public-logo inverse" to="/"><BrandMark /><strong>{BRAND_NAME}</strong></Link><p>میزبانی ابری در ایران و خارج، با پرداخت منعطف و امکانات شبکه روز.</p></div><nav><a href="#servers">سرور ایران</a><a href="#servers">سرور خارج</a><a href="#hourly">سرور ساعتی</a><a href="#features">IPv6</a></nav><small>© {BRAND_NAME} — تمامی حقوق محفوظ است.</small></div></footer>
+      <footer className="landing-footer"><div className="public-container"><div><Link className="public-logo inverse" to="/"><BrandMark /><strong>{BRAND_NAME}</strong></Link><p>میزبانی ابری در ایران و خارج، با پرداخت منعطف و امکانات شبکه روز.</p><ParserverEnamadSeal /></div><nav><a href="#servers">سرور ایران</a><a href="#servers">سرور خارج</a><a href="#hourly">سرور ساعتی</a><a href="#features">IPv6</a></nav><small>© {BRAND_NAME} — تمامی حقوق محفوظ است.</small></div></footer>
     </div>
   )
 }
