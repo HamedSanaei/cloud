@@ -78,7 +78,14 @@
 .landing-footer nav { display: flex; flex-wrap: wrap; gap: 18px 28px; justify-content: flex-start; color: #c6d2df; font-size: 14px; padding-top: 8px; }
 .landing-footer nav a:hover { color: white; }
 .landing-footer-trust { justify-self: end; width: 160px; text-align: center; }
-.landing-footer-trust img { display: block; max-width: 100%; height: auto; }
+.parserver-enamad-seal { display: block; width: 160px; max-width: 100%; min-height: 160px; padding: 12px; border: 1px solid #dce5ef; border-radius: 12px; background: white; color: #172b4d; }
+.parserver-enamad-seal__image { width: 100%; }
+.parserver-enamad-seal__image > a { display: block; }
+.landing-footer-trust .parserver-enamad-seal img { display: block; width: 100%; max-width: 100%; height: auto; }
+.parserver-enamad-seal__notice { min-height: 134px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+.landing-footer .parserver-enamad-seal__notice p { margin: 0; color: #52657e; font-size: 12px; line-height: 1.8; }
+.parserver-enamad-seal__notice a { color: #1f5bd0; font-size: 12px; font-weight: 700; line-height: 1.8; text-decoration: underline; text-underline-offset: 3px; }
+.parserver-enamad-seal__notice button { padding: 5px 10px; border: 1px solid #d4dfeb; border-radius: 6px; background: #f8fbff; color: #315375; font: inherit; font-size: 12px; cursor: pointer; }
 .landing-footer small { grid-column: 1 / -1; text-align: center; color: #70849a; border-top: 1px solid #24405e; padding-top: 24px; }
 @media (max-width: 720px) {
   .landing-footer > .public-container { row-gap: 28px; }
