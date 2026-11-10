@@ -36,6 +36,9 @@ export function WalletRecharge() {
       <form className="form-stack" onSubmit={e => { e.preventDefault(); void perform(async () => {
         const value = Number(amount)
         if (!Number.isSafeInteger(value) || value <= 0 || !gateway) throw new Error('مبلغ صحیح مثبت و درگاه معتبر انتخاب کنید')
+        if (gateway === 'tabapay' && (value < 10_000 || value > 50_000_000)) {
+          throw new Error('مبلغ شارژ با تاباپی باید بین ۱۰٬۰۰۰ تا ۵۰٬۰۰۰٬۰۰۰ تومان باشد')
+        }
         const response = await platformPost<{ paymentUrl: string }>('/recharge', { amountMinor: value, gateway }, key.current)
         const url = new URL(response.paymentUrl)
         if (url.protocol !== 'https:') throw new Error('لینک امن پرداخت در دسترس نیست؛ وضعیت درخواست را بررسی کنید')
@@ -43,7 +46,7 @@ export function WalletRecharge() {
       }) }}>
         <p>مبلغ به تومان است. تأیید درگاه، موجودی همین حساب را در سایت و ربات به‌روز می‌کند.</p>
         <Input label="مبلغ (تومان)" inputMode="numeric" required disabled={busy} value={amount} onChange={e => { setAmount(e.target.value); setPayment(''); key.current = crypto.randomUUID() }} />
-        <Select label="درگاه پرداخت" required disabled={busy} value={gateway} onChange={e => { setGateway(e.target.value); setPayment(''); key.current = crypto.randomUUID() }}><option value="">انتخاب کنید</option>{gateways.map(item => <option key={item}>{item}</option>)}</Select>
+        <Select label="درگاه پرداخت" required disabled={busy} value={gateway} onChange={e => { setGateway(e.target.value); setPayment(''); key.current = crypto.randomUUID() }}><option value="">انتخاب کنید</option>{gateways.map(item => <option key={item} value={item}>{item === 'tabapay' ? 'تاباپی' : item}</option>)}</Select>
         {!busy && !gateways.length && <p role="status">درگاه سازگار با کیف پول در دسترس نیست.</p>}
         {error && <p role="alert" className="platform-error">{error}</p>}
         <Button type="submit" disabled={busy || !gateway || !amount || !!payment}>دریافت لینک پرداخت امن</Button>
