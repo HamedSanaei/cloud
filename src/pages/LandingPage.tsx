@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { BRAND_NAME, BrandMark } from '../components/Brand'
 import { ParserverEnamadSeal } from '../components/ParserverEnamadSeal'
+import { ParserverTabaPaySeal } from '../components/ParserverTabaPaySeal'
 
 const providers = [
   { id: 'asiatech', name: 'آسیاتک', logo: '/providers/asiatech.svg', region: 'ایران', title: 'سرور ابری ایران', tone: 'blue', bullets: ['میزبانی در دیتاسنتر آسیاتک', 'قابلیت استفاده از IPv4 و IPv6', 'پرداخت ساعتی متناسب با استفاده'] },
@@ -101,7 +102,10 @@ export function LandingPage() {
             <p>میزبانی ابری در ایران و خارج، با پرداخت منعطف و امکانات شبکه روز.</p>
           </div>
           <nav aria-label={`خدمات ${BRAND_NAME}`}><a href="#servers">سرور ایران</a><a href="#servers">سرور خارج</a><a href="#hourly">سرور ساعتی</a><a href="#features">IPv6</a></nav>
-          <div className="landing-footer-trust" aria-label="نماد اعتماد الکترونیکی"><ParserverEnamadSeal /></div>
+          <div className="landing-footer-trust" aria-label="نمادهای اعتماد">
+            <ParserverEnamadSeal />
+            <ParserverTabaPaySeal />
+          </div>
           <small>© {BRAND_NAME} — تمامی حقوق محفوظ است.</small>
         </div>
       </footer>
