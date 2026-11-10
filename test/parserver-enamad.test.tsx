@@ -6,9 +6,9 @@ import { AuthProvider } from '../src/auth/AuthContext'
 import { LandingPage } from '../src/pages/LandingPage'
 import { ParserverEnamadSeal, PARSERVER_ENAMAD_HTML } from '../src/components/ParserverEnamadSeal'
 
-const code = 'vjF6ISz8Uxq8wxJBmjcMt1su8BMySoWe'
-const href = `https://trustseal.enamad.ir/?id=8381321&Code=${code}`
-const imgSrc = `https://trustseal.enamad.ir/logo.aspx?id=8381321&Code=${code}`
+const code = 'qAgsd2UnHkJB0JD4tk3jLsfi4WbpYfLk'
+const href = `https://trustseal.enamad.ir/?id=8506441&Code=${code}`
+const imgSrc = `https://trustseal.enamad.ir/logo.aspx?id=8506441&Code=${code}`
 
 afterEach(() => vi.restoreAllMocks())
 
