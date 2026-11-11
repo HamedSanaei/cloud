@@ -76,6 +76,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--canvas);
   color: var(--ink);
 }
@@ -187,6 +188,13 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.sidebar__brand .sidebar__tagline {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.7;
+}
+
 .sidebar__brand span {
   margin-top: 3px;
   color: var(--faint);
@@ -203,6 +211,24 @@ textarea:focus-visible {
   padding: 13px 12px;
 }
 
+.sidebar-settings > summary { cursor: pointer; list-style: none; }
+.sidebar-settings > summary::-webkit-details-marker { display: none; }
+.sidebar-settings > a { width: calc(100% - 18px); margin-inline-start: 18px; font-size: 14px; }
+.integration-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  margin-block-end: 20px;
+  background: var(--brand-50);
+  border: 1px solid var(--brand-200);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+}
+.server-confirmation { border: 1px solid var(--danger); border-radius: var(--radius-md); padding: 16px; }
+
 .nav-group + .nav-group {
   margin-top: 12px;
 }
@@ -210,15 +236,17 @@ textarea:focus-visible {
 .nav-group__label {
   display: block;
   padding: 6px 12px 7px;
-  color: var(--faint);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.6;
 }
 
 .nav-item {
   position: relative;
   display: flex;
   width: 100%;
-  min-height: 42px;
+  min-height: 44px;
   align-items: center;
   gap: 11px;
   margin: 2px 0;
@@ -228,10 +256,15 @@ textarea:focus-visible {
   background: transparent;
   color: var(--ink);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 500;
+  line-height: 1.6;
   text-align: right;
   transition: 160ms ease;
+}
+
+.nav-item > svg {
+  flex-shrink: 0;
 }
 
 .nav-item:hover {
@@ -262,8 +295,8 @@ textarea:focus-visible {
 }
 
 .nav-item--compact {
-  min-height: 38px;
-  font-size: 12px;
+  min-height: 40px;
+  font-size: 14px;
 }
 
 .nav-item--danger:hover {
@@ -274,8 +307,10 @@ textarea:focus-visible {
 .sidebar__version {
   display: block;
   padding: 12px 20px 18px;
-  color: var(--faint);
-  font-size: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.6;
   text-align: center;
 }
 
@@ -475,6 +510,13 @@ textarea:focus-visible {
   box-shadow: var(--shadow-lg);
 }
 
+.popover--profile {
+  /* The avatar is at the left edge of the RTL topbar: expand inward. */
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+  width: min(240px, calc(100vw - 32px));
+}
+
 .popover--notifications {
   inset-inline-start: auto;
   inset-inline-end: 0;
@@ -523,6 +565,15 @@ textarea:focus-visible {
 .popover__user strong,
 .popover__user small {
   display: block;
+}
+
+.popover__user span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.popover__user > svg {
+  flex-shrink: 0;
 }
 
 .popover__user strong {
@@ -1452,6 +1503,8 @@ textarea:focus-visible {
 }
 
 .stepper {
+  --stepper-circle-size: 34px;
+  --stepper-line-gap: 4px;
   display: flex;
   padding: 22px 24px 20px;
   border-block: 1px solid var(--border);
@@ -1463,6 +1516,7 @@ textarea:focus-visible {
   position: relative;
   display: flex;
   flex: 1;
+  min-width: 0;
   flex-direction: column;
   align-items: center;
   gap: 8px;
@@ -1473,8 +1527,9 @@ textarea:focus-visible {
   position: relative;
   z-index: 2;
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: var(--stepper-circle-size);
+  height: var(--stepper-circle-size);
+  flex-shrink: 0;
   border: 1px solid var(--border-strong);
   border-radius: 50%;
   background: var(--surface);
@@ -1487,15 +1542,13 @@ textarea:focus-visible {
 .stepper__line {
   position: absolute;
   z-index: 1;
-  top: 16px;
-  right: 50%;
-  width: 100%;
+  /* Each item owns its incoming connector; logical end points to the previous
+     item in both RTL and LTR. Leave a small gap at each circle's edge. */
+  top: calc(var(--stepper-circle-size) / 2 - 1px);
+  inset-inline-end: calc(50% + var(--stepper-circle-size) / 2 + var(--stepper-line-gap));
+  width: calc(100% - var(--stepper-circle-size) - 2 * var(--stepper-line-gap));
   height: 2px;
   background: var(--border);
-}
-
-.stepper__item:first-child .stepper__line {
-  display: none;
 }
 
 .stepper__label {
@@ -2108,6 +2161,16 @@ textarea:focus-visible {
 }
 
 .two-factor-settings { display: grid; gap: 18px; }
+.platform-inline { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-block: 18px; }
+.platform-inline > .field { flex: 1; min-width: min(240px, 100%); }
+.platform-error, .platform-result { padding: 16px; border-radius: 12px; background: var(--danger-soft); color: var(--danger); }
+.platform-result { background: var(--success-soft); color: var(--success); }
+.platform-servers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 16px; }
+.platform-servers article { display: grid; gap: 12px; border: 1px solid var(--border); padding: 18px; border-radius: 12px; overflow-wrap: anywhere; }
+.platform-history { display: grid; gap: 10px; margin-block: 18px; }
+.platform-history article { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; padding: 14px; border-bottom: 1px solid var(--border); }
+.platform-history time { color: var(--muted); font-size: 12px; }
+.platform-manager { margin-block: 20px; padding: 18px; border-radius: 12px; background: var(--surface-muted); }
 .muted-copy { color: var(--muted); line-height: 1.9; }
 .security-status { display: flex; align-items: center; gap: 9px; padding: 13px 15px; border-radius: var(--radius-md); }
 .security-status--enabled { color: var(--success); background: var(--success-soft); }

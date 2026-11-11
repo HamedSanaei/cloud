@@ -1,26 +1,33 @@
 #!/usr/bin/env bash
-# tofan-cloud status — quick health + version summary on the production server.
-# Usage: sudo bash status.sh   (or run as a user with access to /opt/tofan/cloud + docker)
+# Read-only status on the explicitly selected target; failure exits nonzero.
 set -Eeuo pipefail
 
+PROJECT=tofan-cloud
 COMPOSE_DIR="${COMPOSE_DIR:-/opt/tofan/cloud}"
 CLOUD_PORT="${CLOUD_PORT:-8540}"
-CONTAINER="tofan-cloud"
-FINAL="${COMPOSE_DIR}/compose.yml"
 META="${COMPOSE_DIR}/deployed.version"
+failed=0
 
-echo "== container status =="
-docker ps -a --filter "name=${CONTAINER}" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}' 2>/dev/null || echo "(container not found)"
+printf '== shared production container status ==\n'
+docker ps -a --filter "label=com.docker.compose.project=${PROJECT}" \
+  --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}' || failed=1
 
-echo
-echo "== image tag (from compose) =="
-grep -E '^\s+image:' "${FINAL}" 2>/dev/null | tr -d ' ' || echo "(no compose.yml yet)"
+printf '\n== last healthy release metadata ==\n'
+if [[ -f "$META" ]]; then cat "$META"; else printf 'No successful release recorded\n'; failed=1; fi
+sha="$(awk -F= '$1=="sha" {print $2}' "$META" 2>/dev/null || true)"
+for container in "$PROJECT" "${PROJECT}-api" "${PROJECT}-worker"; do
+  state="$(docker inspect --format '{{.State.Running}}:{{index .Config.Labels "org.opencontainers.image.revision"}}' "$container" 2>/dev/null || true)"
+  printf '%s: %s\n' "$container" "${state:-missing}"
+  [[ "$sha" =~ ^[0-9a-f]{40}$ && "$state" == "true:${sha}" ]] || failed=1
+done
 
-echo
-echo "== deployed.version metadata =="
-cat "${META}" 2>/dev/null || echo "(no metadata yet)"
-
-echo
-echo "== local endpoint checks =="
-curl -fsS -m 3 "http://127.0.0.1:${CLOUD_PORT}/healthz" 2>/dev/null && echo " <- /healthz OK" || echo "/healthz FAILED"
-curl -fsS -o /dev/null -m 3 -w "HTTP %{http_code}\n" "http://127.0.0.1:${CLOUD_PORT}/dashboard" 2>/dev/null || echo "/dashboard FAILED"
+printf '\n== readiness and HTTP smoke ==\n'
+for endpoint in healthz api/health/ready dashboard; do
+  if curl --fail --silent --show-error --max-time 10 --output /dev/null "http://127.0.0.1:${CLOUD_PORT}/${endpoint}"; then
+    printf '%s OK\n' "$endpoint"
+  else
+    printf '%s FAILED\n' "$endpoint" >&2
+    failed=1
+  fi
+done
+exit "$failed"

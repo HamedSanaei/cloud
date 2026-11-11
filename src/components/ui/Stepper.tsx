@@ -6,8 +6,8 @@ export function Stepper({ steps, current = 0 }: { steps: string[]; current?: num
       {steps.map((step, index) => {
         const state = index < current ? 'complete' : index === current ? 'active' : 'upcoming'
         return (
-          <li className={`stepper__item stepper__item--${state}`} key={step}>
-            <span className="stepper__line" aria-hidden="true" />
+          <li className={`stepper__item stepper__item--${state}`} aria-current={state === 'active' ? 'step' : undefined} key={step}>
+            {index > 0 && <span className="stepper__line" aria-hidden="true" />}
             <span className="stepper__circle">{state === 'complete' ? <Check size={16} /> : index + 1}</span>
             <span className="stepper__label">{step}</span>
           </li>

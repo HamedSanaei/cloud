@@ -6,6 +6,7 @@ import { useApiQuery } from '../../hooks/useApiQuery'
 import { getNotifications, getWalletSummary } from '../../lib/endpoints'
 import { formatToman } from '../../lib/format'
 import { useAuth } from '../../auth/AuthContext'
+import { BRAND_NAME } from '../Brand'
 
 export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
   const [query, setQuery] = useState('')
@@ -35,7 +36,8 @@ export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
     }
     const timer = window.setInterval(refresh, 60000)
     window.addEventListener('focus', refresh)
-    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh) }
+    window.addEventListener('integration-changed', refresh)
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh); window.removeEventListener('integration-changed', refresh) }
   }, [refreshNotifications, refreshWallet])
 
   useEffect(() => {
@@ -106,7 +108,7 @@ export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
 
       <Link to="/wallet" className="wallet-summary">
         <WalletCards size={19} />
-        <span><small>کیف پول پیش‌فرض</small><strong>{wallet.loading ? '...' : formatToman(wallet.data?.totalBalance ?? 0)}</strong></span>
+        <span><small>کیف پول پیش‌فرض</small><strong>{wallet.loading ? '...' : wallet.error || !wallet.data ? 'دریافت نشد' : formatToman(wallet.data.totalBalance)}</strong></span>
       </Link>
 
       <div className="topbar__actions">
@@ -136,10 +138,10 @@ export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
           ) : null}
         </div>
         <div className="menu-anchor">
-          <button type="button" className="avatar-button" onClick={() => setProfileOpen((value) => !value)} aria-label="منوی کاربری">{(user?.firstName || user?.email || 'ک').slice(0, 1)}</button>
+          <button type="button" className="avatar-button" onClick={() => setProfileOpen((value) => !value)} aria-label="منوی کاربری" aria-expanded={profileOpen} aria-controls="profile-menu">{(user?.firstName || user?.email || 'ک').slice(0, 1)}</button>
           {profileOpen ? (
-            <div className="popover popover--profile">
-              <div className="popover__user"><UserRound size={20} /><span><strong>{[user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'کاربر سرورهاب'}</strong><small>{user?.email || user?.mobile || 'حساب کاربری'}</small></span></div>
+            <div className="popover popover--profile" id="profile-menu">
+              <div className="popover__user"><UserRound size={20} /><span><strong>{[user?.firstName, user?.lastName].filter(Boolean).join(' ') || `کاربر ${BRAND_NAME}`}</strong><small>{user?.email || user?.mobile || 'حساب کاربری'}</small></span></div>
               {accountLinks.map(({ label, path, icon: Icon }) => (
                 <Link key={path} to={path} onClick={() => setProfileOpen(false)}><Icon size={17} />{label}</Link>
               ))}

@@ -3,7 +3,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Build — install deps, type-check, and produce the production build
 # ---------------------------------------------------------------------------
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 
 WORKDIR /app
 
@@ -37,6 +37,7 @@ LABEL org.opencontainers.image.created="${IMAGE_CREATED}"
 LABEL org.opencontainers.image.revision="${IMAGE_REVISION}"
 LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
 LABEL org.opencontainers.image.title="tofan-cloud"
+LABEL io.servercloud.platform-contract="1"
 
 # Remove the default nginx site and any default content
 RUN rm -f /etc/nginx/conf.d/default.conf \

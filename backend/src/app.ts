@@ -17,6 +17,7 @@ import type { SessionUser } from './modules/auth/service.js'
 import { AUTH_COOKIE } from './http/auth.js'
 import { registerHealthRoutes } from './modules/health/routes.js'
 import { registerAuthRoutes } from './modules/auth/routes.js'
+import { installPlatformIntegration } from './modules/integration/platform.js'
 import { registerUserRoutes } from './modules/users/routes.js'
 import { registerWalletRoutes } from './modules/wallets/routes.js'
 import { registerCatalogRoutes } from './modules/catalog/routes.js'
@@ -57,7 +58,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   if (ctx.exposeDocs) {
     await app.register(swagger, {
       openapi: {
-        info: { title: 'Cloud Server API', version: '0.1.0', description: 'Cloud Server platform API (v1)' },
+        info: { title: 'پارس سرور API', version: '0.1.0', description: 'پارس سرور platform API (v1)' },
       },
     })
     await app.register(swaggerUi, { routePrefix: '/docs' })
@@ -135,6 +136,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   })
 
   // ---- routes ---------------------------------------------------------------
+  installPlatformIntegration(app, ctx)
   const v1 = {
     prefix: '/api/v1',
     ctx,

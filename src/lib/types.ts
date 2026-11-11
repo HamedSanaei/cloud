@@ -14,6 +14,8 @@ export interface DashboardSummary {
 
 export interface Server {
   id: string
+  /** Canonical management identity; never inferred from a legacy database row. */
+  platformServerId?: string
   name: string
   status: ServerStatus
   datacenter: string
@@ -38,6 +40,8 @@ export interface CreateServerPayload {
   os: string
   walletId?: string
   billingPeriod: BillingPeriod
+  pricing?: { expectedMinor: number; expectedCurrency: string }
+  idempotencyKey?: string
 }
 
 export type BillingPeriod = 'hourly' | 'daily' | 'monthly'
@@ -62,11 +66,13 @@ export interface StorefrontOffer {
   trafficGb: number | null
   operatingSystems: Array<{ id: string; label?: string; family?: string }>
   prices: Array<{ period: BillingPeriod; totalRial: number; billingCycle: string; contractTerm?: string | number }>
+  canonicalPricing?: { expectedMinor: number; expectedCurrency: string }
 }
 
 export interface StorefrontCatalog {
   datacenters: StorefrontDatacenter[]
   offers: StorefrontOffer[]
+  source?: 'platform'
 }
 
 export interface IpAddress {
@@ -130,6 +136,7 @@ export interface Transaction {
   amount: number
   date: string
   status: string
+  formattedAmount?: string
 }
 
 export interface Invoice {
@@ -148,6 +155,8 @@ export interface ChargeRequest {
   amount: number
   status: string
   date: string
+  currency?: string
+  formattedAmount?: string
 }
 
 export type TicketStatus = 'pending' | 'review' | 'answered' | 'closed'

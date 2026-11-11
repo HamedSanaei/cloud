@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # =============================================================================
-# One-time bootstrap for the tofan-cloud deployment ON the production server.
-# Run manually (as root / sudo) exactly once before the first CI deployment:
+# One-time bootstrap on the authorized shared production deployment target.
+# Run manually as root; this does not deploy or restart any application:
 #
-#   sudo env CLOUD_PORT=8540 bash server-bootstrap.sh
+#   sudo bash server-bootstrap.sh
 #
 # Safety:
 #   - checks Docker + Docker Compose exist
 #   - checks the selected CLOUD_PORT is free; FAILS safely (never kills the
 #     process holding it) and tells you to pick another port
-#   - touches ONLY /opt/tofan/cloud (never Vendora or other services)
+#   - touches ONLY the selected COMPOSE_DIR, never unrelated services
 #   - installs/updates ONLY the Cloud deploy scripts
 #   - uses restrictive permissions (no chmod 777)
 #   - does NOT open the application port publicly (compose always binds 127.0.0.1)
@@ -19,6 +19,17 @@ set -Eeuo pipefail
 
 COMPOSE_DIR="${COMPOSE_DIR:-/opt/tofan/cloud}"
 CLOUD_PORT="${CLOUD_PORT:-8540}"
+# Existing production: install recovery integration only, without probing the
+# occupied web port or creating/changing secrets and release metadata.
+RECOVERY_ONLY=0
+case "${1:-}" in
+  --recovery-only) RECOVERY_ONLY=1 ;;
+  "") ;;
+  *) printf 'Usage: server-bootstrap.sh [--recovery-only]\n' >&2; exit 1 ;;
+esac
+[[ "$COMPOSE_DIR" =~ ^/[A-Za-z0-9._/-]+$ && "$COMPOSE_DIR" != *..* ]] || {
+  echo 'COMPOSE_DIR must be an absolute path without whitespace or traversal' >&2; exit 1;
+}
 
 die()  { printf "[XX] %s\n" "$*" >&2; exit 1; }
 info() { printf "[i] %s\n" "$*"; }
@@ -33,8 +44,58 @@ info "Local port     : ${CLOUD_PORT}"
 
 # --- 1) Docker + Docker Compose ------------------------------------------------
 command -v docker >/dev/null 2>&1 || die "docker not found on this server — install Docker first."
+for dependency in openssl flock gpg curl python3 systemctl; do
+  command -v "$dependency" >/dev/null 2>&1 || die "Required dependency missing: $dependency"
+done
 docker compose version >/dev/null 2>&1 || die "docker compose (v2) not available — install the compose plugin first."
 good "docker + docker compose available"
+
+install_recovery() {
+  local source_dir
+  source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  [[ -d "$COMPOSE_DIR" ]] || die "Existing deployment directory required"
+  exec 9>"$COMPOSE_DIR/.deployment.lock"
+  flock -n 9 || die "Deployment/recovery is active; retry bootstrap later"
+  install -d -o root -g root -m 0755 "$COMPOSE_DIR/scripts"
+  for script in reconcile-runtime.sh runtime-reconcile.py; do
+    [[ -f "$source_dir/$script" ]] || die "Missing recovery bundle: $script"
+    if [[ "$source_dir/$script" != "$COMPOSE_DIR/scripts/$script" ]]; then
+      install -m 0755 -o root -g root "$source_dir/$script" "$COMPOSE_DIR/scripts/$script"
+    fi
+  done
+  cat > /etc/systemd/system/tofan-cloud-reconcile.service <<UNIT
+[Unit]
+Description=Recover verified existing tofan-cloud PostgreSQL and Redis
+Requires=docker.service
+After=docker.service
+PartOf=docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=COMPOSE_DIR=${COMPOSE_DIR}
+ExecStart=/bin/bash ${COMPOSE_DIR}/scripts/reconcile-runtime.sh
+TimeoutStartSec=900
+Restart=on-failure
+RestartSec=15
+UMask=0077
+
+[Install]
+WantedBy=docker.service multi-user.target
+UNIT
+  systemctl daemon-reload
+  # Deliberately not --now: installation must not start/stop live containers.
+  systemctl enable tofan-cloud-reconcile.service
+  flock -u 9
+  exec 9>&-
+  good "Recovery installed for boot and Docker restarts (not started)"
+}
+
+if (( RECOVERY_ONLY )); then
+  install_recovery
+  exit 0
+fi
 
 # --- 2) Verify the selected port is free (bind to 127.0.0.1 only) --------------
 # Do NOT kill or change whatever is using it — fail safely and ask for another port.
@@ -48,7 +109,7 @@ if command -v ss >/dev/null 2>&1 && ss -lnt 2>/dev/null | grep -E "[:.]${CLOUD_P
 elif command -v netstat >/dev/null 2>&1 && netstat -lnt 2>/dev/null | grep -E "[:.]${CLOUD_PORT}\b" >/dev/null; then
   port_occupied=1
   listeners="$(netstat -lntp 2>/dev/null | grep -E "[:.]${CLOUD_PORT}\b")"
-elif (exec 3<>/dev/tcp/127.0.0.1/${CLOUD_PORT}) 2>/dev/null; then
+elif (exec 3<>"/dev/tcp/127.0.0.1/${CLOUD_PORT}") 2>/dev/null; then
   exec 3<&- 3>&- 2>/dev/null || true
   port_occupied=1
   listeners="127.0.0.1:${CLOUD_PORT} is accepting TCP connections"
@@ -61,7 +122,7 @@ if (( port_occupied )); then
   echo
   echo "     The tofan-cloud deployment uses 127.0.0.1:${CLOUD_PORT} only."
   echo "     Select a different, free port and re-run, e.g.:"
-  echo "       sudo env CLOUD_PORT=8744 bash server-bootstrap.sh"
+  echo "       sudo env CLOUD_PORT=18744 bash server-bootstrap.sh"
   die "Port ${CLOUD_PORT} is occupied — nothing was changed."
 fi
 
@@ -81,7 +142,7 @@ mkdir -p "${COMPOSE_DIR}/scripts"
 mkdir -p "${COMPOSE_DIR}/backups"
 install -d -o root -g root -m 0755 "${COMPOSE_DIR}"
 install -d -o root -g root -m 0755 "${COMPOSE_DIR}/scripts"
-install -d -o root -g root -m 0755 "${COMPOSE_DIR}/backups"
+install -d -o root -g root -m 0700 "${COMPOSE_DIR}/backups"
 
 # --- 4) Install/update only the Cloud deploy script -----------------------------
 SCRIPT_SRC="$([ -f "$(dirname "${BASH_SOURCE[0]}")/deploy.sh" ] && echo "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/deploy.sh" || echo '')"
@@ -96,31 +157,44 @@ fi
 # Only created when missing; existing values are never overwritten.
 ENV_FILE="${COMPOSE_DIR}/.env"
 if [[ ! -f "${ENV_FILE}" ]]; then
+  database_password="$(openssl rand -hex 32)"
+  auth_secret="$(openssl rand -hex 32)"
+  backup_key="$(openssl rand -hex 32)"
   install -m 0600 -o root -g root /dev/null "${ENV_FILE}"
   {
-    echo "# tofan-cloud production secrets — keep this file private (chmod 600)."
+    echo "# tofan-cloud production secrets — never commit; chmod 600."
     echo "# docker compose reads this file automatically from ${COMPOSE_DIR}."
     echo
     echo "# --- database / redis ---"
-    echo "DATABASE_URL=postgres://cloud:CHANGE_ME_DB_PASSWORD@cloud-postgres:5432/cloud"
+    echo "DATABASE_URL=postgres://cloud:${database_password}@cloud-postgres:5432/cloud"
     echo "REDIS_URL=redis://cloud-redis:6379"
-    echo "POSTGRES_PASSWORD=CHANGE_ME_DB_PASSWORD"
+    echo "POSTGRES_PASSWORD=${database_password}"
     echo
     echo "# --- auth ---"
-    echo "AUTH_SECRET=$(openssl rand -hex 32 2>/dev/null || echo CHANGE_ME_AUTH_SECRET)"
+    echo "AUTH_SECRET=${auth_secret}"
     echo "COOKIE_SECURE=true"
     echo "CORS_ORIGIN="
     echo
-    echo "# Provider credentials belong in configuration.toml (read-only bind mount)."
-    echo
-    echo "# --- business ---"
-    echo "QUOTE_TTL_MINUTES=15"
-    echo "RENEWAL_LOOKAHEAD_DAYS=3"
-    echo "RENEWAL_GRACE_DAYS=3"
+    echo "# Canonical platform MUST be deployed in this same environment first."
+    echo "APP_ENV=production"
+    echo "PLATFORM_API_URL=http://cloud-platform-api:8000"
+    echo "AUTH_DELIVERY_MODE=live"
+    echo "FRONTEND_URL="
+    echo "SMTP_HOST="
+    echo "SMTP_PORT=587"
+    echo "SMTP_USER="
+    echo "SMTP_PASSWORD="
+    echo "SMTP_FROM="
+    echo "PARSGREEN_SIGNATURE="
+    echo "PARSGREEN_FROM="
+    echo "GOOGLE_CLIENT_ID="
+    echo "GOOGLE_CLIENT_SECRET="
+    echo "BACKUP_ENCRYPTION_KEY=${backup_key}"
     echo "LOG_LEVEL=info"
   } >"${ENV_FILE}"
   chmod 600 "${ENV_FILE}"
-  good "created infrastructure secrets template: ${ENV_FILE} (EDIT IT: set POSTGRES_PASSWORD, AUTH_SECRET)"
+  unset database_password auth_secret backup_key
+  good "created private infrastructure secrets; configure FRONTEND_URL and live authentication delivery"
 else
   info ".env already exists — leaving it untouched."
 fi
@@ -134,6 +208,8 @@ else
   info "deployed.version already exists — leaving it untouched."
 fi
 
+install_recovery
+
 echo
 echo "=== tofan-cloud server bootstrap complete ==="
 echo "  Deployment dir  : ${COMPOSE_DIR}"
@@ -142,22 +218,20 @@ echo "  (application port is loopback-only; PostgreSQL/Redis/API have NO public 
 echo
 echo "IMPORTANT — before the first deploy:"
 echo "  1. EDIT ${COMPOSE_DIR}/.env and set:"
-echo "       POSTGRES_PASSWORD   (long random password)"
-echo "       AUTH_SECRET         (already randomized if openssl is available)"
-echo "  2. Install private configuration.toml from configuration.example.toml:"
-echo "       install -o root -g 10001 -m 0640 configuration.toml ${COMPOSE_DIR}/configuration.toml"
-echo "     Keep provider ordering_enabled=false during read-only discovery."
+echo "       FRONTEND_URL, CORS_ORIGIN and live SMTP/SMS/OAuth settings"
+echo "     Database/auth/backup keys were generated only when the file was absent."
+echo "  2. Deploy the matching canonical Python platform with its own private TOML."
+echo "     This website no longer receives provider credentials or a provider TOML."
+echo "     Staging updates this SAME live runtime; do not create a second stack or bot."
 echo
 echo "Next steps:"
-echo "  1. INSPECT your existing ingress/Vendora setup, then add a dedicated"
-echo "     virtual host for cloud.tofanservice.ir -> http://127.0.0.1:${CLOUD_PORT}"
-echo "     (see docs/DEPLOYMENT.md — do not modify the Vendora vhost)."
-echo "  2. Add the Cloudflare DNS record: A, name=cloud, target=<server IP>,"
-echo "     Proxied. SSL/TLS = Full (strict)."
-echo "  3. Create GitHub Actions Secrets: DEPLOY_HOST, DEPLOY_PORT,"
-echo "     DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS"
-echo "     (+ GHCR_USERNAME & GHCR_TOKEN if the GHCR package is private)."
-echo "  4. Trigger the 'Cloud Production Pipeline' workflow."
+echo "  1. Configure the website HTTPS virtual host -> 127.0.0.1:${CLOUD_PORT}."
+echo "     Do not alter another application's ingress or restart unrelated services."
+echo "  2. Configure staging/production GitHub Environment secrets for this SAME target:"
+echo "     DEPLOY_HOST, DEPLOY_PORT, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS."
+echo "     Set Environment variables DEPLOY_PATH, CLOUD_PORT and PUBLIC_URL."
+echo "  3. Staging automatically updates the live website after CI."
+echo "     The main lane remains manual with explicit confirmation and reviewer approval."
 echo
 echo "  NOTE: The very FIRST deploy can be run with SKIP_PUBLIC_HEALTHCHECK=1"
 echo "        if DNS/reverse-proxy/Cloudflare are not ready yet. All normal"

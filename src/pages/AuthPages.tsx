@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { ArrowLeft, Check, Eye, EyeOff, KeyRound, LockKeyhole, Mail, Phone, RefreshCw, Server, ShieldCheck } from 'lucide-react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { BRAND_NAME, BrandMark } from '../components/Brand'
 import {
   getGoogleLoginUrl,
   resendChallenge,
@@ -20,13 +21,9 @@ import {
 type AuthIntent = 'login' | 'register' | 'forgot'
 type LoginMethod = 'email' | 'phone'
 
-function BrandMark() {
-  return <span className="public-brand-mark" aria-hidden="true"><i /><i /><i /></span>
-}
-
 function AuthBrandPanel() {
   return (
-    <aside className="auth-brand-panel" aria-label="مزایای سرورهاب">
+    <aside className="auth-brand-panel" aria-label={`مزایای ${BRAND_NAME}`}>
       <div>
         <h2>زیرساخت شما، همیشه در دسترس</h2>
         <p>مدیریت آسان سرورها، دامنه‌ها و سرویس‌های ابری در یک پنل یکپارچه</p>
@@ -195,7 +192,7 @@ export function AuthPage({ intent }: { intent: AuthIntent }) {
         <AuthBrandPanel />
         <section className="auth-card">
           <header className="auth-card-header">
-            <Link className="public-logo" to="/"><BrandMark /><strong>سرورهاب</strong></Link>
+            <Link className="public-logo" to="/"><BrandMark /><strong>{BRAND_NAME}</strong></Link>
             <span><ShieldCheck size={17} /> ورود امن</span>
           </header>
 
@@ -245,7 +242,7 @@ export function AuthPage({ intent }: { intent: AuthIntent }) {
                   {intent === 'login' && method === 'email' && <Link className="auth-text-link" to="/forgot-password">رمز عبور را فراموش کرده‌اید؟</Link>}
                   {error && <p className="auth-error" role="alert">{error}</p>}
                   <button className="auth-primary-button" disabled={busy} type="submit">{busy ? <RefreshCw className="spin" size={19} /> : intent === 'register' ? 'ساخت حساب' : intent === 'forgot' ? 'ارسال کد بازیابی' : method === 'phone' ? 'ارسال کد پیامکی' : 'ورود به حساب'}</button>
-                  {intent === 'login' && method === 'email' && <button className="auth-google-button" disabled={busy} onClick={googleLogin} type="button"><GoogleIcon /> ورود با حساب گوگل</button>}
+                  {(intent === 'register' || (intent === 'login' && method === 'email')) && <button className="auth-google-button" disabled={busy} onClick={googleLogin} type="button"><GoogleIcon /> {intent === 'register' ? 'ادامه با گوگل' : 'ورود با حساب گوگل'}</button>}
                   <p className="auth-switch-copy">{intent === 'register' ? <>حساب دارید؟ <Link to="/login">وارد شوید</Link></> : intent === 'login' ? <>حساب ندارید؟ <Link to="/register">ثبت‌نام کنید</Link></> : <Link to="/login"><ArrowLeft size={15} /> بازگشت به ورود</Link>}</p>
                 </form>
               ) : (

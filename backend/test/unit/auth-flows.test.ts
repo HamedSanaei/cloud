@@ -1,8 +1,21 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { loadConfig } from '../../src/config.js'
 import { maskEmail, maskMobile, normalizeIranMobile } from '../../src/modules/auth/delivery.js'
-import { createRecoveryCodes, createTotpSecret, decryptTotpSecret, encryptTotpSecret, generateTotpCode, hashRecoveryCode, verifyTotp } from '../../src/modules/auth/totp.js'
+import { buildOtpAuthUri, createRecoveryCodes, createTotpSecret, decryptTotpSecret, encryptTotpSecret, generateTotpCode, hashRecoveryCode, verifyTotp } from '../../src/modules/auth/totp.js'
+
+// Auth helper tests must not load the operator's local provider credentials.
+beforeEach(() => loadConfig({ NODE_ENV: 'test', PLATFORM_API_URL: 'http://127.0.0.1:9000', AUTH_SECRET: 'fixture-only-long-auth-encryption-key' }))
 
 describe('authentication helpers', () => {
+  it('brands new authenticator enrollment without changing its protocol parameters', () => {
+    const uri = new URL(buildOtpAuthUri('JBSWY3DPEHPK3PXP', 'preview@example.test'))
+    expect(decodeURIComponent(uri.pathname.slice(1))).toBe('پارس سرور:preview@example.test')
+    expect(uri.searchParams.get('issuer')).toBe('پارس سرور')
+    expect(uri.searchParams.get('secret')).toBe('JBSWY3DPEHPK3PXP')
+    expect(uri.searchParams.get('algorithm')).toBe('SHA1')
+    expect(uri.searchParams.get('digits')).toBe('6')
+    expect(uri.searchParams.get('period')).toBe('30')
+  })
   it('normalizes Iranian mobile numbers to E.164', () => {
     expect(normalizeIranMobile('0912 345 6789')).toBe('+989123456789')
     expect(normalizeIranMobile('989123456789')).toBe('+989123456789')

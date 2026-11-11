@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   UserRound,
   WalletCards,
+  Home,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
@@ -61,9 +62,16 @@ export const accountLinks: NavItem[] = [
   { label: 'تنظیمات', path: '/settings', icon: Settings },
 ]
 
+export const settingsLinks: NavItem[] = [
+  { label: 'اتصال تلگرام', path: '/settings/telegram', icon: Network, keywords: ['ربات', 'اتصال', 'revoke'] },
+  { label: 'مدیریت پلتفرم', path: '/settings/platform-admin', icon: ShieldCheck, keywords: ['ادمین', 'موجودی مشترک'] },
+]
+
 export const allSearchItems = [
   ...navGroups.flatMap((group) => group.items),
   ...accountLinks,
+  ...settingsLinks,
+  { label: 'صفحه اصلی سایت', path: '/', icon: Home, keywords: ['لندینگ'] },
   { label: 'ایجاد سرور جدید', path: '/servers/create', icon: Package, keywords: ['خرید سرور'] },
   { label: 'ثبت دامنه جدید', path: '/domains/register', icon: Network, keywords: ['خرید دامنه'] },
   { label: 'تغییرات نسخه', path: '/changelog', icon: CircleDollarSign, keywords: ['نسخه'] },

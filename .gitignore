@@ -21,3 +21,8 @@ backend/.env.*.local
 # Runtime provider credentials
 configuration.toml
 backend/configuration.toml
+
+# Python deployment/recovery validation artifacts
+__pycache__/
+*.pyc
+.recovery-backups/

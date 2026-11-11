@@ -1,6 +1,6 @@
-# Cloud Server — Backend
+# پارس سرور — Backend
 
-Production-grade backend for the Cloud Server hosting platform. The backend is
+Production-grade backend for the Pars Server hosting platform. The backend is
 provider-agnostic: Hetzner Cloud and Leaseweb VPS/Public Cloud implement the
 same catalog, provisioning and management contract.
 
