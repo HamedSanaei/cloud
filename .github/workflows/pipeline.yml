@@ -1,4 +1,4 @@
-name: Cloud CI and Deployment
+name: Cloud CI / Manual Deployment
 
 on:
   push:
@@ -103,7 +103,7 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Verify independent pages and guided checkout
+      - name: Test console pages, admin authorization and guided checkout
         run: npm test
 
       - name: Build (Vite)
@@ -138,10 +138,11 @@ jobs:
           body="$(curl -fsS http://127.0.0.1:8901/healthz)"
           echo "$body"
           [[ "$body" == "ok" ]] || { echo "::error::unexpected /healthz body"; exit 1; }
-          echo "--- /dashboard (SPA fallback) HTTP status ---"
-          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8901/dashboard)"
-          echo "HTTP $code"
-          [[ "$code" == "200" ]] || { echo "::error::SPA route did not return 200"; exit 1; }
+          for path in /dashboard /admin /admin/orders /admin/users /admin/servers; do
+            echo "--- $path (SPA fallback) HTTP status ---"
+            code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8901${path}")"
+            [[ "$code" == "200" ]] || { echo "::error::SPA route $path returned HTTP $code"; exit 1; }
+          done
 
   # ==========================================================================
   # JOB 2 — backend-check
@@ -181,6 +182,7 @@ jobs:
       LEASEWEB_MODE: mock
       LEASEWEB_ORDERING_ENABLED: "false"
       PLATFORM_API_URL: ""
+      DATA_AUTHORITY: site
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -216,6 +218,23 @@ jobs:
         working-directory: backend
         run: npm run db:migrate
 
+      - name: Validate standalone website deployment configuration
+        env:
+          IMAGE_SHA: ghcr.io/example/cloud:ci
+          API_IMAGE_SHA: ghcr.io/example/cloud-api:ci
+          POSTGRES_PASSWORD: ci-placeholder
+          FRONTEND_URL: https://example.test
+          AUTH_SECRET: ci-smoke-secret-0123456789abcdef
+          SMTP_HOST: smtp.example.test
+          SMTP_PASSWORD: ci-placeholder
+          SMTP_FROM: no-reply@example.test
+          PARSGREEN_SIGNATURE: ci-placeholder
+          PARSGREEN_FROM: ci-placeholder
+          GOOGLE_CLIENT_ID: ci-placeholder
+          GOOGLE_CLIENT_SECRET: ci-placeholder
+          GOOGLE_REDIRECT_URI: https://example.test/api/v1/auth/google/callback
+        run: docker compose -f docker-compose.site.yml config --quiet
+
       - name: Integration tests (auth, wallets, orders, provisioning, permissions)
         working-directory: backend
         run: npm run test:integration
@@ -247,6 +266,7 @@ jobs:
             -e HOST=127.0.0.1 -e PORT=8902 \
             -e NODE_ENV=test -e DATABASE_URL="$DATABASE_URL" -e REDIS_URL="$REDIS_URL" \
             -e AUTH_SECRET=ci-smoke-secret-0123456789abcdef \
+            -e DATA_AUTHORITY=site -e PLATFORM_API_URL= \
             -e LEASEWEB_MODE=mock \
             "${IMAGE_ID}" >/dev/null
           trap 'docker rm -f tofan-cloud-api-smoke >/dev/null 2>&1 || true' EXIT
@@ -269,6 +289,9 @@ jobs:
           echo "--- /api/health/ready ---"
           curl -fsS http://127.0.0.1:8902/api/health/ready
           echo
+          echo "--- admin API must reject an unauthenticated request ---"
+          status="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8902/api/admin/console/users)"
+          [[ "$status" == 401 ]] || { echo "::error::admin API returned HTTP $status instead of 401"; exit 1; }
 
   runtime-recovery:
     name: Isolated Docker daemon recovery
@@ -356,18 +379,18 @@ jobs:
           cache-from: type=gha,scope=cloud-api
           cache-to: type=gha,scope=cloud-api,mode=max
 
-  # Staging automatically updates the SAME live runtime after CI.
-  # The main release lane remains manual and protected by owner review.
+  # This repository uses one shared live runtime. Code pushes only validate
+  # and publish immutable images; deploying either branch requires an explicit
+  # workflow_dispatch to avoid starting stopped services unintentionally.
   deploy:
     name: Deploy tested release
     needs: build-push
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/staging') ||
-      (github.event_name == 'workflow_dispatch' &&
-       ((inputs.environment == 'staging' && github.ref == 'refs/heads/staging') ||
-        (inputs.environment == 'production' && github.ref == 'refs/heads/main' && inputs.confirm_production)))
+      github.event_name == 'workflow_dispatch' &&
+      ((inputs.environment == 'staging' && github.ref == 'refs/heads/staging') ||
+       (inputs.environment == 'production' && github.ref == 'refs/heads/main' && inputs.confirm_production))
     environment: ${{ github.ref == 'refs/heads/staging' && 'staging' || 'production' }}
     concurrency:
       group: cloud-production-deploy
