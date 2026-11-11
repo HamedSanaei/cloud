@@ -67,7 +67,7 @@ function OtpField({ value, onChange, disabled }: { value: string; onChange: (val
   )
 }
 
-export function AuthPage({ intent }: { intent: AuthIntent }) {
+export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; adminEntry?: boolean }) {
   const navigate = useNavigate()
   const location = useLocation()
   const { acceptSession } = useAuth()
@@ -90,8 +90,8 @@ export function AuthPage({ intent }: { intent: AuthIntent }) {
 
   const returnTo = useMemo(() => {
     const from = (location.state as { from?: string } | null)?.from
-    return from?.startsWith('/') ? from : '/dashboard'
-  }, [location.state])
+    return adminEntry ? '/admin' : from?.startsWith('/') ? from : '/dashboard'
+  }, [location.state, adminEntry])
 
   useEffect(() => {
     setCountdown(challenge?.resendAfter ?? 0)
@@ -188,16 +188,16 @@ export function AuthPage({ intent }: { intent: AuthIntent }) {
 
   const title = challenge
     ? challenge.challengeType === 'totp' ? (recoveryMode ? 'ورود با کد بازیابی' : 'تأیید دومرحله‌ای (2FA)') : intent === 'forgot' ? 'انتخاب رمز عبور جدید' : challenge.challengeType === 'sms' ? 'تأیید شماره موبایل' : 'تأیید آدرس ایمیل'
-    : intent === 'register' ? 'ساخت حساب کاربری' : intent === 'forgot' ? 'بازیابی رمز عبور' : 'ورود به حساب کاربری'
+    : intent === 'register' ? 'ساخت حساب کاربری' : intent === 'forgot' ? 'بازیابی رمز عبور' : adminEntry ? 'ورود به پنل مدیریت' : 'ورود به حساب کاربری'
 
   const subtitle = challenge
     ? challenge.challengeType === 'totp' ? 'کد ۶ رقمی برنامه احراز هویت خود را وارد کنید.' : `کد ارسال‌شده به ${challenge.destination} را وارد کنید.`
-    : intent === 'register' ? 'برای شروع مدیریت زیرساخت، حساب امن خود را بسازید.' : intent === 'forgot' ? 'لینک بازیابی را با یک کد امن به ایمیل شما می‌فرستیم.' : 'برای مدیریت سرویس‌های ابری وارد حساب خود شوید.'
+    : intent === 'register' ? 'برای شروع مدیریت زیرساخت، حساب امن خود را بسازید.' : intent === 'forgot' ? 'لینک بازیابی را با یک کد امن به ایمیل شما می‌فرستیم.' : adminEntry ? 'با حساب مدیر پارس سرور وارد شوید.' : 'برای مدیریت سرویس‌های ابری وارد حساب خود شوید.'
 
   return (
-    <main className="auth-page" dir="rtl">
+    <main className={'auth-page' + (adminEntry ? ' auth-page--admin' : '')} dir="rtl">
       <div className="auth-layout">
-        <AuthBrandPanel />
+        {!adminEntry && <AuthBrandPanel />}
         <section className="auth-card">
           <header className="auth-card-header">
             <Link className="public-logo" to="/"><BrandMark /><strong>{BRAND_NAME}</strong></Link>

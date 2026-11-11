@@ -7,6 +7,7 @@ import { createCloudQueues, JOB_NAMES, type CloudQueues } from './jobs/queue.js'
 import { registerConfiguredProviders } from './modules/providers/registry.js'
 import { buildApp } from './app.js'
 import { assertUnifiedCutoverReady } from './modules/integration/platform.js'
+import { assertSiteAuthorityReady, isPlatformAuthority } from './modules/integration/authority.js'
 import { assertAuthenticationReady } from './modules/auth/readiness.js'
 import { retryStartup, startupFailure, waitForStartupDependencies } from './lib/startup.js'
 
@@ -14,10 +15,10 @@ async function main() {
   loadConfig()
   const config = getConfig()
   const logger = createLogger('cloud-api')
-  if (config.NODE_ENV === 'production' && config.PLATFORM_API_URL) assertAuthenticationReady()
+  if (config.NODE_ENV === 'production') assertAuthenticationReady()
   await waitForStartupDependencies(logger)
   await migrate()
-  if (!config.PLATFORM_API_URL) registerConfiguredProviders()
+  if (!isPlatformAuthority()) registerConfiguredProviders()
 
   const dbHandle = createDb()
   let queues: CloudQueues | undefined
@@ -27,7 +28,10 @@ async function main() {
     await dbHandle.pool.end().catch(() => undefined)
   }
   try {
-    await retryStartup('cutover', () => assertUnifiedCutoverReady(dbHandle.db), logger)
+    await retryStartup('cutover', async () => {
+      await assertUnifiedCutoverReady(dbHandle.db)
+      await assertSiteAuthorityReady(dbHandle.db)
+    }, logger)
     await retryStartup('api-queues', async () => {
       queues = createCloudQueues()
       try {

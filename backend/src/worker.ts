@@ -6,12 +6,13 @@ import { createWorkers, type WorkerSet } from './jobs/workers.js'
 import { registerConfiguredProviders } from './modules/providers/registry.js'
 import { migrate } from './db/migrate.js'
 import { retryStartup, startupFailure, waitForStartupDependencies } from './lib/startup.js'
+import { assertSiteAuthorityReady, isPlatformAuthority } from './modules/integration/authority.js'
 
 async function main() {
   loadConfig()
   const config = getConfig()
   const logger = createLogger('cloud-worker')
-  if (config.PLATFORM_API_URL) {
+  if (isPlatformAuthority()) {
     logger.info('Unified mode: billing and provider jobs belong to the Python platform; legacy worker disabled')
     const { promise, resolve } = Promise.withResolvers<void>()
     const idle = setInterval(() => {}, 60_000)
@@ -26,6 +27,7 @@ async function main() {
   await migrate()
   const providers = registerConfiguredProviders()
   const dbHandle = createDb()
+  await assertSiteAuthorityReady(dbHandle.db)
   let queues: CloudQueues | undefined
   let workerSet: WorkerSet | undefined
   const close = async () => {

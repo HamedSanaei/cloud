@@ -117,7 +117,9 @@ export async function createServer(payload: CreateServerPayload): Promise<Server
     if (!result.serverId) throw new Error('پاسخ ثبت سفارش معتبر نیست؛ پیش از تکرار، وضعیت سرورها را بررسی کنید.')
     return { id: result.serverId } as Server
   }
-  const created = await apiPost<Server | { data: Server }>('/servers', payload)
+  const created = await apiPost<Server | { data: Server }>('/servers', payload, {
+    headers: payload.idempotencyKey ? { 'idempotency-key': payload.idempotencyKey } : undefined,
+  })
   const server = 'data' in created ? created.data : created
   if (!server?.id) throw new Error('پاسخ سرویس ایجاد سرور معتبر نیست.')
   return server

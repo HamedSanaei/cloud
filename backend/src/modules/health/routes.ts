@@ -16,7 +16,7 @@ export const registerHealthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     } catch {
       return reply.status(503).send({ status: 'error', checks: { database: 'error' } })
     }
-    if (isProduction() && platformEnabled()) {
+    if (isProduction()) {
       try { assertAuthenticationReady() } catch {
         return reply.status(503).send({ status: 'error', checks: { database: 'ok', authentication: 'error' } })
       }

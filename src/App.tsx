@@ -13,6 +13,8 @@ import { AuthPage, GoogleCallbackPage } from './pages/AuthPages'
 import { LandingPage } from './pages/LandingPage'
 import { TelegramSettingsPage } from './pages/TelegramSettingsPage'
 import { PlatformAdminPage } from './pages/PlatformAdminPage'
+import { AdminLayout } from './admin/AdminLayout'
+import { AdminOverview, AdminOrders, AdminOrderPage, AdminUsers, AdminUserPage, AdminUserServers, AdminServers, AdminServerPage } from './admin/AdminPages'
 
 export function App() {
   return (
@@ -22,6 +24,17 @@ export function App() {
       <Route path="register" element={<AuthPage intent="register" />} />
       <Route path="forgot-password" element={<AuthPage intent="forgot" />} />
       <Route path="auth/callback" element={<GoogleCallbackPage />} />
+      <Route path="admin" element={<AdminLayout />}>
+        <Route index element={<AdminOverview />} />
+        <Route path="orders" element={<AdminOrders />} />
+        <Route path="orders/:id" element={<AdminOrderPage />} />
+        <Route path="users" element={<AdminUsers />} />
+        <Route path="users/:id" element={<AdminUserPage />} />
+        <Route path="users/:id/servers" element={<AdminUserServers />} />
+        <Route path="servers" element={<AdminServers />} />
+        <Route path="servers/:id" element={<AdminServerPage />} />
+        <Route path="*" element={<Navigate to="/admin" replace />} />
+      </Route>
       <Route element={<ProtectedRoute />}>
         <Route element={<AppShell />}>
           <Route path="dashboard" element={<DashboardPage />} />

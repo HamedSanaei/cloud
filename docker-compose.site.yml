@@ -1,0 +1,250 @@
+# Standalone first-party website authority (no Python bridge network).
+# Explicit local PostgreSQL ownership. For NEW site installations only.
+# Existing Python balances/orders/servers require the documented frozen,
+# audited migration and writer cutover before any activation.
+# Prefer deploy/scripts/deploy.sh for an existing production environment.
+name: tofan-cloud
+
+# =============================================================================
+# tofan-cloud — production deployment of the Cloud Server platform.
+#
+# Topology (all internal except the frontend):
+#   cloud        nginx SPA + /api proxy   -> binds 127.0.0.1:${CLOUD_PORT}
+#   cloud-api    Fastify API              -> internal network only
+#   cloud-worker BullMQ worker            -> internal network only
+#   cloud-postgres PostgreSQL             -> internal network only
+#   cloud-redis  Redis (BullMQ)           -> internal network only
+#
+# Public path: Cloudflare -> host ingress -> 127.0.0.1:${CLOUD_PORT} -> nginx
+#   -> /api/* to cloud-api:8000 (internal). No service is exposed publicly.
+#
+# Infrastructure/auth secrets come from /opt/tofan/cloud/.env.
+# Provider secrets live only in the read-only runtime configuration.toml mount.
+#
+# Images:
+#   IMAGE_SHA       web frontend image (e.g. ghcr.io/hamedsanaei/cloud:sha-<sha>)
+#   API_IMAGE_SHA   backend image      (e.g. ghcr.io/hamedsanaei/cloud-api:sha-<sha>)
+# =============================================================================
+
+services:
+  cloud:
+    image: ${IMAGE_SHA:?IMAGE_SHA must be set to a full GHCR image tag}
+    container_name: tofan-cloud
+    restart: unless-stopped
+    depends_on:
+      cloud-api:
+        condition: service_healthy
+    networks:
+      - tofan-cloud_net
+    ports:
+      # Bind only to loopback — the host ingress + Cloudflare are the only
+      # way the public reaches this container.
+      - "127.0.0.1:${CLOUD_PORT:-8540}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/healthz"]
+      interval: 20s
+      timeout: 4s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+        compress: "true"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+
+  cloud-api:
+    image: ${API_IMAGE_SHA:?API_IMAGE_SHA must be set to a full GHCR image tag}
+    container_name: tofan-cloud-api
+    restart: unless-stopped
+    depends_on:
+      cloud-postgres:
+        condition: service_healthy
+      cloud-redis:
+        condition: service_healthy
+    networks:
+      - tofan-cloud_net
+    environment:
+      NODE_ENV: production
+      APP_ENV: production
+      HOST: 0.0.0.0
+      PORT: "8000"
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set (postgres://...)}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL must be set (redis://...)}
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET must be set}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
+      FRONTEND_URL: ${FRONTEND_URL:?FRONTEND_URL must be set}
+      PLATFORM_API_URL: ""
+      DATA_AUTHORITY: site
+      AUTH_DELIVERY_MODE: ${AUTH_DELIVERY_MODE:-live}
+      AUTH_OTP_TTL_SECONDS: ${AUTH_OTP_TTL_SECONDS:-300}
+      AUTH_OTP_RESEND_SECONDS: ${AUTH_OTP_RESEND_SECONDS:-45}
+      AUTH_OTP_MAX_ATTEMPTS: ${AUTH_OTP_MAX_ATTEMPTS:-5}
+      AUTH_OTP_MAX_RESENDS: ${AUTH_OTP_MAX_RESENDS:-4}
+      SMTP_HOST: ${SMTP_HOST:?SMTP_HOST must be set}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:?SMTP_PASSWORD must be set}
+      SMTP_FROM: ${SMTP_FROM:?SMTP_FROM must be set}
+      PARSGREEN_SIGNATURE: ${PARSGREEN_SIGNATURE:?PARSGREEN_SIGNATURE must be set}
+      PARSGREEN_FROM: ${PARSGREEN_FROM:?PARSGREEN_FROM must be set}
+      PARSGREEN_ENDPOINT: ${PARSGREEN_ENDPOINT:-https://login.parsgreen.com/Api/SendSMS.asmx}
+      PARSGREEN_TIMEOUT_MS: ${PARSGREEN_TIMEOUT_MS:-10000}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?GOOGLE_CLIENT_ID must be set}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?GOOGLE_CLIENT_SECRET must be set}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:?GOOGLE_REDIRECT_URI must be set}
+      CLOUD_PLATFORM_CONFIG_FILE: /etc/tofan-cloud/configuration.toml
+      USDT_RATE_API_BASE_URL: ${USDT_RATE_API_BASE_URL:-https://api.abantether.com}
+      USDT_RATE_MAX_AGE_SECONDS: ${USDT_RATE_MAX_AGE_SECONDS:-300}
+      QUOTE_TTL_MINUTES: ${QUOTE_TTL_MINUTES:-15}
+      RENEWAL_LOOKAHEAD_DAYS: ${RENEWAL_LOOKAHEAD_DAYS:-3}
+      RENEWAL_GRACE_DAYS: ${RENEWAL_GRACE_DAYS:-3}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - type: bind
+        source: ${CLOUD_CONFIG_FILE:-./configuration.toml}
+        target: /etc/tofan-cloud/configuration.toml
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8000/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 4
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+        compress: "true"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  cloud-worker:
+    image: ${API_IMAGE_SHA:?API_IMAGE_SHA must be set to a full GHCR image tag}
+    container_name: tofan-cloud-worker
+    restart: unless-stopped
+    depends_on:
+      cloud-api:
+        condition: service_healthy
+      cloud-postgres:
+        condition: service_healthy
+      cloud-redis:
+        condition: service_healthy
+    networks:
+      - tofan-cloud_net
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set (postgres://...)}
+      PLATFORM_API_URL: ""
+      DATA_AUTHORITY: site
+      REDIS_URL: ${REDIS_URL:?REDIS_URL must be set (redis://...)}
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET must be set}
+      CLOUD_PLATFORM_CONFIG_FILE: /etc/tofan-cloud/configuration.toml
+      USDT_RATE_API_BASE_URL: ${USDT_RATE_API_BASE_URL:-https://api.abantether.com}
+      USDT_RATE_MAX_AGE_SECONDS: ${USDT_RATE_MAX_AGE_SECONDS:-300}
+      QUOTE_TTL_MINUTES: ${QUOTE_TTL_MINUTES:-15}
+      RENEWAL_LOOKAHEAD_DAYS: ${RENEWAL_LOOKAHEAD_DAYS:-3}
+      RENEWAL_GRACE_DAYS: ${RENEWAL_GRACE_DAYS:-3}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - type: bind
+        source: ${CLOUD_CONFIG_FILE:-./configuration.toml}
+        target: /etc/tofan-cloud/configuration.toml
+        read_only: true
+        bind:
+          create_host_path: false
+    command: ["npm", "run", "start:worker"]
+    # The shared image's HTTP healthcheck belongs to the API, not the worker.
+    healthcheck:
+      disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+        compress: "true"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  cloud-postgres:
+    image: postgres:17-alpine
+    container_name: tofan-cloud-postgres
+    restart: always
+    networks:
+      - tofan-cloud_net
+    # NO host port — reachable only inside the compose network.
+    environment:
+      POSTGRES_USER: cloud
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: cloud
+    volumes:
+      - cloud-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloud -d cloud"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+        compress: "true"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Official entrypoint initializes volume ownership, then drops to postgres.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
+
+  cloud-redis:
+    image: redis:7-alpine
+    container_name: tofan-cloud-redis
+    restart: always
+    networks:
+      - tofan-cloud_net
+    # NO host port.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - cloud-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+        compress: "true"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Official entrypoint fixes /data ownership, then drops to redis.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
+
+volumes:
+  cloud-postgres-data:
+  cloud-redis-data:
+
+networks:
+  tofan-cloud_net:
+    name: tofan-cloud_net

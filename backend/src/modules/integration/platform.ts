@@ -10,8 +10,9 @@ import { requireUser } from '../../http/auth.js'
 import { parse } from '../../http/validate.js'
 import { AppError, BadRequestError, ConflictError } from '../../lib/errors.js'
 import { storefrontProjection, type ConsoleOffer } from './storefront.js'
+import { isPlatformAuthority } from './authority.js'
 
-export function platformEnabled(): boolean { return Boolean(getConfig().PLATFORM_API_URL) }
+export function platformEnabled(): boolean { return isPlatformAuthority() }
 
 const PLATFORM_CONTRACT_VERSION = '1'
 export const REQUIRED_PLATFORM_FEATURES = ['website-link-revoke:v1', 'website-charge-requests:v1', 'website-server-delegation:v1'] as const

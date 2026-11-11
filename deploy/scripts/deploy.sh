@@ -170,6 +170,26 @@ pull_image() {
 # ---------------------------------------------------------------------------
 write_compose() {
   local img="$1" api_img="$2" out="$3" tmp
+  local platform_net_api="" platform_net_worker="" platform_net_def=""
+  local provider_env_api="" provider_env_worker="" provider_mount_api="" provider_mount_worker=""
+  if [[ "$DEPLOY_SITE" == 1 ]]; then
+    provider_env_api='      CLOUD_PLATFORM_CONFIG_FILE: /etc/tofan-cloud/configuration.toml'
+    provider_env_worker="$provider_env_api"
+    provider_mount_api=$'    volumes:
+      - type: bind
+        source: ${CLOUD_CONFIG_FILE:?CLOUD_CONFIG_FILE required}
+        target: /etc/tofan-cloud/configuration.toml
+        read_only: true
+        bind:
+          create_host_path: false'
+    provider_mount_worker="$provider_mount_api"
+  else
+    platform_net_api="      - platform-bridge"
+    platform_net_worker="$platform_net_api"
+    platform_net_def=$'  platform-bridge:
+    external: true
+    name: cloud-platform-production-bridge'
+  fi
   tmp="$(mktemp "${COMPOSE_DIR}/.compose.XXXXXX")"
   cat >"$tmp" <<YAML
 name: ${PROJECT}
@@ -216,7 +236,7 @@ services:
         condition: service_healthy
     networks:
       - ${PROJECT}_net
-      - platform-bridge
+${platform_net_api}
     environment:
       NODE_ENV: production
       APP_ENV: production
@@ -227,7 +247,8 @@ services:
       AUTH_SECRET: \${AUTH_SECRET:?AUTH_SECRET must be set in ${COMPOSE_DIR}/.env}
       COOKIE_SECURE: \${COOKIE_SECURE:-true}
       CORS_ORIGIN: \${CORS_ORIGIN:-}
-      PLATFORM_API_URL: \${PLATFORM_API_URL:?PLATFORM_API_URL must point to the canonical platform}
+      PLATFORM_API_URL: \${PLATFORM_API_URL:-}
+      DATA_AUTHORITY: \${DATA_AUTHORITY:-auto}
       FRONTEND_URL: \${FRONTEND_URL:?FRONTEND_URL must be configured}
       AUTH_DELIVERY_MODE: \${AUTH_DELIVERY_MODE:-live}
       SMTP_HOST: \${SMTP_HOST:-}
@@ -243,6 +264,8 @@ services:
       GOOGLE_CLIENT_SECRET: \${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: \${GOOGLE_REDIRECT_URI:-${PUBLIC_URL%/}/api/v1/auth/google/callback}
       LOG_LEVEL: \${LOG_LEVEL:-info}
+${provider_env_api}
+${provider_mount_api}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8000/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 20s
@@ -273,15 +296,18 @@ services:
         condition: service_healthy
     networks:
       - ${PROJECT}_net
-      - platform-bridge
+${platform_net_worker}
     environment:
       NODE_ENV: production
       APP_ENV: production
       DATABASE_URL: \${DATABASE_URL:?DATABASE_URL must be set in ${COMPOSE_DIR}/.env}
       REDIS_URL: \${REDIS_URL:?REDIS_URL must be set in ${COMPOSE_DIR}/.env}
       AUTH_SECRET: \${AUTH_SECRET:?AUTH_SECRET must be set in ${COMPOSE_DIR}/.env}
-      PLATFORM_API_URL: \${PLATFORM_API_URL:?PLATFORM_API_URL must point to the canonical platform}
+      PLATFORM_API_URL: \${PLATFORM_API_URL:-}
+      DATA_AUTHORITY: \${DATA_AUTHORITY:-auto}
       LOG_LEVEL: \${LOG_LEVEL:-info}
+${provider_env_worker}
+${provider_mount_worker}
     command: ["npm", "run", "start:worker"]
     healthcheck:
       disable: true
@@ -358,9 +384,7 @@ volumes:
 networks:
   ${PROJECT}_net:
     name: ${PROJECT}_net
-  platform-bridge:
-    external: true
-    name: ${PLATFORM_NETWORK}
+${platform_net_def}
 YAML
   mv -f "$tmp" "$out"
 }
@@ -472,6 +496,20 @@ mkdir -p "$COMPOSE_DIR"
 command -v flock >/dev/null 2>&1 || { die "flock is required"; exit 1; }
 command -v gpg >/dev/null 2>&1 || { die "gpg is required for encrypted migration backups"; exit 1; }
 [[ -f "$ENV_FILE" ]] || { die "Missing server-owned .env"; exit 1; }
+# Never source .env: read only the non-secret authority selector.
+CONFIGURED_AUTHORITY="$(grep -E '^DATA_AUTHORITY=' "$ENV_FILE" | tail -n 1 | cut -d= -f2- | tr -d '\r' || true)"
+CONFIGURED_AUTHORITY="${CONFIGURED_AUTHORITY:-auto}"
+case "$CONFIGURED_AUTHORITY" in
+  site) DEPLOY_SITE=1 ;;
+  auto|platform) DEPLOY_SITE=0 ;;
+  *) die "Invalid DATA_AUTHORITY in server .env"; exit 1 ;;
+esac
+if [[ "$DEPLOY_SITE" == 1 ]]; then
+  CLOUD_CONFIG_FILE="$(grep -E '^CLOUD_CONFIG_FILE=' "$ENV_FILE" | tail -n 1 | cut -d= -f2- | tr -d '\r' || true)"
+  CLOUD_CONFIG_FILE="${CLOUD_CONFIG_FILE:-${COMPOSE_DIR}/configuration.toml}"
+  [[ -f "$CLOUD_CONFIG_FILE" ]] || { die "Website authority needs an existing provider configuration.toml"; exit 1; }
+  export CLOUD_CONFIG_FILE
+fi
 BACKUP_KEY_LINE="$(grep '^BACKUP_ENCRYPTION_KEY=' "$ENV_FILE" | tail -n 1 || true)"
 BACKUP_ENCRYPTION_KEY="${BACKUP_KEY_LINE#*=}"
 case "$BACKUP_ENCRYPTION_KEY" in
@@ -514,6 +552,17 @@ fi
 PREV_IMAGE="$(meta_get image)"
 PREV_API_IMAGE="$(meta_get api_image)"
 PREV_SHA="$(meta_get sha)"
+PREV_AUTHORITY="$(meta_get data_authority)"
+if [[ -n "$PREV_AUTHORITY" && "$PREV_AUTHORITY" != "$CONFIGURED_AUTHORITY" ]]; then
+  die "Authority changes need an approved maintenance cutover, not a regular release"; exit 1
+fi
+# Old releases did not record data_authority metadata, but required Python.
+# Never turn an existing Python deployment into a standalone site merely
+# because someone emptied PLATFORM_API_URL in the env file.
+if [[ "$DEPLOY_SITE" == 1 && -n "$PREV_IMAGE" && "$PREV_AUTHORITY" != site ]]; then
+  die "Existing platform deployment needs a separate audited site migration; regular release refused"; exit 1
+fi
+log "data authority: ${CONFIGURED_AUTHORITY}"
 log "deploy dir    : ${COMPOSE_DIR}"
 log "image (new)   : ${IMAGE}"
 log "api   (new)   : ${API_IMAGE}"
@@ -554,12 +603,24 @@ if ! compose "$CANDIDATE" config --quiet 2>"$PREFLIGHT_LOG"; then
   die "Compose preflight rejected server configuration before stopping services. ${missing_keys:-Check required environment keys privately.}"
   exit 1
 fi
-docker network inspect "$PLATFORM_NETWORK" >/dev/null || {
-  die "Deploy the matching canonical platform environment first"; exit 1;
-}
-# No DB mutation: fail before draining writers if the canonical API is absent,
-# financially incompatible, insecure, or belongs to another environment.
-compose "$CANDIDATE" run --rm --no-deps cloud-api node --input-type=module -e '
+if [[ "$DEPLOY_SITE" != 1 ]]; then
+  docker network inspect "$PLATFORM_NETWORK" >/dev/null || {
+    die "Deploy the matching canonical platform environment first"; exit 1;
+  }
+fi
+# Source-specific preflight is deliberately read-only.
+if [[ "$DEPLOY_SITE" == 1 ]]; then
+  compose "$CANDIDATE" run --rm --no-deps cloud-api node --input-type=module -e '
+    import {loadConfig} from "./dist/config.js";
+    import {assertAuthenticationReady} from "./dist/modules/auth/readiness.js";
+    import {effectiveAuthority} from "./dist/modules/integration/authority.js";
+    const c = loadConfig();
+    if (c.DATA_AUTHORITY !== "site" || effectiveAuthority(c) !== "site") throw new Error("Explicit website authority required");
+    assertAuthenticationReady(c);
+    console.log("Website canonical backend and live authentication configured");
+  '
+else
+  compose "$CANDIDATE" run --rm --no-deps cloud-api node --input-type=module -e '
   import {loadConfig} from "./dist/config.js";
   import {assertPlatformCompatibility} from "./dist/modules/integration/platform.js";
   import {assertAuthenticationReady} from "./dist/modules/auth/readiness.js";
@@ -574,13 +635,18 @@ compose "$CANDIDATE" run --rm --no-deps cloud-api node --input-type=module -e '
   console.log("Canonical Docker DNS, readiness, API contract, versioned website capabilities, endpoint authorization and IRT/USDT policy verified");
   assertAuthenticationReady(c);
 '
+fi
 reconcile --check
-# Existing balances/contracts must be reconciled before any downtime or migration.
+# Never attempt either direction of writer migration without reconciliation.
 compose "$CANDIDATE" run --rm --no-deps cloud-api node --input-type=module -e '
   import {createDb} from "./dist/db/index.js";
   import {assertUnifiedCutoverReady} from "./dist/modules/integration/platform.js";
+  import {assertSiteAuthorityReady} from "./dist/modules/integration/authority.js";
   const handle = createDb();
-  try { await assertUnifiedCutoverReady(handle.db); } finally { await handle.pool.end(); }
+  try {
+    await assertUnifiedCutoverReady(handle.db);
+    await assertSiteAuthorityReady(handle.db);
+  } finally { await handle.pool.end(); }
 '
 DB_HEAD_BEFORE="$(database_head "$CANDIDATE")"
 if [[ "$DB_HEAD_BEFORE" != base && ( ! "$DB_HEAD_BEFORE" =~ ^[0-9]+$ || "$DB_HEAD_BEFORE" -gt "$EXPECTED_DB_HEAD" ) ]]; then
@@ -634,8 +700,8 @@ else
   exit 2
 fi
 
-# In unified mode the web worker intentionally does not run a second billing
-# authority. Its process must nevertheless stay alive without restart churn.
+# Site worker owns billing/provisioning; platform worker is intentionally idle.
+# Both modes require the process to stay alive without restart churn.
 worker_restarts="$(docker inspect --format '{{.RestartCount}}' "$WORKER_CONTAINER")"
 sleep 5
 if [[ "$(docker inspect --format '{{.State.Running}}:{{.RestartCount}}' "$WORKER_CONTAINER")" != "true:${worker_restarts}" ]]; then
@@ -684,6 +750,7 @@ meta_set sha "$RELEASE_SHA"
 meta_set deployed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 meta_set public_url "$PUBLIC_URL"
 meta_set environment production
+meta_set data_authority "$CONFIGURED_AUTHORITY"
 meta_set platform_contract 1
 meta_set database_head "$EXPECTED_DB_HEAD"
 

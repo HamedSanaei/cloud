@@ -27,6 +27,7 @@ import { registerInvoiceRoutes } from './modules/invoices/routes.js'
 import { registerSubscriptionRoutes } from './modules/subscriptions/routes.js'
 import { registerServerRoutes } from './modules/servers/routes.js'
 import { registerAdminRoutes } from './modules/admin/routes.js'
+import { registerAdminConsoleRoutes } from './modules/admin/console.js'
 import { registerFrontendCompatRoutes } from './modules/frontend/routes.js'
 
 export interface AppContext {
@@ -152,6 +153,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   await app.register(registerSubscriptionRoutes, v1)
   await app.register(registerServerRoutes, v1)
   await app.register(registerAdminRoutes, v1)
+  await app.register(registerAdminConsoleRoutes, { prefix: '/api/v1/admin/console', ctx })
 
   // Unversioned alias for the current SPA API layer (same handlers).
   const compat = { prefix: '/api', ctx }
@@ -165,6 +167,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   await app.register(registerSubscriptionRoutes, compat)
   await app.register(registerServerRoutes, compat)
   await app.register(registerAdminRoutes, compat)
+  await app.register(registerAdminConsoleRoutes, { prefix: '/api/admin/console', ctx })
   await app.register(registerFrontendCompatRoutes, { prefix: '/api', ctx })
 
   return app

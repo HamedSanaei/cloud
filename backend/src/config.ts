@@ -36,6 +36,9 @@ const envSchema = z.object({
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
   // When enabled, the Telegram platform is the only wallet/catalog/compute authority.
   PLATFORM_API_URL: z.union([z.literal(''), z.string().url()]).default(''),
+  // Preserve existing deployments in auto mode. site mode routes the website
+  // ledger/servers locally, subject to the audited migration gate at startup.
+  DATA_AUTHORITY: z.enum(['auto', 'site', 'platform']).default('auto'),
   AUTH_DELIVERY_MODE: z.enum(['live', 'log']).default('log'),
   AUTH_OTP_TTL_SECONDS: z.coerce.number().int().min(120).max(900).default(300),
   AUTH_OTP_RESEND_SECONDS: z.coerce.number().int().min(30).max(300).default(45),
@@ -108,8 +111,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     const details = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')
     throw new Error(`Invalid environment configuration: ${details}`)
   }
-  // Unified mode never loads provider credentials or starts a second price authority.
-  const providerEnv: NodeJS.ProcessEnv = parsed.data.PLATFORM_API_URL ? {
+  if (parsed.data.DATA_AUTHORITY === 'platform' && !parsed.data.PLATFORM_API_URL) {
+    throw new Error('DATA_AUTHORITY=platform requires PLATFORM_API_URL')
+  }
+  const platformAuthority = parsed.data.DATA_AUTHORITY !== 'site' &&
+    (parsed.data.DATA_AUTHORITY === 'platform' || !!parsed.data.PLATFORM_API_URL)
+  // Only the selected authority gets provider credentials. Website mode
+  // restores the local quote, billing and provisioning pipeline.
+  const providerEnv: NodeJS.ProcessEnv = platformAuthority ? {
     NODE_ENV: parsed.data.NODE_ENV,
     LEASEWEB_ENABLED: 'false', HETZNER_ENABLED: 'false', ASIATECH_ENABLED: 'false',
     CATALOG_SYNC_ENABLED: 'false',
