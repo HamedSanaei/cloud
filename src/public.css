@@ -80,7 +80,10 @@
 .landing-footer-trust { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 16px; width: 100%; max-width: 336px; text-align: center; }
 .parserver-enamad-seal, .parserver-tabapay-seal { display: block; width: 160px; max-width: 100%; min-height: 160px; border: 1px solid #dce5ef; border-radius: 12px; background: white; color: #172b4d; }
 .parserver-enamad-seal { padding: 12px; }
-.parserver-tabapay-seal { height: 160px; }
+.parserver-tabapay-seal { position: relative; height: 160px; }
+.parserver-tabapay-seal iframe { display: block; width: 100%; height: 100%; border: 0; border-radius: inherit; pointer-events: none; }
+.parserver-tabapay-seal__link { position: absolute; inset: 0; border-radius: inherit; }
+.parserver-tabapay-seal__link:focus-visible { outline: 3px solid #2563eb; outline-offset: 4px; }
 .parserver-enamad-seal__image { width: 100%; }
 .parserver-enamad-seal__image > a { display: block; }
 .landing-footer-trust .parserver-enamad-seal img { display: block; width: 100%; max-width: 100%; height: auto; }

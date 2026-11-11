@@ -3,13 +3,24 @@ export function ParserverTabaPaySeal() {
   if (host !== 'parserver.ir' && host !== 'www.parserver.ir') return null
 
   return (
-    <iframe
-      className="parserver-tabapay-seal"
-      title="نماد اعتماد تاباپی"
-      src="/tabapay-trust.html"
-      loading="lazy"
-      sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-      referrerPolicy="origin"
-    />
+    <div className="parserver-tabapay-seal">
+      <iframe
+        title="نماد اعتماد تاباپی"
+        src="/tabapay-trust.html"
+        loading="lazy"
+        sandbox="allow-scripts"
+        referrerPolicy="origin"
+        tabIndex={-1}
+        aria-hidden="true"
+      />
+      <a
+        className="parserver-tabapay-seal__link"
+        href="https://tabapay.ir/payments/trust/parserver.ir"
+        target="_blank"
+        rel="noopener"
+        referrerPolicy="origin"
+        aria-label="استعلام نماد اعتماد تاباپی پارس سرور"
+      />
+    </div>
   )
 }
