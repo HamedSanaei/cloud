@@ -8,9 +8,11 @@ session guard and every API route continues to enforce authorization server-side
 ## Supported flows
 
 - Email/password → six-digit email challenge → session
-- Email registration → verified email challenge → account + session
+- Phone registration (default on /register) → ParsGreen SMS code → verified mobile → active account + session
+- Email registration (optional tab) → verified email challenge → account + session; no phone required
 - Google OAuth 2.0 Authorization Code flow with state and PKCE
-- Iranian mobile (`09…`, `989…`, or `+989…`) → normalized E.164 number → ParsGreen SMS challenge
+- Login by previously verified Iranian mobile (`09…`, `989…`, or `+989…`) → E.164 account lookup → ParsGreen SMS challenge; login never auto-creates accounts
+- Phone login for TOTP-enabled accounts → SMS challenge → additional TOTP challenge before session
 - Password login for 2FA-enabled accounts → TOTP or one-time recovery code
 - Password recovery → email challenge → new password
 
@@ -51,9 +53,13 @@ Email requires `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`,
 
 ParsGreen requires `PARSGREEN_SIGNATURE` and `PARSGREEN_FROM`. The provider URL
 is configurable through `PARSGREEN_ENDPOINT`; the default targets the ParsGreen
-`SendGroupSMS` SOAP service. `sendParsGreenSms()` is also the shared server-side
-entry point for other transactional/service notifications. Provider credentials
-must never use a `VITE_*` name or enter frontend code.
+`SendGroupSMS` SOAP service. Mobile storage uses `+989...` and the ParsGreen
+recipient is sent as local `09...`. `sendParsGreenSms()` is the shared server-side
+transport for SMS OTP. The operator-supplied notification samples and their
+approval statuses are documented in [PARSGREEN_TEMPLATES.md](PARSGREEN_TEMPLATES.md).
+**None** of the supplied approved samples is a login OTP template. Confirm
+WhiteText/blacklist OTP support and actual handset delivery with ParsGreen.
+Provider credentials must never use a `VITE_*` name or enter frontend code.
 
 Google requires a Web OAuth client with:
 
@@ -75,9 +81,10 @@ once and stored as HMAC hashes. Disabling 2FA requires the current password.
 
 | Method | Route | Purpose |
 | --- | --- | --- |
-| POST | `/api/v1/auth/register/start` | Start verified email registration |
+| POST | `/api/v1/auth/register/phone/start` | Start verified mobile registration (default) |
+| POST | `/api/v1/auth/register/start` | Start verified email-only registration |
 | POST | `/api/v1/auth/login/start` | Validate password and select email/TOTP challenge |
-| POST | `/api/v1/auth/phone/start` | Send ParsGreen SMS login challenge |
+| POST | `/api/v1/auth/phone/start` | Login with an already verified mobile; no implicit signup |
 | POST | `/api/v1/auth/challenge/verify` | Verify email or SMS challenge |
 | POST | `/api/v1/auth/challenge/resend` | Resend after server cooldown |
 | POST | `/api/v1/auth/2fa/verify` | Verify TOTP login |

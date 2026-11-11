@@ -5,7 +5,7 @@ import type { DbClient } from '../../db/index.js'
 import { authChallenges } from '../../db/schema.js'
 import { AppError, BadRequestError, ForbiddenError } from '../../lib/errors.js'
 
-export type ChallengeKind = 'email_login' | 'email_register' | 'phone_login' | 'password_recovery' | 'totp' | 'google_oauth'
+export type ChallengeKind = 'email_login' | 'email_register' | 'phone_login' | 'phone_register' | 'password_recovery' | 'totp' | 'google_oauth'
 
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')

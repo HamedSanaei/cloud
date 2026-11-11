@@ -44,13 +44,47 @@ describe.skipIf(skip)('multi-factor authentication flows (integration)', () => {
     expect(resend.json<{ error: string }>().error).toBe('cooldown')
   })
 
-  it('logs in an Iranian mobile account through ParsGreen-compatible OTP flow', async () => {
-    const start = await app.inject({ method: 'POST', url: '/api/v1/auth/phone/start', payload: { mobile: '09123456789' } })
+  it('registers with verified SMS and only allows mobile login after activation', async () => {
+    const unknown = await app.inject({ method: 'POST', url: '/api/v1/auth/phone/start', payload: { mobile: '09123456789' } })
+    expect(unknown.statusCode).toBe(400)
+    const start = await app.inject({ method: 'POST', url: '/api/v1/auth/register/phone/start', payload: { mobile: '۰۹۱۲۳۴۵۶۷۸۹', firstName: 'Test' } })
     expect(start.statusCode).toBe(202)
     const challenge = start.json<{ data: { challengeToken: string; developmentCode: string; destination: string } }>().data
     expect(challenge.destination).toContain('09123')
+    const pending = await app.inject({ method: 'POST', url: '/api/v1/auth/phone/start', payload: { mobile: '09123456789' } })
+    expect(pending.statusCode).toBe(400)
     const verified = await app.inject({ method: 'POST', url: '/api/v1/auth/challenge/verify', payload: { token: challenge.challengeToken, code: challenge.developmentCode } })
     expect(verified.statusCode).toBe(200)
+    expect(verified.json<{ data: { user: { mobile: string } } }>().data.user.mobile).toBe('+989123456789')
+    const duplicate = await app.inject({ method: 'POST', url: '/api/v1/auth/register/phone/start', payload: { mobile: '09123456789' } })
+    expect(duplicate.statusCode).toBe(409)
+    const login = await app.inject({ method: 'POST', url: '/api/v1/auth/phone/start', payload: { mobile: '09123456789' } })
+    expect(login.statusCode).toBe(202)
+    const next = login.json<{ data: { challengeToken: string; developmentCode: string } }>().data
+    const loggedIn = await app.inject({ method: 'POST', url: '/api/v1/auth/challenge/verify', payload: { token: next.challengeToken, code: next.developmentCode } })
+    expect(loggedIn.statusCode).toBe(200)
+  })
+
+  it('requires TOTP after an SMS login when the account has 2FA enabled', async () => {
+    const start = await app.inject({ method: 'POST', url: '/api/v1/auth/phone/start', payload: { mobile: '09123456789' } })
+    const sms = start.json<{ data: { challengeToken: string; developmentCode: string } }>().data
+    const verified = await app.inject({ method: 'POST', url: '/api/v1/auth/challenge/verify', payload: { token: sms.challengeToken, code: sms.developmentCode } })
+    const bearer = verified.json<{ data: { token: string } }>().data.token
+    const setup = await app.inject({ method: 'POST', url: '/api/v1/auth/2fa/setup', headers: { authorization: 'Bearer ' + bearer } })
+    expect(setup.statusCode).toBe(200)
+    const secret = setup.json<{ data: { secret: string } }>().data.secret
+    const enabled = await app.inject({ method: 'POST', url: '/api/v1/auth/2fa/enable', headers: { authorization: 'Bearer ' + bearer }, payload: { code: generateTotpCode(secret) } })
+    expect(enabled.statusCode).toBe(200)
+
+    const secondLogin = await app.inject({ method: 'POST', url: '/api/v1/auth/phone/start', payload: { mobile: '09123456789' } })
+    const nextSms = secondLogin.json<{ data: { challengeToken: string; developmentCode: string } }>().data
+    const nextStep = await app.inject({ method: 'POST', url: '/api/v1/auth/challenge/verify', payload: { token: nextSms.challengeToken, code: nextSms.developmentCode } })
+    expect(nextStep.statusCode).toBe(202)
+    const secondFactor = nextStep.json<{ data: { challengeType: string; challengeToken: string; token?: string } }>().data
+    expect(secondFactor.challengeType).toBe('totp')
+    expect(secondFactor.token).toBeUndefined()
+    const signedIn = await app.inject({ method: 'POST', url: '/api/v1/auth/2fa/verify', payload: { token: secondFactor.challengeToken, code: generateTotpCode(secret) } })
+    expect(signedIn.statusCode).toBe(200)
   })
 
   it('enables TOTP and requires it on the next password login', async () => {

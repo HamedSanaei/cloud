@@ -18,6 +18,12 @@ export function normalizeIranMobile(value: string): string | null {
   return null
 }
 
+export function parsGreenRecipient(value: string): string {
+  const normalized = normalizeIranMobile(value)
+  if (!normalized) throw new ProviderPermanentError('شماره همراه ایرانی معتبر نیست')
+  return '0' + normalized.slice(3)
+}
+
 export function maskMobile(e164: string): string {
   return `09${e164.slice(4, 7)}***${e164.slice(-3)}`
 }
@@ -77,7 +83,7 @@ export async function sendParsGreenSms(to: string, message: string): Promise<{ d
   <soap:Body><SendGroupSMS xmlns="http://tempuri.org/">
     <signature>${xmlEscape(config.PARSGREEN_SIGNATURE)}</signature>
     <from>${xmlEscape(config.PARSGREEN_FROM)}</from>
-    <to><string>${xmlEscape(to)}</string></to>
+    <to><string>${xmlEscape(parsGreenRecipient(to))}</string></to>
     <text>${xmlEscape(message)}</text><isFlash>false</isFlash><udh></udh><success>0</success><retStr />
   </SendGroupSMS></soap:Body>
 </soap:Envelope>`

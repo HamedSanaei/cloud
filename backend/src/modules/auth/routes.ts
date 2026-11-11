@@ -26,6 +26,10 @@ const loginSchema = z.object({ email, password: z.string().min(1, 'رمز عبو
 const tokenSchema = z.object({ token: z.string().min(20) })
 const verifySchema = tokenSchema.extend({ code: otpCode })
 const phoneSchema = z.object({ mobile: z.string().min(10).max(20) })
+const phoneRegisterSchema = phoneSchema.extend({
+  firstName: z.string().max(100).optional(),
+  lastName: z.string().max(100).optional(),
+})
 const resetSchema = verifySchema.extend({ password })
 const refreshSchema = z.object({ token: z.string().min(10).optional() })
 
@@ -60,7 +64,7 @@ function challengeResponse(
 }
 
 async function deliverChallenge(kind: string, identifier: string, code: string) {
-  if (kind === 'phone_login') return sendSmsOtp(identifier, code)
+  if (kind === 'phone_login' || kind === 'phone_register') return sendSmsOtp(identifier, code)
   if (kind === 'email_register') return sendEmailOtp(identifier, code, 'register')
   if (kind === 'password_recovery') return sendEmailOtp(identifier, code, 'recovery')
   return sendEmailOtp(identifier, code, 'login')
@@ -121,23 +125,47 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
     return reply.status(202).send({ data: challengeResponse(challenge, 'email', maskEmail(user.email), delivery.developmentCode) })
   })
 
-  app.post('/auth/phone/start', { config: { rateLimit: sendLimiter } }, async (request, reply) => {
-    const input = parse(phoneSchema, request.body)
+  app.post('/auth/register/phone/start', { config: { rateLimit: sendLimiter } }, async (request, reply) => {
+    const input = parse(phoneRegisterSchema, request.body)
     const normalized = normalizeIranMobile(input.mobile)
     if (!normalized) throw new BadRequestError('شماره همراه ایرانی معتبر نیست')
     let user = await db.query.users.findFirst({ where: (t) => eq(t.mobile, normalized) })
+    if (user?.status === 'active' || user?.mobileVerifiedAt) throw new ConflictError('این شماره همراه قبلاً ثبت شده است؛ وارد شوید')
     if (user?.status === 'disabled') throw new ForbiddenError('این حساب غیرفعال است')
-    if (!user) {
+    if (user) {
+      const [updated] = await db.update(users).set({
+        firstName: input.firstName?.trim() || user.firstName,
+        lastName: input.lastName?.trim() || user.lastName,
+        updatedAt: new Date(),
+      }).where(eq(users.id, user.id)).returning()
+      user = updated
+    } else {
       const local = normalized.replace(/\D/g, '')
       const [created] = await db.insert(users).values({
-        email: `phone.${local}@accounts.serverhub.invalid`,
+        email: 'phone.' + local + '@accounts.serverhub.invalid',
         passwordHash: await hashPassword(randomBytes(32).toString('base64url')),
         mobile: normalized,
+        firstName: input.firstName?.trim() || null,
+        lastName: input.lastName?.trim() || null,
         status: 'pending',
       }).returning()
       user = created
     }
-    if (!user) throw new Error('failed to prepare phone login')
+    if (!user) throw new Error('failed to prepare phone registration')
+    const challenge = await issueChallenge(db, { kind: 'phone_register', identifier: normalized, userId: user.id })
+    const delivery = await sendSmsOtp(normalized, challenge.code)
+    return reply.status(202).send({ data: challengeResponse(challenge, 'sms', maskMobile(normalized), delivery.developmentCode) })
+  })
+
+  app.post('/auth/phone/start', { config: { rateLimit: sendLimiter } }, async (request, reply) => {
+    const input = parse(phoneSchema, request.body)
+    const normalized = normalizeIranMobile(input.mobile)
+    if (!normalized) throw new BadRequestError('شماره همراه ایرانی معتبر نیست')
+    const user = await db.query.users.findFirst({ where: (t) => eq(t.mobile, normalized) })
+    if (!user || user.status === 'pending' || !user.mobileVerifiedAt) {
+      throw new BadRequestError('این شماره همراه ثبت و تأیید نشده است؛ ابتدا ثبت‌نام کنید')
+    }
+    if (user.status === 'disabled') throw new ForbiddenError('این حساب غیرفعال است')
     const challenge = await issueChallenge(db, { kind: 'phone_login', identifier: normalized, userId: user.id })
     const delivery = await sendSmsOtp(normalized, challenge.code)
     return reply.status(202).send({ data: challengeResponse(challenge, 'sms', maskMobile(normalized), delivery.developmentCode) })
@@ -146,24 +174,31 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
   app.post('/auth/challenge/verify', { config: { rateLimit: authLimiter } }, async (request, reply) => {
     const input = parse(verifySchema, request.body)
     const challenge = await verifyChallengeCode(db, input.token, input.code)
-    if (!['email_login', 'email_register', 'phone_login'].includes(challenge.kind)) throw new BadRequestError('نوع درخواست تأیید معتبر نیست')
+    if (!['email_login', 'email_register', 'phone_login', 'phone_register'].includes(challenge.kind)) throw new BadRequestError('نوع درخواست تأیید معتبر نیست')
     if (!challenge.userId) throw new BadRequestError('حساب کاربری یافت نشد')
     if (challenge.kind === 'email_register') {
       await db.update(users).set({ status: 'active', emailVerifiedAt: new Date(), updatedAt: new Date() }).where(eq(users.id, challenge.userId))
       await writeAudit(db, { actorId: challenge.userId, action: 'user.email_verified' })
-    } else if (challenge.kind === 'phone_login') {
+    } else if (challenge.kind === 'phone_register') {
       await db.update(users).set({ status: 'active', mobileVerifiedAt: new Date(), updatedAt: new Date() }).where(eq(users.id, challenge.userId))
       await writeAudit(db, { actorId: challenge.userId, action: 'user.mobile_verified' })
     }
     const user = await db.query.users.findFirst({ where: (t) => eq(t.id, challenge.userId!) })
     if (!user) throw new BadRequestError('حساب کاربری یافت نشد')
+    if (challenge.kind === 'phone_login' && (user.status !== 'active' || !user.mobileVerifiedAt)) {
+      throw new ForbiddenError('شماره همراه این حساب تأیید نشده است')
+    }
+    if (challenge.kind === 'phone_login' && user.twoFactorEnabled) {
+      const totpChallenge = await issueChallenge(db, { kind: 'totp', identifier: user.email, userId: user.id })
+      return reply.status(202).send({ data: challengeResponse(totpChallenge, 'totp', 'برنامه احراز هویت') })
+    }
     return { data: await establishSession(ctx, user, request, reply) }
   })
 
   app.post('/auth/challenge/resend', { config: { rateLimit: sendLimiter } }, async (request, reply) => {
     const input = parse(tokenSchema, request.body)
     const old = await assertCanResend(db, input.token)
-    if (!['email_login', 'email_register', 'phone_login', 'password_recovery'].includes(old.kind)) throw new BadRequestError('ارسال مجدد برای این روش امکان‌پذیر نیست')
+    if (!['email_login', 'email_register', 'phone_login', 'phone_register', 'password_recovery'].includes(old.kind)) throw new BadRequestError('ارسال مجدد برای این روش امکان‌پذیر نیست')
     const challenge = await issueChallenge(db, {
       kind: old.kind as ChallengeKind,
       identifier: old.identifier,
@@ -172,7 +207,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
       resendCount: old.resendCount + 1,
     })
     const delivery = await deliverChallenge(old.kind, old.identifier, challenge.code)
-    const isSms = old.kind === 'phone_login'
+    const isSms = old.kind === 'phone_login' || old.kind === 'phone_register'
     return reply.status(202).send({ data: challengeResponse(challenge, isSms ? 'sms' : 'email', isSms ? maskMobile(old.identifier) : maskEmail(old.identifier), delivery.developmentCode) })
   })
 

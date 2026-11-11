@@ -10,6 +10,7 @@ import {
   startEmailLogin,
   startPasswordRecovery,
   startPhoneLogin,
+  startPhoneRegistration,
   startRegistration,
   verifyChallenge,
   verifyRecoveryCode,
@@ -70,7 +71,7 @@ export function AuthPage({ intent }: { intent: AuthIntent }) {
   const navigate = useNavigate()
   const location = useLocation()
   const { acceptSession } = useAuth()
-  const [method, setMethod] = useState<LoginMethod>('email')
+  const [method, setMethod] = useState<LoginMethod>(intent === 'register' ? 'phone' : 'email')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -111,13 +112,14 @@ export function AuthPage({ intent }: { intent: AuthIntent }) {
   async function submitEntry(event: FormEvent) {
     event.preventDefault()
     setError('')
-    if (intent === 'register' && password !== confirmPassword) {
+    if (intent === 'register' && method === 'email' && password !== confirmPassword) {
       setError('تکرار رمز عبور با رمز اصلی یکسان نیست.')
       return
     }
     setBusy(true)
     try {
-      if (intent === 'register') setChallenge(await startRegistration({ email, password, firstName, lastName }))
+      if (intent === 'register' && method === 'phone') setChallenge(await startPhoneRegistration({ mobile, firstName, lastName }))
+      else if (intent === 'register') setChallenge(await startRegistration({ email, password, firstName, lastName }))
       else if (intent === 'forgot') setChallenge(await startPasswordRecovery(email))
       else if (method === 'phone') setChallenge(await startPhoneLogin(mobile))
       else setChallenge(await startEmailLogin(email, password))
@@ -144,7 +146,13 @@ export function AuthPage({ intent }: { intent: AuthIntent }) {
       } else if (challenge.challengeType === 'totp') {
         complete(await verifyTotpChallenge(challenge.challengeToken, code))
       } else {
-        complete(await verifyChallenge(challenge.challengeToken, code))
+        const result = await verifyChallenge(challenge.challengeToken, code)
+        if ('challengeToken' in result) {
+          setChallenge(result)
+          setCode('')
+        } else {
+          complete(result)
+        }
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'کد تأیید معتبر نیست.')
@@ -216,10 +224,10 @@ export function AuthPage({ intent }: { intent: AuthIntent }) {
               </div>
               {!challenge ? (
                 <form className="auth-form" onSubmit={submitEntry}>
-                  {intent === 'login' && (
-                    <div className="auth-method-tabs" role="tablist">
-                      <button className={method === 'email' ? 'active' : ''} onClick={() => setMethod('email')} role="tab" type="button"><Mail size={17} /> ایمیل و رمز عبور</button>
-                      <button className={method === 'phone' ? 'active' : ''} onClick={() => setMethod('phone')} role="tab" type="button"><Phone size={17} /> شماره همراه</button>
+                  {intent !== 'forgot' && (
+                    <div className="auth-method-tabs" role="tablist" aria-label={intent === 'register' ? 'روش ثبت‌نام' : 'روش ورود'}>
+                      <button aria-selected={method === 'phone'} className={method === 'phone' ? 'active' : ''} onClick={() => { setMethod('phone'); setError('') }} role="tab" type="button"><Phone size={17} /> {intent === 'register' ? 'ثبت‌نام با شماره همراه' : 'شماره همراه'}</button>
+                      <button aria-selected={method === 'email'} className={method === 'email' ? 'active' : ''} onClick={() => { setMethod('email'); setError('') }} role="tab" type="button"><Mail size={17} /> {intent === 'register' ? 'ثبت‌نام با ایمیل' : 'ایمیل و رمز عبور'}</button>
                     </div>
                   )}
                   {intent === 'register' && (
@@ -228,7 +236,7 @@ export function AuthPage({ intent }: { intent: AuthIntent }) {
                       <label className="auth-field"><span>نام خانوادگی</span><input autoComplete="family-name" onChange={(e) => setLastName(e.target.value)} value={lastName} /></label>
                     </div>
                   )}
-                  {method === 'phone' && intent === 'login' ? (
+                  {method === 'phone' && intent !== 'forgot' ? (
                     <label className="auth-field"><span>شماره همراه</span><input autoComplete="tel" dir="ltr" inputMode="tel" onChange={(e) => setMobile(e.target.value)} placeholder="09123456789" required value={mobile} /></label>
                   ) : (
                     <label className="auth-field"><span>آدرس ایمیل</span><input autoComplete="email" dir="ltr" onChange={(e) => setEmail(e.target.value)} placeholder="example@email.com" required type="email" value={email} /></label>
@@ -236,7 +244,7 @@ export function AuthPage({ intent }: { intent: AuthIntent }) {
                   {intent !== 'forgot' && method === 'email' && (
                     <label className="auth-field"><span>رمز عبور</span><span className="password-input"><input autoComplete={intent === 'register' ? 'new-password' : 'current-password'} dir="ltr" minLength={8} onChange={(e) => setPassword(e.target.value)} required type={showPassword ? 'text' : 'password'} value={password} /><button aria-label="نمایش رمز عبور" onClick={() => setShowPassword((value) => !value)} type="button">{showPassword ? <EyeOff /> : <Eye />}</button></span></label>
                   )}
-                  {intent === 'register' && (
+                  {intent === 'register' && method === 'email' && (
                     <label className="auth-field"><span>تکرار رمز عبور</span><input autoComplete="new-password" dir="ltr" minLength={8} onChange={(e) => setConfirmPassword(e.target.value)} required type={showPassword ? 'text' : 'password'} value={confirmPassword} /></label>
                   )}
                   {intent === 'login' && method === 'email' && <Link className="auth-text-link" to="/forgot-password">رمز عبور را فراموش کرده‌اید؟</Link>}
@@ -259,7 +267,7 @@ export function AuthPage({ intent }: { intent: AuthIntent }) {
                   )}
                   {challenge.developmentCode && <p className="auth-dev-code">حالت توسعه — کد: <b dir="ltr">{challenge.developmentCode}</b></p>}
                   {error && <p className="auth-error" role="alert">{error}</p>}
-                  <button className="auth-primary-button" disabled={busy || (!recoveryMode && code.length !== 6)} type="submit">{busy ? <RefreshCw className="spin" size={19} /> : intent === 'forgot' ? 'ثبت رمز عبور جدید' : 'تأیید هویت و ورود'}</button>
+                  <button className="auth-primary-button" disabled={busy || (!recoveryMode && code.length !== 6)} type="submit">{busy ? <RefreshCw className="spin" size={19} /> : intent === 'forgot' ? 'ثبت رمز عبور جدید' : intent === 'register' ? 'تأیید و تکمیل ثبت‌نام' : 'تأیید هویت و ورود'}</button>
                   {challenge.challengeType === 'totp' ? (
                     <button className="auth-secondary-button" onClick={() => { setRecoveryMode((value) => !value); setError('') }} type="button"><LockKeyhole size={17} /> {recoveryMode ? 'استفاده از کد برنامه' : 'استفاده از کد بازیابی'}</button>
                   ) : (

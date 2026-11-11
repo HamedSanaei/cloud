@@ -34,6 +34,7 @@ describe('ParsGreen SOAP delivery contract', () => {
     expect(url).toBe('https://sms.example.test/service')
     expect(options.headers.soapaction).toBe('http://tempuri.org/SendGroupSMS')
     expect(options.body).toContain('<retStr />')
+    expect(options.body).toContain('<to><string>09000000000</string></to>')
     expect(options.body).not.toContain('<long>')
     expect(options.body).toContain('fixture-signature&lt;&amp;&gt;')
     expect(options.body).toContain('fixture &lt;code&gt; &amp; text')

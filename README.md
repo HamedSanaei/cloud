@@ -92,3 +92,7 @@ npm run dev:worker   # worker (ترمینال دوم)
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 
 طبق سیاست صریح اپراتور، `staging` فقط مسیر انتشار سریع است: پس از CI کامل همان سایت، دیتابیس و ربات اصلی را به‌روز می‌کند؛ محیط یا poller دوم ساخته نمی‌شود. پوش معمولی `main` به‌تنهایی استقرار نمی‌دهد؛ مسیر دستی main نیازمند تأیید صریح Workflow و Environment است. Secrets استقرار را اپراتور تنظیم می‌کند. Backup رمزگذاری‌شده پیش از Migration، قفل مشترک سایت/ربات و health/readiness پس از انتشار الزامی‌اند؛ Rollback هرگز schema یا دورهٔ مالی را خودکار عقب نمی‌برد.
+
+### ParsGreen SMS catalog and authentication
+
+See [docs/PARSGREEN_TEMPLATES.md](docs/PARSGREEN_TEMPLATES.md) for operator-supplied ParsGreen WhiteText messages and their approval status, and [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) for verified phone/email registration and login. The catalog records message samples; dynamic WhiteText delivery requires provider approval and integration.

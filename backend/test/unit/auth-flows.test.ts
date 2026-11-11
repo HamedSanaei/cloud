@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { loadConfig } from '../../src/config.js'
-import { maskEmail, maskMobile, normalizeIranMobile } from '../../src/modules/auth/delivery.js'
+import { maskEmail, maskMobile, normalizeIranMobile, parsGreenRecipient } from '../../src/modules/auth/delivery.js'
 import { buildOtpAuthUri, createRecoveryCodes, createTotpSecret, decryptTotpSecret, encryptTotpSecret, generateTotpCode, hashRecoveryCode, verifyTotp } from '../../src/modules/auth/totp.js'
 
 // Auth helper tests must not load the operator's local provider credentials.
@@ -23,6 +23,9 @@ describe('authentication helpers', () => {
     expect(normalizeIranMobile('۰۹۱۲۳۴۵۶۷۸۹')).toBe('+989123456789')
     expect(normalizeIranMobile('08123456789')).toBeNull()
     expect(maskMobile('+989123456789')).toBe('09123***789')
+    expect(parsGreenRecipient('+989123456789')).toBe('09123456789')
+    expect(parsGreenRecipient('۰۹۱۲۳۴۵۶۷۸۹')).toBe('09123456789')
+    expect(() => parsGreenRecipient('08123456789')).toThrow()
   })
 
   it('masks email destinations', () => {

@@ -39,14 +39,18 @@ export async function startRegistration(input: { email: string; password: string
   return (await apiPost<Data<AuthChallenge>>('/auth/register/start', input)).data
 }
 
+export async function startPhoneRegistration(input: { mobile: string; firstName?: string; lastName?: string }): Promise<AuthChallenge> {
+  return (await apiPost<Data<AuthChallenge>>('/auth/register/phone/start', input)).data
+}
+
 export async function startPhoneLogin(mobile: string): Promise<AuthChallenge> {
   return (await apiPost<Data<AuthChallenge>>('/auth/phone/start', { mobile })).data
 }
 
-export async function verifyChallenge(token: string, code: string): Promise<AuthSession> {
-  const session = (await apiPost<Data<AuthSession>>('/auth/challenge/verify', { token, code })).data
-  setAuthToken(session.token)
-  return session
+export async function verifyChallenge(token: string, code: string): Promise<AuthSession | AuthChallenge> {
+  const result = (await apiPost<Data<AuthSession | AuthChallenge>>('/auth/challenge/verify', { token, code })).data
+  if ('token' in result) setAuthToken(result.token)
+  return result
 }
 
 export async function verifyTotpChallenge(token: string, code: string): Promise<AuthSession> {
