@@ -1,4 +1,4 @@
-name: Cloud CI / Manual Deployment
+name: Cloud CI and Deployment
 
 on:
   push:
@@ -379,18 +379,18 @@ jobs:
           cache-from: type=gha,scope=cloud-api
           cache-to: type=gha,scope=cloud-api,mode=max
 
-  # This repository uses one shared live runtime. Code pushes only validate
-  # and publish immutable images; deploying either branch requires an explicit
-  # workflow_dispatch to avoid starting stopped services unintentionally.
+  # Staging automatically updates the SAME live runtime after CI.
+  # The main release lane remains manual and protected by owner review.
   deploy:
     name: Deploy tested release
     needs: build-push
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: >-
-      github.event_name == 'workflow_dispatch' &&
-      ((inputs.environment == 'staging' && github.ref == 'refs/heads/staging') ||
-       (inputs.environment == 'production' && github.ref == 'refs/heads/main' && inputs.confirm_production))
+      (github.event_name == 'push' && github.ref == 'refs/heads/staging') ||
+      (github.event_name == 'workflow_dispatch' &&
+       ((inputs.environment == 'staging' && github.ref == 'refs/heads/staging') ||
+        (inputs.environment == 'production' && github.ref == 'refs/heads/main' && inputs.confirm_production)))
     environment: ${{ github.ref == 'refs/heads/staging' && 'staging' || 'production' }}
     concurrency:
       group: cloud-production-deploy
