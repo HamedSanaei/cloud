@@ -28,14 +28,14 @@ interface StorefrontOffer {
   operatingSystems: ProviderOsOption[]
   prices: StorefrontPrice[]
 }
-export async function getStorefront(db: DbClient) {
+export async function getStorefront(db: DbClient, admin = false) {
   const config = getConfig()
   const registered = new Set(listProviders().map((provider) => provider.id))
   const configured = [
     { id: 'hetzner', ...config.PROVIDERS.hetzner },
     { id: 'leaseweb', ...config.PROVIDERS.leaseweb },
   ].filter((provider) => provider.enabled && provider.orderingEnabled && registered.has(provider.id))
-  const providerRows = await db.query.providers.findMany({ where: (t) => eq(t.enabled, true) })
+  const providerRows = await db.query.providers.findMany({ where: admin ? undefined : (t) => eq(t.enabled, true) })
   const active = configured.filter((provider) => providerRows.some((row) => row.id === provider.id && row.mode === 'live'))
   const activeIds = new Set(active.map((provider) => provider.id))
   const [products, locations] = await Promise.all([

@@ -32,9 +32,9 @@ export const registerOrderRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
       idempotencyKey,
     })
 
-    // Enqueue provisioning only after the DB transaction committed and only
-    // for freshly paid orders (idempotent replay returns the existing order).
-    if (result.created && result.order.status === 'paid') {
+    // Replay recovers a failed enqueue after payment committed. The queue uses
+    // the order ID, and the provider-operation claim prevents double dispatch.
+    if (result.order.status === 'paid') {
       await queues.addProvision(result.order.id)
     }
 

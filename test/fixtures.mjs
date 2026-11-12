@@ -22,3 +22,28 @@ export function fixture(path) {
   }
   return path in data ? { data: data[path] } : { data: [] }
 }
+
+// A separate site-authority scenario for current-browser checkout/admin QA.
+export function checkoutFixture(path) {
+  const base = fixture(path)
+  if (path === '/auth/me') return { data: { ...base.data, role: 'admin' } }
+  if (path === '/integration/status') return { data: { enabled: false, linked: false } }
+  if (path === '/wallets') return { data: [{ id: 'preview-wallet', name: 'کیف پول آزمایشی', balance: 0, isDefault: true }] }
+  if (path === '/wallets/summary') return { data: { totalBalance: 0, wallets: 1, defaultWallet: 'کیف پول آزمایشی', connectedProducts: 0 } }
+  if (path === '/admin/console/providers') return { data: [{ id: 'hetzner', name: 'Hetzner', enabled: true, configured: true }, { id: 'leaseweb', name: 'Leaseweb', enabled: false, configured: true }] }
+  if (path === '/catalog/storefront') {
+    const locations = [{ code: 'nbg1', country: 'DE', city: 'Nuremberg' }, { code: 'fsn1', country: 'DE', city: 'Falkenstein' }, { code: 'hel1', country: 'FI', city: 'Helsinki' }, { code: 'ash', country: 'US', city: 'Ashburn' }, { code: 'sin', country: 'SG', city: 'Singapore' }]
+    return { data: {
+      datacenters: [{ id: 'hetzner', name: 'Hetzner', logo: '/providers/hetzner.svg', locations, billingPeriods: ['hourly', 'daily', 'monthly'] }],
+      offers: locations.flatMap(location => [
+        { name: 'CX43', price: 88000, vcpu: 8, memoryMb: 16384, diskGb: 160 },
+        { name: 'CX23', price: 36000, vcpu: 2, memoryMb: 4096, diskGb: 40 },
+        { name: 'CX33', price: 56000, vcpu: 4, memoryMb: 8192, diskGb: 80 },
+      ].map(plan => ({ id: location.code + '-' + plan.name, provider: 'hetzner', location: location.code, category: 'cloud', ...plan, trafficGb: 20000,
+        operatingSystems: [{ id: 'ubuntu-24.04', label: 'Ubuntu 24.04' }, { id: 'debian-12', label: 'Debian 12' }],
+        prices: [{ period: 'hourly', totalRial: plan.price, billingCycle: 'hourly' }, { period: 'daily', totalRial: plan.price * 24, billingCycle: 'hourly' }, { period: 'monthly', totalRial: plan.price * 720, billingCycle: 'monthly' }],
+      }))),
+    } }
+  }
+  return base
+}

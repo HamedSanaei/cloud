@@ -47,8 +47,8 @@ export class ForbiddenError extends AppError {
 }
 
 export class InsufficientFundsError extends AppError {
-  constructor(message = 'موجودی کیف پول کافی نیست') {
-    super(422, 'insufficient_funds', message)
+  constructor(message = 'موجودی کیف پول کافی نیست', details?: unknown) {
+    super(422, 'insufficient_funds', message, details)
   }
 }
 

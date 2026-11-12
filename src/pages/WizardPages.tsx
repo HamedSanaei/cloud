@@ -9,7 +9,7 @@ import {
   Server,
   WalletCards,
 } from 'lucide-react'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button, LinkButton } from '../components/ui/Button'
 import { Card, SectionHeading } from '../components/ui/Card'
@@ -22,6 +22,9 @@ import { checkDomainAvailability, createServer, getOfferImages, getStorefrontCat
 import { formatFaNumber } from '../lib/format'
 import { useApiQuery } from '../hooks/useApiQuery'
 import type { BillingPeriod } from '../lib/types'
+import { useAuth } from '../auth/AuthContext'
+import { LocationCards } from '../components/ui/LocationCards'
+import { checkoutFailure, clearCheckoutDraft, minimumCreationBalance, readCheckoutDraft, saveCheckoutDraft } from '../lib/serverCheckout'
 
 const serverSteps = ['دیتاسنتر و موقعیت', 'دوره پرداخت', 'نوع و منابع سرور', 'سیستم عامل', 'کیف پول', 'تایید نهایی']
 const periodLabels: Record<BillingPeriod, string> = { hourly: 'ساعتی', daily: 'روزانه', monthly: 'ماهانه' }
@@ -29,17 +32,19 @@ const periodOrder: BillingPeriod[] = ['hourly', 'daily', 'monthly']
 const priceLabel = (totalRial: number) => `${formatFaNumber(totalRial / 10)} تومان`
 
 export function CreateServerPage() {
-  const [step, setStep] = useState(0)
-  const [providerId, setProviderId] = useState('')
-  const [location, setLocation] = useState('')
-  const [offerId, setOfferId] = useState('')
-  const [os, setOs] = useState('')
-  const [name, setName] = useState('')
-  const [walletId, setWalletId] = useState('')
-  const [billingPeriod, setBillingPeriod] = useState<BillingPeriod | ''>('')
+  const { user } = useAuth()
+  const [draft] = useState(() => readCheckoutDraft(user?.id))
+  const [step, setStep] = useState(draft?.step ?? 0)
+  const [providerId, setProviderId] = useState(draft?.providerId ?? '')
+  const [location, setLocation] = useState(draft?.location ?? '')
+  const [offerId, setOfferId] = useState(draft?.offerId ?? '')
+  const [os, setOs] = useState(draft?.os ?? '')
+  const [name, setName] = useState(draft?.name ?? '')
+  const [walletId, setWalletId] = useState(draft?.walletId ?? '')
+  const [billingPeriod, setBillingPeriod] = useState<BillingPeriod | ''>(draft?.billingPeriod ?? '')
   const [submitting, setSubmitting] = useState(false)
-  const [submitError, setSubmitError] = useState('')
-  const purchaseKey = useRef(crypto.randomUUID())
+  const [submitError, setSubmitError] = useState<ReturnType<typeof checkoutFailure> | null>(null)
+  const purchaseKey = useRef(draft?.purchaseKey || crypto.randomUUID())
   const submitLock = useRef(false)
   const navigate = useNavigate()
   const { showToast } = useToast()
@@ -51,6 +56,7 @@ export function CreateServerPage() {
   const locationOffers = (catalog.data?.offers ?? []).filter((item) => item.provider === providerId && item.location === location)
   const periods = periodOrder.filter((period) => provider?.billingPeriods.includes(period) && locationOffers.some((item) => item.prices.some((price) => price.period === period)))
   const visibleOffers = locationOffers.filter((item) => item.prices.some((price) => price.period === billingPeriod))
+    .sort((a, b) => a.prices.find(p => p.period === billingPeriod)!.totalRial - b.prices.find(p => p.period === billingPeriod)!.totalRial || a.name.localeCompare(b.name))
   const offer = visibleOffers.find((item) => item.id === offerId)
   const shared = catalog.data?.source === 'platform'
   const loadImages = useCallback(() => shared && offerId ? getOfferImages(offerId) : Promise.resolve([]), [shared, offerId])
@@ -64,8 +70,13 @@ export function CreateServerPage() {
   const periodValid = billingPeriod !== '' && periods.includes(billingPeriod)
   const offerValid = !!offer && !!price
   const walletValid = !wallets.loading && !wallets.error && !!wallet
+  const requiredBalanceRial = price && billingPeriod ? minimumCreationBalance(price.totalRial, billingPeriod) : 0
+  const walletBalanceRial = wallet?.balanceRial ?? (wallet?.balance ?? 0) * 10
+  const shortfall = wallet && price && walletBalanceRial < requiredBalanceRial ? {
+    balanceRial: walletBalanceRial, requiredBalanceRial, orderTotalRial: price.totalRial, shortfallRial: requiredBalanceRial - walletBalanceRial,
+  } : submitError?.funding
   const nameValid = shared || /^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]$/.test(name.trim())
-  const allValid = catalogReady && locationValid && periodValid && offerValid && !!selectedOs && walletValid && nameValid
+  const allValid = catalogReady && locationValid && periodValid && offerValid && !!selectedOs && walletValid && nameValid && !shortfall
   const canContinue = catalogReady && [
     locationValid,
     locationValid && periodValid,
@@ -74,7 +85,14 @@ export function CreateServerPage() {
     locationValid && periodValid && offerValid && !!selectedOs && walletValid,
     allValid,
   ][step]
-  const resetOffer = () => { setOfferId(''); setOs(''); setWalletId(''); setSubmitError(''); purchaseKey.current = crypto.randomUUID() }
+  const resetOffer = () => { setOfferId(''); setOs(''); setWalletId(''); setSubmitError(null); purchaseKey.current = crypto.randomUUID() }
+  const preserveOrder = () => saveCheckoutDraft(user?.id, { step, providerId, location, offerId, os, name, walletId, billingPeriod, purchaseKey: purchaseKey.current })
+  const refreshWallets = wallets.refetch
+  useEffect(() => {
+    const refresh = () => { refreshWallets(); setSubmitError(null) }
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [refreshWallets])
   const reloadCatalog = () => {
     setProviderId(''); setLocation(''); setBillingPeriod(''); resetOffer(); setStep(0); catalog.refetch()
   }
@@ -84,13 +102,14 @@ export function CreateServerPage() {
     if (!allValid || !billingPeriod || !offer || !selectedOs || !wallet) return
     setSubmitting(true)
     submitLock.current = true
-    setSubmitError('')
+    setSubmitError(null)
     try {
       await createServer({ name: name.trim(), offerId: offer.id, os: selectedOs.id, walletId: wallet.id, billingPeriod, pricing: offer.canonicalPricing, idempotencyKey: purchaseKey.current })
       showToast('سرور با موفقیت به صف ساخت اضافه شد.')
+      clearCheckoutDraft(user?.id)
       navigate('/servers')
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : 'ایجاد سرور ناموفق بود.')
+      setSubmitError(checkoutFailure(error))
     } finally {
       setSubmitting(false)
       submitLock.current = false
@@ -126,10 +145,7 @@ export function CreateServerPage() {
                   </button>
                 ))}
               </div>
-              {provider ? <Select label="موقعیت سرور" value={location} onChange={(event) => { setLocation(event.target.value); setBillingPeriod(''); resetOffer() }}>
-                <option value="">موقعیت را انتخاب کنید</option>
-                {provider.locations.map((item) => <option key={item.code} value={item.code}>{[item.city, item.country, item.code].filter(Boolean).join(' · ')}</option>)}
-              </Select> : <p className="storefront-hint">برای مشاهده موقعیت‌ها، ابتدا یک دیتاسنتر انتخاب کنید.</p>}
+              {provider ? <LocationCards locations={provider.locations} selected={location} onSelect={code => { if (code !== location) { setLocation(code); setBillingPeriod(''); resetOffer() } }} /> : <p className="storefront-hint">برای مشاهده موقعیت‌ها، ابتدا یک دیتاسنتر انتخاب کنید.</p>}
               {provider && !provider.locations.length ? <div className="storefront-state"><p>موقعیت قابل سفارشی برای این دیتاسنتر موجود نیست.</p><Button variant="secondary" onClick={reloadCatalog}>دریافت دوباره کاتالوگ</Button></div> : null}
             </div> : null}
             {step === 1 ? <div className="storefront-stack">
@@ -159,7 +175,7 @@ export function CreateServerPage() {
             {step === 3 ? <div className="storefront-stack">
               {shared && images.loading ? <p role="status">در حال دریافت سیستم‌عامل‌های قابل نصب…</p> : images.error ? <div role="alert"><p>{images.error}</p><Button variant="secondary" onClick={images.refetch}>تلاش دوباره</Button></div> : null}
               <div className="choice-grid storefront-grid">{operatingSystems.map((item) => (
-                <button type="button" key={item.id} aria-pressed={os === item.id} className={`choice-card os-card ${os === item.id ? 'choice-card--selected' : ''}`} onClick={() => { if (os !== item.id) purchaseKey.current = crypto.randomUUID(); setOs(item.id); setSubmitError('') }}>
+                <button type="button" key={item.id} aria-pressed={os === item.id} className={`choice-card os-card ${os === item.id ? 'choice-card--selected' : ''}`} onClick={() => { if (os !== item.id) purchaseKey.current = crypto.randomUUID(); setOs(item.id); setSubmitError(null) }}>
                   <HardDrive size={26} /><strong dir="auto">{item.label || item.id}</strong>{item.family ? <span dir="auto">{item.family}</span> : null}
                 </button>
               ))}</div>
@@ -167,14 +183,14 @@ export function CreateServerPage() {
             </div> : null}
             {step === 4 ? <div className="storefront-stack">
               {wallets.loading ? <div className="storefront-state" role="status">در حال دریافت کیف پول‌ها…</div> : wallets.error ? <div className="storefront-state" role="alert"><p>{wallets.error}</p><Button variant="secondary" onClick={wallets.refetch}>تلاش دوباره</Button></div> : !wallets.data?.length ? <div className="storefront-state"><p>برای ثبت سفارش ابتدا یک کیف پول ایجاد و شارژ کنید.</p><LinkButton to="/wallet" variant="secondary">مدیریت کیف پول‌ها</LinkButton><Button variant="secondary" onClick={wallets.refetch}>دریافت دوباره کیف پول‌ها</Button></div> :
-                <Select label="کیف پول پرداخت" value={walletId} onChange={(event) => { if (walletId !== event.target.value) purchaseKey.current = crypto.randomUUID(); setWalletId(event.target.value); setSubmitError('') }}>
+                <Select label="کیف پول پرداخت" value={walletId} onChange={(event) => { if (walletId !== event.target.value) purchaseKey.current = crypto.randomUUID(); setWalletId(event.target.value); setSubmitError(null) }}>
                   <option value="">کیف پول را انتخاب کنید</option>
                   {wallets.data.map((item) => <option key={item.id} value={item.id}>{item.name} — {formatFaNumber(item.balance)} تومان</option>)}
                 </Select>}
-              <div className="info-box"><WalletCards size={20} /><span>{price ? `مبلغ ${priceLabel(price.totalRial)} برای دوره ${billingPeriod ? periodLabels[billingPeriod] : ''} از کیف پول انتخابی پرداخت می‌شود. موجودی هنگام ثبت سفارش بررسی خواهد شد.` : 'ابتدا محصول و دوره پرداخت معتبر انتخاب کنید.'}</span></div>
+              <div className="info-box"><WalletCards size={20} /><span>{price ? `مبلغ ${priceLabel(price.totalRial)} برای دوره ${billingPeriod ? periodLabels[billingPeriod] : ''} پرداخت می‌شود. حداقل اعتبار این سرور برای ۷ روز: ${priceLabel(requiredBalanceRial)}. تعهد سرورهای دیگر هنگام ثبت سفارش بررسی می‌شود؛ اعتبار اضافه برداشت نمی‌شود.` : 'ابتدا محصول و دوره پرداخت معتبر انتخاب کنید.'}</span></div>
             </div> : null}
             {step === 5 ? <div className="review-grid">
-              {shared ? <p className="info-box">نام اولیه سرور توسط سرویس مرجع تعیین می‌شود. مبلغ تومانی برآورد نرخ جاری است؛ تسویه با تعرفه و نرخ معتبر هنگام ثبت سفارش انجام می‌شود.</p> : <Input label="نام سرور" value={name} disabled={submitting} maxLength={63} dir="ltr" placeholder="my-server" onChange={(event) => { setName(event.target.value); setSubmitError('') }}
+              {shared ? <p className="info-box">نام اولیه سرور توسط سرویس مرجع تعیین می‌شود. مبلغ تومانی برآورد نرخ جاری است؛ تسویه با تعرفه و نرخ معتبر هنگام ثبت سفارش انجام می‌شود.</p> : <Input label="نام سرور" value={name} disabled={submitting} maxLength={63} dir="ltr" placeholder="my-server" onChange={(event) => { setName(event.target.value); setSubmitError(null) }}
                 hint="۳ تا ۶۳ نویسه انگلیسی، عدد یا خط تیره؛ ابتدا و انتها حرف یا عدد باشد." error={name && !nameValid ? 'نام سرور معتبر نیست.' : undefined} />
               }
               <div className="review-list">
@@ -186,9 +202,17 @@ export function CreateServerPage() {
                 <ReviewRow label="سیستم عامل" value={selectedOs?.label || selectedOs?.id || 'انتخاب نشده'} />
                 <ReviewRow label="کیف پول" value={wallet?.name ?? 'انتخاب نشده'} />
                 <ReviewRow label="مبلغ پرداخت" value={price ? priceLabel(price.totalRial) : 'انتخاب نشده'} />
+                <ReviewRow label="حداقل اعتبار برای ۷ روز" value={price ? priceLabel(requiredBalanceRial) : 'انتخاب نشده'} />
               </div>
               {!locationValid || !periodValid || !offerValid || !selectedOs || !walletValid ? <div className="storefront-state" role="alert"><p>انتخاب‌های سفارش معتبر نیست؛ کاتالوگ را دوباره دریافت و مراحل را تکمیل کنید.</p><Button variant="secondary" onClick={reloadCatalog}>انتخاب دوباره</Button></div> : null}
-              {submitError ? <div className="storefront-state" role="alert"><p>{submitError}</p><Button variant="secondary" onClick={reloadCatalog}>به‌روزرسانی کاتالوگ و انتخاب دوباره</Button></div> : null}
+              {submitError && !shortfall ? <div className="storefront-state" role="alert"><p>{submitError.message}</p><LinkButton to="/servers" variant="secondary">بررسی سرورهای من</LinkButton><Button variant="secondary" onClick={() => setStep(0)}>بررسی انتخاب‌های سفارش</Button></div> : null}
+            </div> : null}
+            {step >= 4 && shortfall ? <div className="checkout-funding" role="alert">
+              <strong>موجودی کیف پول شما کافی نیست.</strong>
+              <p>برای ساخت سرور، اعتبار حداقل یک هفتهٔ آینده لازم است.</p>
+              <div className="review-list"><ReviewRow label="موجودی کیف پول" value={priceLabel(shortfall.balanceRial)} /><ReviewRow label="مبلغ پرداخت سفارش" value={priceLabel(shortfall.orderTotalRial)} /><ReviewRow label="حداقل موجودی موردنیاز" value={priceLabel(shortfall.requiredBalanceRial)} /><ReviewRow label="مبلغ افزایش موجودی" value={priceLabel(shortfall.shortfallRial)} /></div>
+              <LinkButton to="/wallet?returnTo=server-checkout" onClick={preserveOrder}>افزایش موجودی کیف پول</LinkButton>
+              <Button variant="secondary" onClick={() => { setSubmitError(null); wallets.refetch() }}>بررسی دوباره موجودی</Button>
             </div> : null}
           </>}
         </div>

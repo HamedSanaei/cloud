@@ -24,7 +24,7 @@ function open(path: string) {
 
 async function reviewOrder(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole('button', { name: /Hetzner/ }))
-  await user.selectOptions(screen.getByLabelText('موقعیت سرور'), 'fsn1')
+  await user.click(screen.getByRole('button', { name: /فالکنشتاین/ }))
   await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
   await user.click(screen.getByRole('button', { name: /ساعتی.*پرداخت/ }))
   await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
