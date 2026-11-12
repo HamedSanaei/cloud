@@ -46,7 +46,7 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
   app.post('/servers', async (request, reply) => {
     const user = requireUser(request)
     const input = parse(wizardSchema, request.body)
-    const idempotencyKey = (request.headers['idempotency-key'] as string | undefined) ?? undefined
+    const idempotencyKey = parse(z.string().min(1).max(200).optional(), request.headers['idempotency-key'])
 
     const offer = await getOffer(db, input.offerId)
     const location = offer.locationId ? await db.query.providerLocations.findFirst({ where: (t) => eq(t.id, offer.locationId!) }) : null
@@ -70,7 +70,7 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
       idempotencyKey,
     })
 
-    if (result.created && result.order.status === 'paid') {
+    if (result.order.status === 'paid') {
       await queues.addProvision(result.order.id)
     }
 

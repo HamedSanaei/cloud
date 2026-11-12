@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { randomInt } from 'node:crypto'
 import type { DbClient, DbOrTx } from '../../db/index.js'
 import { invoices, invoiceItems, orderEvents, orderItems, orders } from '../../db/schema.js'
@@ -7,6 +7,8 @@ import { writeAudit } from '../audit/service.js'
 import { assertQuoteValid, getQuote, lockQuote, markQuoteAccepted } from '../quotes/service.js'
 import { applyWalletTransaction, getWallet } from '../wallets/service.js'
 import type { invoiceStatusEnum, orderStatusEnum } from '../../db/schema.js'
+import { assertCreationFunding } from '../billing/creation-funding.js'
+import { assertProviderPurchaseAllowed } from '../catalog/policy.js'
 
 export type OrderStatus = (typeof orderStatusEnum.enumValues)[number]
 export type InvoiceStatus = (typeof invoiceStatusEnum.enumValues)[number]
@@ -90,26 +92,28 @@ export interface CreateOrderInput {
 }
 
 export async function createOrderFromQuote(db: DbClient, input: CreateOrderInput) {
-  // Idempotency: same key => same order (no double charge, no double order).
-  if (input.idempotencyKey) {
-    const existing = await db.query.orders.findFirst({
-      where: (t) => eq(t.idempotencyKey, input.idempotencyKey ?? ''),
-    })
-    if (existing) return { order: existing, created: false }
-  }
-
-  const quote = await getQuote(db, input.userId, input.quoteId)
-  await assertQuoteValid(db, quote)
-
-  const hostname = input.hostname.trim() || `vps-${quote.providerProductId.toLowerCase()}-${randomInt(1000, 9999)}`
-  if (!/^[a-z0-9][a-z0-9.-]{2,62}$/i.test(hostname)) {
-    throw new ValidationError('نام میزبان نامعتبر است')
-  }
-
   let wallet = null
   if (input.walletId) wallet = await getWallet(db, input.userId, input.walletId)
 
   const result = await db.transaction(async (tx) => {
+    if (input.idempotencyKey) {
+      // Serialize equal keys before reading a quote (which may already have
+      // been accepted by the first request). Never replay another user's order.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${input.idempotencyKey}, 0))`)
+      const existing = await tx.query.orders.findFirst({ where: t => eq(t.idempotencyKey, input.idempotencyKey!) })
+      if (existing) {
+        if (existing.userId !== input.userId) throw new ConflictError('کلید درخواست قبلاً استفاده شده است')
+        return { order: existing, created: false }
+      }
+    }
+    const quote = await getQuote(tx, input.userId, input.quoteId)
+    await assertQuoteValid(tx, quote)
+    await assertProviderPurchaseAllowed(tx, quote.provider, input.userId)
+    const hostname = input.hostname.trim() || `vps-${quote.providerProductId.toLowerCase()}-${randomInt(1000, 9999)}`
+    if (!/^[a-z0-9][a-z0-9.-]{2,62}$/i.test(hostname)) throw new ValidationError('نام میزبان نامعتبر است')
+    if (wallet) await assertCreationFunding(tx, {
+      userId: input.userId, walletId: wallet.id, totalRial: quote.totalRial, billingInterval: quote.billingInterval,
+    })
     // Single-use guarantee: lock the quote row so two concurrent orders can
     // never consume the same quote.
     const lockedQuote = await lockQuote(tx, quote.id)
@@ -210,17 +214,17 @@ export async function createOrderFromQuote(db: DbClient, input: CreateOrderInput
       })
     }
 
-    return { order, invoice }
+    return { order, invoice, created: true }
   })
 
-  await writeAudit(db, {
+  if (result.created) await writeAudit(db, {
     actorId: input.userId,
     action: 'order.created',
     targetType: 'order',
     targetId: result.order.id,
-    metadata: { orderNumber: result.order.orderNumber, totalRial: quote.totalRial, paid: Boolean(wallet) },
+    metadata: { orderNumber: result.order.orderNumber, totalRial: result.order.totalRial, paid: Boolean(wallet) },
   })
-  return { order: result.order, created: true }
+  return { order: result.order, created: result.created }
 }
 
 // ---------------------------------------------------------------------------
@@ -238,8 +242,11 @@ export async function payOrder(
   const wallet = await getWallet(db, input.userId, input.walletId)
 
   const result = await db.transaction(async (tx) => {
-    const txOrder = await tx.query.orders.findFirst({ where: (t) => eq(t.id, input.orderId) })
+    const [txOrder] = await tx.select().from(orders).where(eq(orders.id, input.orderId)).for('update')
+    if (txOrder?.status === 'paid') return txOrder
     if (!txOrder || txOrder.status !== 'awaiting_payment') throw new ConflictError('این سفارش قابل پرداخت نیست')
+    await assertProviderPurchaseAllowed(tx, txOrder.provider, input.userId)
+    await assertCreationFunding(tx, { userId: input.userId, walletId: wallet.id, totalRial: txOrder.totalRial, billingInterval: txOrder.billingInterval })
 
     await applyWalletTransaction(tx, input.userId, wallet.id, {
       amountRial: txOrder.totalRial,
@@ -252,7 +259,7 @@ export async function payOrder(
 
     const [updated] = await tx
       .update(orders)
-      .set({ status: 'paid', paidAt: new Date(), updatedAt: new Date() })
+      .set({ status: 'paid', walletId: wallet.id, paidAt: new Date(), updatedAt: new Date() })
       .where(eq(orders.id, txOrder.id))
       .returning()
     if (!updated) throw new Error('failed to mark order paid')

@@ -13,7 +13,11 @@ export const registerCatalogRoutes: FastifyPluginAsync<{ ctx: AppContext }> = as
   const { db } = ctx
 
   // Public catalog projection contains no credentials or provider account ids.
-  app.get('/catalog/storefront', async () => ({ data: await getStorefront(db) }))
+  app.get('/catalog/storefront', async (request, reply) => {
+    // Admin sales visibility must never enter a shared/public cache.
+    reply.header('Cache-Control', 'private, no-store').header('Vary', 'Cookie, Authorization')
+    return { data: await getStorefront(db, request.user?.role === 'admin' && request.user.status === 'active') }
+  })
 
   app.get('/catalog/providers', async () => {
     const rows = await listCatalogProviders(db)

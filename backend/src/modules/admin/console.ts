@@ -1,5 +1,6 @@
 /**
- * Read-only admin console. All records come from the website PostgreSQL DB.
+ * Admin console backed by the website PostgreSQL DB. Sales switches are the
+ * only mutations here and are authorized, transactional and audited.
  * No provider credentials, password hashes, TOTP material or platform tokens
  * are returned. The canonical site-authority guard runs before these routes.
  */
@@ -7,7 +8,7 @@ import type { FastifyPluginAsync } from 'fastify'
 import { and, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppContext } from '../../app.js'
-import { users, wallets, orders, servers } from '../../db/schema.js'
+import { users, wallets, orders, servers, providers } from '../../db/schema.js'
 import { getConfig } from '../../config.js'
 import { syncHetznerInventory } from '../providers/hetzner/inventory.js'
 import { requireAdmin } from '../../http/auth.js'
@@ -15,6 +16,8 @@ import { parse } from '../../http/validate.js'
 import { NotFoundError, ConflictError } from '../../lib/errors.js'
 import { rialToToman } from '../../lib/money.js'
 import { isSiteAuthority } from '../integration/authority.js'
+import { writeAudit } from '../audit/service.js'
+import { listProviders } from '../providers/registry.js'
 
 const paging = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),
@@ -82,6 +85,33 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
   app.addHook('preHandler', async request => {
     requireAdmin(request)
     ensureSiteAuthority()
+  })
+
+  app.get('/providers', async () => {
+    const rows = await ctx.db.query.providers.findMany()
+    const config = getConfig()
+    const registered = new Set(listProviders().map(p => p.id))
+    return { data: (['hetzner', 'leaseweb'] as const).map(id => {
+      const settings = config.PROVIDERS[id]
+      const row = rows.find(p => p.id === id)
+      return { id, name: settings.displayName, enabled: row?.enabled ?? false,
+        configured: settings.enabled && settings.orderingEnabled && registered.has(id) && row?.mode === 'live' }
+    }) }
+  })
+
+  app.patch('/providers/:id', async request => {
+    const admin = requireAdmin(request)
+    const { id } = parse(z.object({ id: z.enum(['hetzner', 'leaseweb']) }), request.params)
+    const { enabled } = parse(z.object({ enabled: z.boolean() }).strict(), request.body)
+    await ctx.db.transaction(async tx => {
+      const [row] = await tx.select().from(providers).where(eq(providers.id, id)).for('update')
+      if (!row) throw new NotFoundError('کاتالوگ این دیتاسنتر هنوز دریافت نشده است')
+      if (row.enabled === enabled) return
+      await tx.update(providers).set({ enabled, updatedAt: new Date() }).where(eq(providers.id, id))
+      await writeAudit(tx, { actorId: admin.id, action: 'provider.sales_changed', targetType: 'provider',
+        metadata: { providerId: id, previousEnabled: row.enabled, enabled } })
+    })
+    return { data: { id, enabled } }
   })
 
   app.get('/overview', async () => {

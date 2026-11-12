@@ -86,6 +86,7 @@ export function createCloudQueues(redisUrl: string = getConfig().REDIS_URL): Clo
         'provision',
         { orderId } satisfies ProvisionJobData,
         {
+          jobId: `provision-${orderId}`,
           attempts: 6,
           backoff: { type: 'exponential', delay: 5_000 },
           removeOnComplete: 200,

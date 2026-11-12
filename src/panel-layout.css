@@ -104,3 +104,22 @@
   }
   .app-shell .page-header { min-height: 0; }
 }
+/* Readable Persian panel labels, including the guided server checkout. */
+.app-shell .field__label, .app-shell .field__hint, .app-shell .stepper__label,
+.app-shell .metric-card > span:not(.metric-card__icon), .app-shell .table th,
+.app-shell .choice-card span, .app-shell .choice-card small { font-size: 14px; line-height: 1.8; }
+.app-shell .choice-card strong { font-size: 17px; }
+.app-shell .info-box, .app-shell .review-list, .app-shell .storefront-hint { font-size: 15px; line-height: 1.9; }
+.wizard-card__footer { direction: rtl; }
+.location-picker { border: 0; margin: 0; padding: 0; min-width: 0; }
+.location-picker legend { margin-bottom: 14px; font-weight: 700; font-size: 16px; }
+.location-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
+.location-card img { border: 1px solid var(--border); border-radius: 5px; object-fit: cover; }
+.checkout-funding { display: grid; gap: 16px; margin-top: 24px; padding: 24px; border: 1px solid #fbbf24; border-radius: 14px; background: var(--surface); font-size: 15px; }
+.checkout-funding .review-list { width: 100%; }
+.checkout-return { flex-wrap: wrap; }
+@media (max-width: 600px) {
+  .checkout-funding { padding: 16px; }
+  .server-storefront .storefront-footer { display: flex; flex-wrap: wrap; gap: 12px; }
+  .server-storefront .storefront-footer .button { flex: 1; min-width: 120px; }
+}

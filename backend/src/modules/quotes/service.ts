@@ -7,7 +7,7 @@ import { getOffer } from '../catalog/service.js'
 import { computePriceSnapshot } from '../pricing/service.js'
 import type { ProviderBillingOption, ProviderSlaOption } from '../providers/provider.interface.js'
 import { nativePeriod, retailBilling, type RetailPeriod } from '../pricing/periods.js'
-import { getProvider } from '../providers/registry.js'
+import { assertProviderPurchaseAllowed } from '../catalog/policy.js'
 
 export interface CreateQuoteInput {
   userId: string
@@ -22,14 +22,7 @@ export interface CreateQuoteInput {
 export async function createQuote(db: DbClient, input: CreateQuoteInput) {
   const offer = await getOffer(db, input.offerId)
   if (!offer.enabled || !offer.available) throw new ValidationError('این محصول فعلاً قابل سفارش نیست')
-  getProvider(offer.provider).require('provision')
-  const config = getConfig()
-  const settings = offer.provider === 'hetzner' ? config.PROVIDERS.hetzner : config.PROVIDERS.leaseweb
-  if (config.NODE_ENV !== 'test' && (!settings.enabled || !settings.orderingEnabled)) {
-    throw new ValidationError('ثبت سفارش این دیتاسنتر فعلاً فعال نیست')
-  }
-  const providerRow = await db.query.providers.findFirst({ where: (t) => eq(t.id, offer.provider) })
-  if (!providerRow?.enabled) throw new ValidationError('این دیتاسنتر غیرفعال است')
+  await assertProviderPurchaseAllowed(db, offer.provider, input.userId)
   const location = offer.locationId
     ? await db.query.providerLocations.findFirst({ where: (t) => eq(t.id, offer.locationId!) })
     : null
@@ -101,7 +94,7 @@ export async function createQuote(db: DbClient, input: CreateQuoteInput) {
   return quote
 }
 
-export async function getQuote(db: DbClient, userId: string, quoteId: string) {
+export async function getQuote(db: DbOrTx, userId: string, quoteId: string) {
   const quote = await db.query.quotes.findFirst({ where: (t) => eq(t.id, quoteId) })
   if (!quote || quote.userId !== userId) throw new NotFoundError('استعلام قیمت یافت نشد')
   return quote

@@ -117,6 +117,8 @@ export interface Wallet {
   id: string
   name: string
   balance: number
+  /** Exact ledger amount; displayed whole-toman values may be truncated. */
+  balanceRial?: number
   isDefault: boolean
   description?: string
   connectedProducts?: number
