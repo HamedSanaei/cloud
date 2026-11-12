@@ -36,9 +36,25 @@ describe('site authority source-of-truth', () => {
   it('fails closed if a Python account binding could still write data', async () => {
     loadConfig({ NODE_ENV: 'test', DATA_AUTHORITY: 'site' })
     const db = {
-      query: { platformLinks: { findFirst: vi.fn().mockResolvedValue({ userId: admin.id }) } },
+      query: {
+        platformLinks: { findFirst: vi.fn().mockResolvedValue({ userId: admin.id }) },
+        auditLogs: { findFirst: vi.fn().mockResolvedValue(undefined) },
+      },
     } as unknown as AppContext['db']
-    await expect(assertSiteAuthorityReady(db)).rejects.toThrow('stale Python platform links exist')
+    await expect(assertSiteAuthorityReady(db)).rejects.toThrow('no verified empty-ledger cutover')
+  })
+
+  it('retains a legacy test identity when empty-ledger cutover was audited', async () => {
+    loadConfig({ NODE_ENV: 'test', DATA_AUTHORITY: 'site' })
+    const db = {
+      query: {
+        platformLinks: { findFirst: vi.fn().mockResolvedValue({ userId: admin.id }) },
+        auditLogs: { findFirst: vi.fn().mockResolvedValue({
+          metadata: { siteCanonical: true, moneyOrdersServersEmpty: true, linkCount: 1, releaseSha: 'a'.repeat(40) },
+        }) },
+      },
+    } as unknown as AppContext['db']
+    await expect(assertSiteAuthorityReady(db)).resolves.toBeUndefined()
   })
 
 })

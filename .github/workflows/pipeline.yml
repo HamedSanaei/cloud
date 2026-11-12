@@ -73,7 +73,8 @@ jobs:
             bash -n "$script"
           done
           shellcheck deploy/scripts/deploy.sh deploy/scripts/server-bootstrap.sh \
-            deploy/scripts/activate-site-authority.sh deploy/scripts/reconcile-runtime.sh deploy/tests/runtime-recovery-*.sh
+            deploy/scripts/activate-site-authority.sh deploy/scripts/restore-site-authority.sh \
+            deploy/scripts/reconcile-runtime.sh deploy/tests/runtime-recovery-*.sh
 
       - name: Validate recovery target and archive safety
         run: python3 -m unittest discover -s deploy/tests -v
@@ -453,7 +454,7 @@ jobs:
           bundle=".release-${RELEASE_SHA}-${GITHUB_RUN_ID}"
           common=(-o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -i "$HOME/.ssh/deploy_key")
           ssh "${common[@]}" -p "$port" "$target" "test -d '$DEPLOY_PATH' && test -f '$DEPLOY_PATH/.env' && mkdir -m 700 '$DEPLOY_PATH/$bundle'"
-          for script in deploy.sh activate-site-authority.sh reconcile-runtime.sh runtime-reconcile.py; do
+          for script in deploy.sh activate-site-authority.sh restore-site-authority.sh reconcile-runtime.sh runtime-reconcile.py; do
             scp "${common[@]}" -P "$port" "deploy/scripts/$script" "${target}:${DEPLOY_PATH}/${bundle}/${script}"
             read -r checksum _ < <(sha256sum "deploy/scripts/$script")
             actual="$(ssh "${common[@]}" -p "$port" "$target" "sha256sum '$DEPLOY_PATH/$bundle/$script'")"
@@ -491,11 +492,35 @@ jobs:
           printf -v invoke 'COMPOSE_DIR=%q CLOUD_PORT=%q RELEASE_SHA=%q API_IMAGE=%q bash %q %q %q %q' \
             "$DEPLOY_PATH" "$CLOUD_PORT" "$RELEASE_SHA" "$API_IMAGE" "$script" "$IMAGE" "$PUBLIC_URL" "$skip"
           printf -v registry "printf '%%s' \"\$registry_token\" | docker login ghcr.io -u %q --password-stdin >/dev/null" "$GHCR_ACTOR"
-          printf -v cleanup "rm -rf -- \"\$DOCKER_CONFIG\"; rm -rf -- %q" "$bundle"
+          # Keep the verified bundle until cutover rollback (if needed) completes.
+          printf -v cleanup 'rm -rf -- "$DOCKER_CONFIG"'
           printf -v remote "set -Eeuo pipefail; DOCKER_CONFIG=\"\$(mktemp -d)\"; export DOCKER_CONFIG; trap %q EXIT; IFS= read -r registry_token; %s; unset registry_token GHCR_TOKEN; %s" "$cleanup" "$registry" "$invoke"
           printf '%s\n' "$GHCR_TOKEN" | ssh -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -i "$HOME/.ssh/deploy_key" \
             -p "$port" "$target" "$remote"
+
+      - name: Restore prior authority if the first cutover deploy failed
+        if: failure() && github.ref == 'refs/heads/staging'
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_PORT:-22}"
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          script="${DEPLOY_PATH}/.release-${RELEASE_SHA}-${GITHUB_RUN_ID}/restore-site-authority.sh"
+          printf -v remote 'COMPOSE_DIR=%q RELEASE_SHA=%q bash %q' "$DEPLOY_PATH" "$RELEASE_SHA" "$script"
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 -i "$HOME/.ssh/deploy_key" -p "$port" "$target" "$remote"
+
+      - name: Remove verified release bundle after deployment or recovery
+        if: always()
+        run: |
+          port="${DEPLOY_PORT:-22}"
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          bundle="${DEPLOY_PATH}/.release-${RELEASE_SHA}-${GITHUB_RUN_ID}"
+          if [[ -f "$HOME/.ssh/deploy_key" && "$bundle" == /opt/tofan/cloud/.release-* ]]; then
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o ConnectTimeout=20 -i "$HOME/.ssh/deploy_key" -p "$port" "$target" \
+              "rm -rf -- '$bundle'" || true
+          fi
 
       - name: Remove ephemeral SSH credentials
         if: always()

@@ -471,6 +471,18 @@ rollback() {
     return 1
   fi
 
+  # On a failed FIRST source switch, roll back the server-owned .env before
+  # restarting old platform-mode images. Their legacy identity remains intact.
+  if [[ "$DEPLOY_SITE" == 1 && "$PREV_AUTHORITY" != site ]]; then
+    if ! COMPOSE_DIR="$COMPOSE_DIR" RELEASE_SHA="$RELEASE_SHA" \
+         bash "$(dirname "${BASH_SOURCE[0]}")/restore-site-authority.sh" --lock-held; then
+      die "Cannot restore the previous data authority automatically"
+      return 1
+    fi
+    DEPLOY_SITE=0
+    CONFIGURED_AUTHORITY="$(grep -E '^DATA_AUTHORITY=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || true)"
+    CONFIGURED_AUTHORITY="${CONFIGURED_AUTHORITY:-auto}"
+  fi
   write_compose "${PREV_IMAGE}" "${PREV_API_IMAGE}" "${FINAL}"
   if reconcile && compose "$FINAL" up -d --no-deps cloud-api cloud-worker cloud; then
     if wait_healthy && wait_api_healthy && current_healthy && api_healthy && reconcile --check; then

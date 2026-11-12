@@ -29,7 +29,7 @@ prev_sha="$(grep -E '^sha=' "$META" | tail -n1 | cut -d= -f2- || true)"
 # are allowed, but even test orders need an explicit separate review.
 state="$(docker exec tofan-cloud-postgres psql -X -A -t -v ON_ERROR_STOP=1 -U cloud -d cloud -c "
 SELECT CASE WHEN
-  EXISTS (SELECT 1 FROM platform_links)
+  (SELECT count(*) FROM platform_links) > 1
   OR EXISTS (SELECT 1 FROM wallet_transactions)
   OR EXISTS (SELECT 1 FROM wallets WHERE balance_rial <> 0)
   OR EXISTS (SELECT 1 FROM orders)
@@ -66,6 +66,21 @@ if [[ ! -f "$backup" ]]; then
   }
   chmod 0600 "$backup"
 fi
+# Capture an encrypted CONSISTENT snapshot before recording website authority.
+# The one historical Python account binding is preserved, not deleted/revoked;
+# it is never used by site-authority API/worker paths.
+database_backup="$COMPOSE_DIR/backups/pre-site-authority-${prev_sha}-${RELEASE_SHA}.pgdump.gpg"
+if [[ ! -f "$database_backup" ]]; then
+  if ! docker exec tofan-cloud-postgres pg_dump -U cloud -d cloud -Fc |
+    gpg --batch --yes --pinentry-mode loopback --no-symkey-cache \
+      --symmetric --cipher-algo AES256 --compress-algo none \
+      --passphrase-fd 3 --output "$database_backup" 3<<<"$backup_key"; then
+    rm -f -- "$database_backup"
+    echo "encrypted database snapshot failed; source remains unchanged" >&2
+    exit 1
+  fi
+  chmod 0600 "$database_backup"
+fi
 unset backup_key
 # Optional empty provider TOML lets the website own existing inventory without
 # silently enabling unconfigured paid provider ordering.
@@ -79,6 +94,44 @@ if [[ ! -e "$provider" ]]; then
 fi
 [[ -f "$provider" ]] || { echo "provider config missing" >&2; exit 1; }
 
+# Record the precise source switch in the website audit, WITHOUT changing or
+# exposing the old encrypted platform link. Recheck under table locks to avoid
+# trusting a stale diagnostic read.
+if ! docker exec -i tofan-cloud-postgres psql -X -q -A -t -v ON_ERROR_STOP=1 -U cloud -d cloud <<SQL
+BEGIN;
+LOCK TABLE platform_links, wallets, wallet_transactions, orders, servers,
+  subscriptions, invoices, provider_operations, charge_requests
+  IN SHARE ROW EXCLUSIVE MODE;
+DO \$cutover\$
+BEGIN
+  IF (SELECT count(*) FROM platform_links) > 1
+    OR EXISTS (SELECT 1 FROM wallet_transactions)
+    OR EXISTS (SELECT 1 FROM wallets WHERE balance_rial <> 0)
+    OR EXISTS (SELECT 1 FROM orders)
+    OR EXISTS (SELECT 1 FROM servers)
+    OR EXISTS (SELECT 1 FROM subscriptions)
+    OR EXISTS (SELECT 1 FROM invoices)
+    OR EXISTS (SELECT 1 FROM provider_operations)
+    OR EXISTS (SELECT 1 FROM charge_requests)
+  THEN
+    RAISE EXCEPTION 'Site cutover blocked by financial records, server records or multiple linked identities';
+  END IF;
+END \\$cutover\\$;
+INSERT INTO audit_logs (action, metadata)
+VALUES ('authority.site_empty_cutover',
+  jsonb_build_object(
+    'siteCanonical', true, 'moneyOrdersServersEmpty', true,
+    'linkCount', (SELECT count(*) FROM platform_links),
+    'releaseSha', '${RELEASE_SHA}',
+    'legacyLinkPreserved', true,
+    'databaseBackupEncrypted', true
+  ));
+COMMIT;
+SQL
+then
+  echo "Cannot record verified site-authority cutover; .env unchanged" >&2
+  exit 1
+fi
 # Atomic update: preserve all secrets and fields; alter only the explicit mode.
 ENV_FILE="$ENV_FILE" python3 - <<'PY'
 import os
@@ -109,4 +162,4 @@ finally:
 PY
 printf '%s\n' "$RELEASE_SHA" >"$MARKER"
 chmod 0600 "$MARKER"
-echo "Empty installation promoted to website authority; encrypted previous env kept, release approved"
+echo "Website authority enabled; one legacy identity preserved but unused, encrypted backups retained"

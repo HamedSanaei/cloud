@@ -140,3 +140,25 @@ for the website server, wallet and order reads.
 
 If business records exist, the deployment deliberately stops before changing
 the authority. Review and reconcile them before attempting another cutover.
+
+### Verified legacy-link-only cutover
+
+The staging deployment inspection confirmed exactly one historical
+`platform_links` row and **zero** local wallet transactions, nonzero wallets,
+orders, servers, subscriptions, invoices, provider operations or charge
+requests. This is not a reason to erase the website account or the historical
+identity reference.
+
+The guarded one-time release now allows at most one existing legacy account
+binding **only when every financial/server table above is empty**. It creates
+encrypted snapshots of both the server-owned `.env` and the whole PostgreSQL
+database before recording an `authority.site_empty_cutover` audit receipt
+with the exact release SHA. Website site-mode reads ignore the preserved
+Python link entirely; neither users nor admins must connect Telegram.
+
+The server startup guard rejects historical links without this audited,
+verified empty-ledger cutover. The staging pipeline has a failure-only
+restoration step that restores the encrypted pre-cutover environment on a
+failed first deployment; deploy rollback also restores the previous
+authority before restarting older images. These backups contain sensitive
+material and must stay private on the server.
