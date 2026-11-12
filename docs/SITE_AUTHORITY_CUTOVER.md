@@ -108,3 +108,35 @@ admin-only scope.
 The former Penpot design page is `New File 2 → 05 · Admin`; exact pixel
 parity could not be independently verified while the Penpot browser plugin
 was suspended.
+
+## One-time empty-installation cutover (staging)
+
+The live runtime previously retained `DATA_AUTHORITY=auto`, with
+`PLATFORM_API_URL` configured; this silently selected the Python bridge
+despite site-mode application code. The resulting customer error was
+`platform_link_required` on `GET /api/servers`.
+
+The staging CD now carries a one-time guarded activation script,
+`deploy/scripts/activate-site-authority.sh`. It:
+
+1. Locks the website and shared platform release locks.
+2. Reads the currently deployed SHA and the existing server-owned `.env`.
+3. Refuses any existing linked platform account, nonzero wallet balance,
+   wallet transaction, order, server, subscription, invoice, provider operation
+   or charge request. Does not delete or import any records.
+4. Encrypts and retains the previous server-owned environment before updating
+   only the explicit `DATA_AUTHORITY=site` selector.
+5. Creates a private, explicitly disabled provider-catalog TOML only if no
+   site-owned provider configuration exists. **No live provider credentials
+   are invented**; paid ordering needs an actual supported provider account.
+6. Writes a temporary approval marker bound to the exact tested commit SHA.
+   The deploy script accepts that marker once, verifies the running API really
+   uses site authority, records the new source in release metadata and deletes
+   the approval marker.
+
+All later successful deployments use `DATA_AUTHORITY=site` without the
+migration marker, and the runtime no longer requests Telegram linkage
+for the website server, wallet and order reads.
+
+If business records exist, the deployment deliberately stops before changing
+the authority. Review and reconcile them before attempting another cutover.

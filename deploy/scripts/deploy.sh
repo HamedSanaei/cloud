@@ -553,14 +553,20 @@ PREV_IMAGE="$(meta_get image)"
 PREV_API_IMAGE="$(meta_get api_image)"
 PREV_SHA="$(meta_get sha)"
 PREV_AUTHORITY="$(meta_get data_authority)"
-if [[ -n "$PREV_AUTHORITY" && "$PREV_AUTHORITY" != "$CONFIGURED_AUTHORITY" ]]; then
-  die "Authority changes need an approved maintenance cutover, not a regular release"; exit 1
+# Only a one-time SHA-bound marker written by activate-site-authority.sh
+# after an empty-data check + encrypted environment backup may authorize the
+# first Python->website authority change. Subsequent releases remain site.
+if [[ "$PREV_AUTHORITY" != "$CONFIGURED_AUTHORITY" && -n "$PREV_IMAGE" ]]; then
+  if [[ "$DEPLOY_SITE" != 1 || "$PREV_AUTHORITY" == site ||
+        ! -f "${COMPOSE_DIR}/.site-authority-approved" ||
+        "$(cat "${COMPOSE_DIR}/.site-authority-approved")" != "$RELEASE_SHA" ]]; then
+    die "Data authority switch requires an approved, verified empty-site cutover"; exit 1
+  fi
 fi
-# Old releases did not record data_authority metadata, but required Python.
-# Never turn an existing Python deployment into a standalone site merely
-# because someone emptied PLATFORM_API_URL in the env file.
-if [[ "$DEPLOY_SITE" == 1 && -n "$PREV_IMAGE" && "$PREV_AUTHORITY" != site ]]; then
-  die "Existing platform deployment needs a separate audited site migration; regular release refused"; exit 1
+if [[ "$DEPLOY_SITE" == 1 && -n "$PREV_IMAGE" && "$PREV_AUTHORITY" != site &&
+      ( ! -f "${COMPOSE_DIR}/.site-authority-approved" ||
+        "$(cat "${COMPOSE_DIR}/.site-authority-approved")" != "$RELEASE_SHA" ) ]]; then
+  die "Existing Python deployment cannot silently become site authority"; exit 1
 fi
 log "data authority: ${CONFIGURED_AUTHORITY}"
 log "deploy dir    : ${COMPOSE_DIR}"
@@ -692,6 +698,17 @@ else
   rollback "local api /api/health/ready failed for ${API_IMAGE}" || exit 1
   exit 2
 fi
+if [[ "$CONFIGURED_AUTHORITY" == site ]]; then
+  if docker exec "$API_CONTAINER" node --input-type=module -e '
+      import {effectiveAuthority} from "./dist/modules/integration/authority.js";
+      if (effectiveAuthority() !== "site") process.exit(1);
+    ' >/dev/null; then
+    good "website database is the canonical runtime authority"
+  else
+    rollback "API is not using website data authority" || exit 1
+    exit 2
+  fi
+fi
 
 if curl -fsS -o /dev/null "$SPA"; then
   good "local SPA route OK -> ${SPA}"
@@ -751,6 +768,11 @@ meta_set deployed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 meta_set public_url "$PUBLIC_URL"
 meta_set environment production
 meta_set data_authority "$CONFIGURED_AUTHORITY"
+# A successful website cutover now has durable metadata; no temporary
+# migration approval should authorize a later unrelated release.
+if [[ "$CONFIGURED_AUTHORITY" == site ]]; then
+  rm -f -- "${COMPOSE_DIR}/.site-authority-approved"
+fi
 meta_set platform_contract 1
 meta_set database_head "$EXPECTED_DB_HEAD"
 

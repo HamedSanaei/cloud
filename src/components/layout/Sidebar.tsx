@@ -3,12 +3,15 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { accountLinks, navGroups, settingsLinks } from '../../data/navigation'
 import { useToast } from '../ui/Toast'
 import { useAuth } from '../../auth/AuthContext'
+import { useApiQuery } from '../../hooks/useApiQuery'
+import { getIntegrationStatus } from '../../lib/platformClient'
 import { BRAND_NAME, BrandMark } from '../Brand'
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { showToast } = useToast()
   const navigate = useNavigate()
-  const { logout: endSession } = useAuth()
+  const { logout: endSession, user } = useAuth()
+  const integration = useApiQuery(getIntegrationStatus)
 
   const logout = async () => {
     await endSession()
@@ -69,10 +72,13 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               <span>{label}</span>
             </NavLink>
           ))}
-          <details className="sidebar-settings">
-            <summary className="nav-item nav-item--compact"><Settings size={18} /><span>اتصال‌ها و مدیریت پنل</span></summary>
-            {settingsLinks.map(({ label, path, icon: Icon }) => <NavLink to={path} key={path} onClick={onClose} className={({ isActive }) => `nav-item nav-item--compact ${isActive ? 'nav-item--active' : ''}`}><Icon size={17} /><span>{label}</span></NavLink>)}
-          </details>
+          {user?.role === 'admin' && <NavLink to="/admin" onClick={onClose} className="nav-item nav-item--compact"><Settings size={18} /><span>مدیریت سایت</span></NavLink>}
+          {integration.data?.enabled && (
+            <details className="sidebar-settings">
+              <summary className="nav-item nav-item--compact"><Settings size={18} /><span>اتصال‌ها و مدیریت پلتفرم</span></summary>
+              {settingsLinks.map(({ label, path, icon: Icon }) => <NavLink to={path} key={path} onClick={onClose} className={({ isActive }) => `nav-item nav-item--compact ${isActive ? 'nav-item--active' : ''}`}><Icon size={17} /><span>{label}</span></NavLink>)}
+            </details>
+          )}
           <button type="button" className="nav-item nav-item--compact nav-item--danger" onClick={() => void logout()}>
             <LogOut size={18} />
             <span>خروج</span>

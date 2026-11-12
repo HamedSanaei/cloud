@@ -73,7 +73,7 @@ jobs:
             bash -n "$script"
           done
           shellcheck deploy/scripts/deploy.sh deploy/scripts/server-bootstrap.sh \
-            deploy/scripts/reconcile-runtime.sh deploy/tests/runtime-recovery-*.sh
+            deploy/scripts/activate-site-authority.sh deploy/scripts/reconcile-runtime.sh deploy/tests/runtime-recovery-*.sh
 
       - name: Validate recovery target and archive safety
         run: python3 -m unittest discover -s deploy/tests -v
@@ -453,7 +453,7 @@ jobs:
           bundle=".release-${RELEASE_SHA}-${GITHUB_RUN_ID}"
           common=(-o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -i "$HOME/.ssh/deploy_key")
           ssh "${common[@]}" -p "$port" "$target" "test -d '$DEPLOY_PATH' && test -f '$DEPLOY_PATH/.env' && mkdir -m 700 '$DEPLOY_PATH/$bundle'"
-          for script in deploy.sh reconcile-runtime.sh runtime-reconcile.py; do
+          for script in deploy.sh activate-site-authority.sh reconcile-runtime.sh runtime-reconcile.py; do
             scp "${common[@]}" -P "$port" "deploy/scripts/$script" "${target}:${DEPLOY_PATH}/${bundle}/${script}"
             read -r checksum _ < <(sha256sum "deploy/scripts/$script")
             actual="$(ssh "${common[@]}" -p "$port" "$target" "sha256sum '$DEPLOY_PATH/$bundle/$script'")"
@@ -461,6 +461,17 @@ jobs:
               echo "::error::Release bundle integrity check failed"; exit 1;
             }
           done
+
+      - name: Promote empty website installation to canonical site data
+        if: github.ref == 'refs/heads/staging'
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_PORT:-22}"
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          script="${DEPLOY_PATH}/.release-${RELEASE_SHA}-${GITHUB_RUN_ID}/activate-site-authority.sh"
+          printf -v remote 'COMPOSE_DIR=%q RELEASE_SHA=%q bash %q' "$DEPLOY_PATH" "$RELEASE_SHA" "$script"
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 -i "$HOME/.ssh/deploy_key" -p "$port" "$target" "$remote"
 
       - name: Deploy with ephemeral registry authentication
         env:
