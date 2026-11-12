@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -20,6 +21,7 @@ import os
 from pathlib import Path
 import sys
 import tarfile
+import tempfile
 import time
 
 path = Path(os.environ["FAKE_DOCKER_STATE"])
@@ -27,7 +29,16 @@ state = json.loads(path.read_text())
 args = sys.argv[1:]
 state["calls"].append(args)
 def save():
-    path.write_text(json.dumps(state))
+    # A reconciler deadline can kill this fake Docker process at any point.
+    # Publish a complete snapshot atomically so a killed write cannot truncate
+    # the last state that the parent test needs to inspect.
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as pending:
+        pending.write(json.dumps(state))
+    marker = os.environ.get("FAKE_DOCKER_PAUSE_STATE_WRITE")
+    if marker:
+        Path(marker).touch()
+        time.sleep(10)
+    os.replace(pending.name, path)
 save()
 if state.get("hang") and state["hang"] == args[:len(state["hang"])]:
     time.sleep(10)
@@ -446,6 +457,31 @@ class RuntimeReconcileTests(unittest.TestCase):
         self.assertTrue(self.mutations())
         self.assertFalse(all(c["State"]["Health"]["Status"] == "healthy"
                              for c in self.state["containers"].values()))
+
+    def test_killed_fake_docker_write_preserves_last_complete_state(self):
+        original = copy.deepcopy(self.state)
+        marker = self.root / "state-write-pending"
+        environment = dict(self.environment, FAKE_DOCKER_PAUSE_STATE_WRITE=str(marker))
+        command = [str(self.root / "docker"), "inspect", "tofan-cloud-redis"]
+        with subprocess.Popen(command, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            try:
+                deadline = time.monotonic() + 5
+                while not marker.exists():
+                    self.assertIsNone(process.poll(), "Fake Docker exited before the write interruption")
+                    self.assertLess(time.monotonic(), deadline, "Fake Docker never reached publication")
+                    time.sleep(0.01)
+                process.kill()
+                process.communicate(timeout=5)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=5)
+        self.assertEqual(self.load(), original)
+        # A subsequent Docker call must still be able to read and publish state.
+        result = subprocess.run(command, env=self.environment, capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.load()["calls"], [["inspect", "tofan-cloud-redis"]])
+        self.assert_preserved(original)
 
     def test_hung_docker_command_is_terminated_at_deadline(self):
         self.state["hang"] = ["inspect"]
