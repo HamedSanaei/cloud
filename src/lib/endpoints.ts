@@ -240,6 +240,10 @@ export async function listTickets(): Promise<Ticket[]> {
   return unwrapList<Ticket>(payload)
 }
 
+export async function listTicketServers(): Promise<Array<{ id: string; name: string; ip: string | null; status: string }>> {
+  return (await apiGet<{ data: Array<{ id: string; name: string; ip: string | null; status: string }> }>('/tickets/servers')).data
+}
+
 export async function getTicketSummary(): Promise<TicketSummary> {
   if (noApi()) return { total: 0, open: 0, reviewing: 0, answered: 0, unread: 0 }
   const payload = await apiGet<TicketSummary | { data: TicketSummary }>('/tickets/summary')

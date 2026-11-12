@@ -51,11 +51,10 @@ preserves selections and the request key for two hours; returning revalidates
 against current catalog and wallet data. `/wallet?returnTo=server-checkout`
 offers a fixed return link (no arbitrary return URL).
 
-**Existing limitation:** site-authority mode currently has no online payment
-gateway/charge-request creation endpoint. Its wallet page explicitly directs the
-user to support for an admin credit. This change does not enable the Python
-platform payment path or mix the two ledgers. Platform-mode online charging
-retains its existing behavior.
+Site-authority mode supports online TabaPay recharge through the website's own
+ledger. See [wallet payments and support tickets](WALLET_PAYMENTS_AND_TICKETS.md)
+for configuration, verification, migration and recovery. Platform-mode charging
+retains its existing behavior and never mixes the two ledgers.
 
 ## Verification
 
@@ -72,5 +71,6 @@ retains its existing behavior.
   overflow, zero balance and wallet return were inspected. This is visual QA,
   not a real order or payment. No provider-side VPS operation was executed.
 
-No database migration is required. The PR targets staging; merging it triggers
-the existing deployment workflow. Creating this PR does not deploy it.
+The original checkout changes required no migration. The wallet/ticket extension
+requires migration 0008 as described in the linked document. PRs target staging;
+merging triggers the existing deployment workflow. Creating a PR does not deploy it.

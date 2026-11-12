@@ -103,7 +103,8 @@ export function mapInvoiceStatus(status: string): 'pending' | 'paid' | 'cancelle
   return 'pending'
 }
 
-export function ticketToDto(ticket: { id: string; title: string; department: string; status: string; updatedAt: Date | null; createdAt: Date }) {
+export function ticketToDto(ticket: { id: string; title: string; department: string; status: string; updatedAt: Date | null; createdAt: Date;
+  description?: string | null; serverId?: string | null; serverSnapshot?: { id: string; name: string; ip: string | null; provider: string } | null }) {
   return {
     id: ticket.id,
     title: ticket.title,
@@ -111,6 +112,9 @@ export function ticketToDto(ticket: { id: string; title: string; department: str
     status: ticket.status,
     updatedAt: (ticket.updatedAt ?? ticket.createdAt).toISOString(),
     unread: false,
+    description: ticket.description ?? '',
+    serverId: ticket.serverId ?? null,
+    relatedServer: ticket.serverSnapshot ?? null,
   }
 }
 

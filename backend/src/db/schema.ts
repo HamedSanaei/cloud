@@ -771,6 +771,8 @@ export const tickets = pgTable(
     title: text('title').notNull(),
     department: varchar('department', { length: 30 }).notNull().default('technical'),
     description: text('description'),
+    serverId: uuid('server_id').references(() => servers.id, { onDelete: 'set null' }),
+    serverSnapshot: jsonb('server_snapshot').$type<{ id: string; name: string; ip: string | null; provider: string }>(),
     status: varchar('status', { length: 30 }).notNull().default('pending'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -795,6 +797,28 @@ export const chargeRequests = pgTable(
   },
   (t) => [uniqueIndex('charge_requests_number_idx').on(t.number), index('charge_requests_user_idx').on(t.userId)],
 )
+
+/** Durable gateway attempts. Never recreate an ambiguous create request. */
+export const walletPayments = pgTable('wallet_payments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  walletId: uuid('wallet_id').notNull().references(() => wallets.id, { onDelete: 'restrict' }),
+  chargeRequestId: uuid('charge_request_id').notNull().references(() => chargeRequests.id, { onDelete: 'restrict' }),
+  idempotencyKey: varchar('idempotency_key', { length: 200 }).notNull(),
+  amountRial: bigint('amount_rial', { mode: 'number' }).notNull(),
+  status: varchar('status', { length: 20 }).notNull().default('creating'),
+  sandbox: boolean('sandbox').notNull(),
+  merchantFingerprint: varchar('merchant_fingerprint', { length: 64 }).notNull(),
+  gatewayToken: uuid('gateway_token'),
+  providerReference: varchar('provider_reference', { length: 100 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [
+  uniqueIndex('wallet_payments_user_key_idx').on(t.userId, t.idempotencyKey),
+  uniqueIndex('wallet_payments_token_idx').on(t.gatewayToken),
+  uniqueIndex('wallet_payments_reference_idx').on(t.providerReference),
+  uniqueIndex('wallet_payments_charge_idx').on(t.chargeRequestId),
+])
 
 // ---------------------------------------------------------------------------
 // Settings (admin-configurable key/value)

@@ -1,0 +1,44 @@
+/* Shared native-select fallback: explicit menu colors plus explicit app color
+   scheme keep browser/OS defaults from producing white-on-white options. */
+:root {
+  --dropdown-surface: #ffffff;
+  --dropdown-text: #111827;
+  --dropdown-muted: #475569;
+  --dropdown-border: #64748b;
+  --dropdown-highlight: #dbeafe;
+  --dropdown-highlight-text: #111827;
+  --dropdown-selected: #1d4ed8;
+  --dropdown-selected-text: #ffffff;
+  --dropdown-focus: #1d4ed8;
+}
+:root[data-theme='dark'] {
+  --dropdown-surface: #111c2f;
+  --dropdown-text: #f1f5f9;
+  --dropdown-muted: #a7b4c7;
+  --dropdown-border: #718096;
+  --dropdown-highlight: #243b5a;
+  --dropdown-highlight-text: #f1f5f9;
+  --dropdown-selected: #1d4ed8;
+  --dropdown-selected-text: #ffffff;
+  --dropdown-focus: #60a5fa;
+}
+:root select, :root select option, :root select optgroup {
+  color: var(--dropdown-text);
+  background-color: var(--dropdown-surface);
+  color-scheme: inherit;
+}
+:root select { border-color: var(--dropdown-border); scrollbar-color: var(--dropdown-border) var(--dropdown-surface); }
+:root .select-wrap { border-color: var(--dropdown-border); }
+:root select option:checked { background-color: var(--dropdown-selected); color: var(--dropdown-selected-text); }
+:root select option:hover, :root select option:focus { background-color: var(--dropdown-highlight); color: var(--dropdown-highlight-text); }
+:root select:disabled, :root select option:disabled { color: var(--dropdown-muted); cursor: not-allowed; }
+:root select:focus-visible { outline: 3px solid var(--dropdown-focus); outline-offset: 3px; }
+@media (forced-colors: active) {
+  :root select, :root select option { color: CanvasText; background: Canvas; forced-color-adjust: auto; }
+  :root select option:checked { color: HighlightText; background: Highlight; }
+}
+.payment-vpn-notice { border: 1px solid var(--dropdown-border); border-inline-start: 4px solid var(--warning); border-radius: 10px; padding: 16px; background: var(--warning-soft); color: var(--ink); line-height: 1.9; }
+:root[data-theme='dark'] .admin-shell {
+  --admin-bg: var(--canvas); --admin-paper: var(--surface); --admin-ink: var(--ink);
+  --admin-subtle: var(--muted); --admin-line: var(--border-strong); --admin-soft: var(--brand-50);
+}

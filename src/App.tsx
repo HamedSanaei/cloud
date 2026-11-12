@@ -15,6 +15,7 @@ import { TelegramSettingsPage } from './pages/TelegramSettingsPage'
 import { PlatformAdminPage } from './pages/PlatformAdminPage'
 import { AdminLayout } from './admin/AdminLayout'
 import { AdminDatacenters } from './admin/AdminDatacenters'
+import { AdminTickets } from './admin/AdminTickets'
 import { AdminOverview, AdminOrders, AdminOrderPage, AdminUsers, AdminUserPage, AdminUserServers, AdminServers, AdminServerPage } from './admin/AdminPages'
 
 export function App() {
@@ -34,6 +35,7 @@ export function App() {
         <Route path="users/:id/servers" element={<AdminUserServers />} />
         <Route path="servers" element={<AdminServers />} />
         <Route path="datacenters" element={<AdminDatacenters />} />
+        <Route path="tickets" element={<AdminTickets />} />
         <Route path="servers/:id" element={<AdminServerPage />} />
         <Route path="*" element={<Navigate to="/admin" replace />} />
       </Route>

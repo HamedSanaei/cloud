@@ -1,4 +1,4 @@
-import { ClipboardList, Gauge, HardDrive, Home, LogOut, ShieldCheck, Users, XCircle, Globe } from 'lucide-react'
+import { ClipboardList, Gauge, HardDrive, Home, LogOut, ShieldCheck, Users, XCircle, Globe, LifeBuoy } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { AuthPage } from '../pages/AuthPages'
 import { useAuth } from '../auth/AuthContext'
@@ -11,12 +11,13 @@ const nav = [
   { to: '/admin/users', label: 'کاربران', icon: Users, end: false },
   { to: '/admin/servers', label: 'سرورها', icon: HardDrive, end: false },
   { to: '/admin/datacenters', label: 'دیتاسنترها', icon: Globe, end: false },
+  { to: '/admin/tickets', label: 'تیکت‌ها', icon: LifeBuoy, end: false },
 ] as const
 
 const breadcrumb = (path: string) => path.startsWith('/admin/orders')
   ? 'سفارش‌ها' : path.startsWith('/admin/users')
     ? 'کاربران' : path.startsWith('/admin/servers')
-      ? 'سرورها' : path.startsWith('/admin/datacenters') ? 'دیتاسنترها' : 'نمای کلی'
+      ? 'سرورها' : path.startsWith('/admin/datacenters') ? 'دیتاسنترها' : path.startsWith('/admin/tickets') ? 'تیکت‌ها' : 'نمای کلی'
 
 export function AdminLayout() {
   const { user, loading, logout } = useAuth()

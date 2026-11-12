@@ -8,7 +8,7 @@ import {
   ReceiptText,
   WalletCards,
 } from 'lucide-react'
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Button, LinkButton } from '../components/ui/Button'
 import { Card, SectionHeading } from '../components/ui/Card'
@@ -26,6 +26,7 @@ import { createWallet, getWalletSummary, listChargeRequests, listInvoices, listT
 import { formatCount, formatToman } from '../lib/format'
 import { getIntegrationStatus } from '../lib/platformClient'
 import { WalletRecharge } from '../components/ui/WalletRecharge'
+import { WalletPaymentStatus } from '../components/ui/WalletPaymentStatus'
 
 export function WalletPage() {
   const [searchParams] = useSearchParams()
@@ -43,6 +44,12 @@ export function WalletPage() {
   const transactions = useApiQuery(listTransactions)
   const integration = useApiQuery(getIntegrationStatus)
   const legacyWallets = integration.data?.enabled === false
+  const refreshWallets = wallets.refetch, refreshSummary = summary.refetch, refreshTransactions = transactions.refetch
+  useEffect(() => {
+    const refresh = () => { refreshWallets(); refreshSummary(); refreshTransactions() }
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [refreshWallets, refreshSummary, refreshTransactions])
 
   const createWalletSubmit = async (event: FormEvent) => {
     event.preventDefault()
@@ -90,7 +97,7 @@ export function WalletPage() {
     <div className="page-stack wallet-page">
       <PageHeader title="کیف پول 💰" subtitle="مدیریت کیف پول‌ها و موجودی حساب کاربری" icon={<WalletCards />} actions={<><WalletRecharge />{legacyWallets && <Button icon={<Plus size={18} />} onClick={() => setModalOpen(true)}>کیف پول جدید</Button>}</>} />
       {returnToCheckout ? <div className="info-box checkout-return"><span>انتخاب‌های سرور شما برای بازگشت از شارژ نگه داشته شده‌اند.</span><LinkButton to="/servers/create" variant="secondary">بازگشت به سفارش سرور</LinkButton></div> : null}
-      {legacyWallets ? <div className="info-box"><span>برای افزایش اعتبار این کیف پول با پشتیبانی هماهنگ کنید؛ شارژ آنلاین این حساب هنوز فعال نیست.</span><LinkButton to="/tickets" variant="secondary">درخواست افزایش اعتبار از پشتیبانی</LinkButton></div> : null}
+      {searchParams.get('payment') ? <WalletPaymentStatus id={searchParams.get('payment')!} onVerified={() => { wallets.refetch(); summary.refetch(); transactions.refetch() }} /> : null}
       {summary.error && <QueryError message={summary.error} onRetry={summary.refetch} />}
       <div className="metrics-grid metrics-grid--four">
         <MetricCard label="موجودی کل" value={summary.loading ? '...' : summary.error ? 'دریافت نشد' : formatToman(summaryData?.totalBalance ?? 0)} icon={CircleDollarSign} accent="green" />

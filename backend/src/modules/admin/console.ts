@@ -8,7 +8,8 @@ import type { FastifyPluginAsync } from 'fastify'
 import { and, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppContext } from '../../app.js'
-import { users, wallets, orders, servers, providers } from '../../db/schema.js'
+import { users, wallets, orders, servers, providers, tickets } from '../../db/schema.js'
+import { ticketToDto } from '../../lib/dto.js'
 import { getConfig } from '../../config.js'
 import { syncHetznerInventory } from '../providers/hetzner/inventory.js'
 import { requireAdmin } from '../../http/auth.js'
@@ -85,6 +86,14 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
   app.addHook('preHandler', async request => {
     requireAdmin(request)
     ensureSiteAuthority()
+  })
+  app.get('/tickets', async request => {
+    const q = parse(paging, request.query)
+    const where = and(q.search ? ilike(tickets.title, `%${q.search}%`) : undefined, q.status ? eq(tickets.status, q.status) : undefined)
+    const rows = await ctx.db.select({ ticket: tickets, ownerEmail: users.email }).from(tickets)
+      .innerJoin(users, eq(tickets.userId, users.id)).where(where).orderBy(desc(tickets.createdAt)).limit(q.limit).offset((q.page - 1) * q.limit)
+    const [count] = await ctx.db.select({ n: sql<number>`count(*)::int` }).from(tickets).where(where)
+    return { data: pageData(rows.map(row => ({ ...ticketToDto(row.ticket), ownerEmail: row.ownerEmail })), count?.n ?? 0, q.page, q.limit) }
   })
 
   app.get('/providers', async () => {
