@@ -193,6 +193,28 @@ export const oauthAccounts = pgTable(
 )
 
 // ---------------------------------------------------------------------------
+// Read-only Hetzner inventory (all configured projects, including outside
+// website checkout). No customer billing or ownership is inferred from rows.
+// ---------------------------------------------------------------------------
+export const hetznerInventory = pgTable('hetzner_inventory', {
+  providerServerId: varchar('provider_server_id', { length: 128 }).primaryKey(),
+  accountId: varchar('account_id', { length: 63 }).notNull(),
+  name: text('name').notNull(),
+  status: varchar('status', { length: 30 }).notNull(),
+  ipv4: text('ipv4'),
+  ipv6: text('ipv6'),
+  vcpu: integer('vcpu'),
+  memoryMb: integer('memory_mb'),
+  diskGb: integer('disk_gb'),
+  location: text('location'),
+  serverType: text('server_type'),
+  operatingSystem: text('operating_system'),
+  createdAt: timestamp('created_at', { withTimezone: true }),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull(),
+  present: boolean('present').notNull().default(true),
+}, (t) => [index('hetzner_inventory_account_idx').on(t.accountId, t.present)])
+
+// ---------------------------------------------------------------------------
 // Audit
 // ---------------------------------------------------------------------------
 export const auditLogs = pgTable(

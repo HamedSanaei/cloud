@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { formatCount, formatFaNumber, formatToman } from '../lib/format'
 import { adminApi, userName, type AdminUser, type ListFilters, type Paged } from './api'
+import { HetznerInventoryPanel } from './HetznerInventoryPanel'
 
 const dateLabel = (value?: string | null) => {
   if (!value) return '—'
@@ -202,6 +203,7 @@ export function AdminServers() {
         </> : null}
       </State>
     </Panel>
+    <HetznerInventoryPanel />
   </div>
 }
 

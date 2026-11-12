@@ -57,6 +57,27 @@ export interface AdminServer {
   ownerName?: string
   ownerEmail?: string
 }
+export interface HetznerFleetServer {
+  providerServerId: string
+  accountId: string
+  name: string
+  status: string
+  ipv4: string | null
+  ipv6: string | null
+  vcpu: number | null
+  memoryMb: number | null
+  diskGb: number | null
+  location: string | null
+  serverType: string | null
+  operatingSystem: string | null
+  createdAt: string | null
+  lastSeenAt: string
+  source: 'website' | 'hetzner'
+  websiteServerId: string | null
+  websiteUserId: string | null
+}
+export interface HetznerFleet { items: HetznerFleetServer[]; accounts: number; syncedAt: string }
+
 export interface Paged<T> {
   items: T[]
   total: number
@@ -109,6 +130,7 @@ export const adminApi = {
   orders: (filter: ListFilters) => fetchData<Paged<AdminOrder>>('/orders' + listQuery(filter)),
   order: (id: string) => fetchData<AdminOrderDetail>('/orders/' + encodeURIComponent(id)),
   servers: (filter: ListFilters) => fetchData<Paged<AdminServer>>('/servers' + listQuery(filter)),
+  hetznerInventory: async () => (await apiGet<{ data: HetznerFleet }>(prefix + '/hetzner/inventory', { timeoutMs: 120000 })).data,
   server: (id: string) => fetchData<AdminServerDetail>('/servers/' + encodeURIComponent(id)),
 }
 export const userName = (u?: Pick<AdminUser, 'firstName' | 'lastName' | 'email'> | null) =>

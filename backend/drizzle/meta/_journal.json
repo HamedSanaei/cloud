@@ -50,6 +50,13 @@
       "when": 1792173119463,
       "tag": "0006_platform-links",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794445897877,
+      "tag": "0007_handy_the_renegades",
+      "breakpoints": true
     }
   ]
 }

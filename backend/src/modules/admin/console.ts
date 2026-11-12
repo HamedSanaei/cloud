@@ -8,6 +8,8 @@ import { and, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppContext } from '../../app.js'
 import { users, wallets, orders, servers } from '../../db/schema.js'
+import { getConfig } from '../../config.js'
+import { syncHetznerInventory } from '../providers/hetzner/inventory.js'
 import { requireAdmin } from '../../http/auth.js'
 import { parse } from '../../http/validate.js'
 import { NotFoundError, ConflictError } from '../../lib/errors.js'
@@ -217,6 +219,14 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
       events: events.map(e => ({ fromStatus: e.fromStatus, toStatus: e.toStatus, reason: e.reason, createdAt: e.createdAt.toISOString() })),
       invoice: invoice ? { id: invoice.id, number: invoice.invoiceNumber, status: invoice.status, totalRial: invoice.totalRial } : null,
     } }
+  })
+
+  // Admin-only: enumerate ALL configured Hetzner projects, including VMs
+  // created directly in Hetzner Console. Persist provider facts locally,
+  // but never create a website order, owner or financial entry implicitly.
+  app.get('/hetzner/inventory', async () => {
+    const fleet = await syncHetznerInventory(ctx.db, getConfig().PROVIDERS.hetzner)
+    return { data: fleet }
   })
 
   app.get('/servers', async request => {

@@ -41,6 +41,9 @@ describe.skipIf(!dbAvailable)('admin console / site database (integration)', () 
     expect(missing.statusCode).toBe(401)
     const ordinary = await app.inject({ url: '/api/admin/console/users', headers: { authorization: `Bearer ${ordinaryToken}` } })
     expect(ordinary.statusCode).toBe(403)
+    const hetzner = await app.inject({ url: '/api/admin/console/hetzner/inventory', headers: { authorization: `Bearer ${ordinaryToken}` } })
+    expect(hetzner.statusCode).toBe(403)
+    expect((await app.inject('/api/admin/console/hetzner/inventory')).statusCode).toBe(401)
   })
 
   it('returns website-owned wallet balances without protected secrets', async () => {

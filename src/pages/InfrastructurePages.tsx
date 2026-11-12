@@ -33,6 +33,8 @@ import {
 } from '../lib/endpoints'
 import { formatCount, formatToman } from '../lib/format'
 import { ServerManagement } from '../components/ui/ServerManagement'
+import { useAuth } from '../auth/AuthContext'
+import { HetznerInventoryPanel } from '../admin/HetznerInventoryPanel'
 import { getIntegrationStatus } from '../lib/platformClient'
 
 type ResourceKind = 'server' | 'ip'
@@ -198,7 +200,11 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
 }
 
 export function ServersPage() {
-  return <ResourceList kind="server" />
+  const { user } = useAuth()
+  return <div className="page-stack">
+    <ResourceList kind="server" />
+    {user?.role === 'admin' ? <HetznerInventoryPanel /> : null}
+  </div>
 }
 
 export function IpsPage() {

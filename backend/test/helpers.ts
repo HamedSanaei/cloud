@@ -86,6 +86,7 @@ export async function truncateAll(db: DbClient): Promise<void> {
     'subscriptions',
     'servers',
     'provider_operations',
+    'hetzner_inventory',
     'order_events',
     'order_items',
     'invoices',

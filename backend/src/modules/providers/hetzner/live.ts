@@ -65,7 +65,16 @@ export function createHetznerProvider(config: HetznerConfig, options: HetznerPro
       ...(typeof type.memory === 'number' ? { memoryMb: Math.round(type.memory * 1024) } : {}),
       ...(typeof type.disk === 'number' ? { diskGb: type.disk } : {}),
       ...(typeof server.outgoing_traffic === 'number' ? { trafficUsedGb: server.outgoing_traffic / 1_000_000_000 } : {}),
-      metadata: { ...(typeof server.created === 'string' ? { createdAt: clean(server.created) } : {}) },
+      // Safe, allowlisted fields only. An inventory listing must never
+      // forward the API response, private user_data or provider credentials.
+      metadata: {
+        ...(typeof server.created === 'string' ? { createdAt: clean(server.created) } : {}),
+        ...(typeof type.name === 'string' ? { serverType: clean(type.name) } : {}),
+        ...(typeof object(server.datacenter).name === 'string'
+          ? { location: clean(String(object(server.datacenter).name)) } : {}),
+        ...(typeof object(server.image).name === 'string'
+          ? { operatingSystem: clean(String(object(server.image).name)) } : {}),
+      },
     }
   }
   async function action(providerServerId: string, name: string) {
