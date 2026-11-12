@@ -493,7 +493,7 @@ jobs:
             "$DEPLOY_PATH" "$CLOUD_PORT" "$RELEASE_SHA" "$API_IMAGE" "$script" "$IMAGE" "$PUBLIC_URL" "$skip"
           printf -v registry "printf '%%s' \"\$registry_token\" | docker login ghcr.io -u %q --password-stdin >/dev/null" "$GHCR_ACTOR"
           # Keep the verified bundle until cutover rollback (if needed) completes.
-          printf -v cleanup 'rm -rf -- "$DOCKER_CONFIG"'
+          cleanup="rm -rf -- \"\$DOCKER_CONFIG\""
           printf -v remote "set -Eeuo pipefail; DOCKER_CONFIG=\"\$(mktemp -d)\"; export DOCKER_CONFIG; trap %q EXIT; IFS= read -r registry_token; %s; unset registry_token GHCR_TOKEN; %s" "$cleanup" "$registry" "$invoke"
           printf '%s\n' "$GHCR_TOKEN" | ssh -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -i "$HOME/.ssh/deploy_key" \
