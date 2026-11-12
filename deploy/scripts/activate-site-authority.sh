@@ -116,7 +116,7 @@ BEGIN
   THEN
     RAISE EXCEPTION 'Site cutover blocked by financial records, server records or multiple linked identities';
   END IF;
-END \\$cutover\\$;
+END \$cutover\$;
 INSERT INTO audit_logs (action, metadata)
 VALUES ('authority.site_empty_cutover',
   jsonb_build_object(
