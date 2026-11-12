@@ -1,6 +1,17 @@
 import nodemailer from 'nodemailer'
 import { getConfig, isProduction } from '../../config.js'
 import { ProviderPermanentError, ProviderRetryableError } from '../../lib/errors.js'
+import { createLogger } from '../../logger.js'
+
+// SOAP 1.1 contract published by /Api/SendSMS.asmx?op=SendGroupSMS.
+const PARSGREEN_SOAP_NAMESPACE = 'http://ParsGreen.com/'
+
+function soapInteger(body: string, name: 'SendGroupSMSResult' | 'success'): number | null {
+  const value = body.match(new RegExp(`<(?:[\\w.-]+:)?${name}(?:\\s[^>]*)?>\\s*(-?\\d+)\\s*</(?:[\\w.-]+:)?${name}>`))?.[1]
+  if (value === undefined) return null
+  const number = Number(value)
+  return Number.isSafeInteger(number) ? number : null
+}
 
 function xmlEscape(value: string): string {
   return value.replace(/[<>&'\"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[char]!)
@@ -80,25 +91,39 @@ export async function sendParsGreenSms(to: string, message: string): Promise<{ d
 
   const envelope = `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body><SendGroupSMS xmlns="http://tempuri.org/">
+  <soap:Body><SendGroupSMS xmlns="${PARSGREEN_SOAP_NAMESPACE}">
     <signature>${xmlEscape(config.PARSGREEN_SIGNATURE)}</signature>
     <from>${xmlEscape(config.PARSGREEN_FROM)}</from>
     <to><string>${xmlEscape(parsGreenRecipient(to))}</string></to>
     <text>${xmlEscape(message)}</text><isFlash>false</isFlash><udh></udh><success>0</success><retStr />
   </SendGroupSMS></soap:Body>
 </soap:Envelope>`
+  let diagnostics: { reason: string; httpStatus?: number; providerResult?: number | null; acceptedCount?: number | null } = { reason: 'transport_failure' }
   try {
     const response = await fetch(config.PARSGREEN_ENDPOINT, {
       method: 'POST',
-      headers: { 'content-type': 'text/xml; charset=utf-8', soapaction: 'http://tempuri.org/SendGroupSMS' },
+      headers: { 'content-type': 'text/xml; charset=utf-8', soapaction: `"${PARSGREEN_SOAP_NAMESPACE}SendGroupSMS"` },
       body: envelope,
       signal: AbortSignal.timeout(config.PARSGREEN_TIMEOUT_MS),
     })
     const body = await response.text()
-    const result = body.match(/<SendGroupSMSResult>([^<]+)<\/SendGroupSMSResult>/)?.[1]
-    if (!response.ok || result !== '1') throw new Error('provider rejected message')
+    const fault = /<(?:[\w.-]+:)?Fault(?:\s|>)/.test(body)
+    diagnostics = {
+      reason: fault ? 'soap_fault' : 'provider_rejected',
+      httpStatus: response.status,
+      providerResult: soapInteger(body, 'SendGroupSMSResult'),
+      acceptedCount: soapInteger(body, 'success'),
+    }
+    // One requested recipient must be accepted. Transport acceptance is not a
+    // handset delivery receipt; result=1 alone can still have success=0.
+    if (!response.ok || fault || diagnostics.providerResult !== 1 || diagnostics.acceptedCount !== 1) {
+      throw new Error('provider rejected message')
+    }
     return {}
   } catch (error) {
+    // Never log the envelope, response, recipient, OTP, credentials or raw
+    // exception: SOAP faults may echo the entire authenticated request.
+    createLogger('sms-delivery').warn(diagnostics, 'ParsGreen delivery failed')
     if (error instanceof ProviderPermanentError) throw error
     throw new ProviderRetryableError('ارسال پیامک ناموفق بود؛ کمی بعد دوباره تلاش کنید')
   }

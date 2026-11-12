@@ -33,7 +33,17 @@ export const PARSGREEN_TEMPLATES = {
   orderPaid: { event: 'order.paid', approval: 'approved-sample', variables: ['orderNumber','amount'], sample: 'پارس سرور: پرداخت سفارش ord-202611-000123 به مبلغ 2980000 تومان تایید شد. سفارش شما در حال پردازش است. parserver.ir' },
   orderCreated: { event: 'order.created', approval: 'approved-sample', variables: ['orderNumber'], sample: 'پارس سرور: سفارش ord-202611-000123 ثبت شد و در انتظار پرداخت است. برای تکمیل خرید به پنل مراجعه کنید. parserver.ir' },
   newLogin: { event: 'account.new_login', approval: 'approved-sample', variables: ['ip'], sample: 'پارس سرور: ورود جدید به حساب شما از ip 192.0.2.15 ثبت شد. اگر شما نبودید، امنیت حساب خود را بررسی کنید. parserver.ir' },
-  passwordChanged: { event: 'account.password_changed', approval: 'unknown', variables: [], sample: 'پارس سرور: رمز عبور حساب شما تغییر کرد. اگر این تغییر توسط شما انجام نشده است با پشتیبانی تماس بگیرید. parserver.ir' },
+  passwordChanged: { event: 'account.password_changed', approval: 'approved-sample', variables: [], sample: 'پارس سرور: رمز عبور حساب شما تغییر کرد. اگر این تغییر توسط شما انجام نشده است با پشتیبانی تماس بگیرید. parserver.ir' },
 } as const satisfies Record<string, ParsGreenTemplate>
 
 export type ParsGreenTemplateKey = keyof typeof PARSGREEN_TEMPLATES
+
+// Confirmed examples in WhiteText on 2026-11-12. The list displays the example
+// (Title), not the approved %% pattern (Text). Do not render or send these as
+// dynamic templates until the actual approved patterns have been verified.
+export const PARSGREEN_AUTH_SAMPLES = {
+  phoneVerification: { event: 'account.phone_verification', approval: 'approved-sample', variables: ['code'], sample: 'پارس سرور کد تایید شماره همراه شما: 479125 @parserver.ir #479125' },
+  phoneLogin: { event: 'account.phone_login', approval: 'approved-sample', variables: ['code'], sample: 'پارس سرور کد ورود شما: 583164 @parserver.ir #583164' },
+  passwordRecovery: { event: 'account.password_recovery', approval: 'approved-sample', variables: ['code'], sample: 'پارس سرور کد بازیابی رمز عبور: 648291 @parserver.ir #648291' },
+  accountOperation: { event: 'account.operation_verification', approval: 'approved-sample', variables: ['code'], sample: 'پارس سرور کد تایید عملیات حساب کاربری: 736205 @parserver.ir #736205' },
+} as const satisfies Record<string, ParsGreenTemplate>

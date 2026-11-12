@@ -57,8 +57,13 @@ is configurable through `PARSGREEN_ENDPOINT`; the default targets the ParsGreen
 recipient is sent as local `09...`. `sendParsGreenSms()` is the shared server-side
 transport for SMS OTP. The operator-supplied notification samples and their
 approval statuses are documented in [PARSGREEN_TEMPLATES.md](PARSGREEN_TEMPLATES.md).
-**None** of the supplied approved samples is a login OTP template. Confirm
-WhiteText/blacklist OTP support and actual handset delivery with ParsGreen.
+Approved OTP samples are recorded separately in `PARSGREEN_AUTH_SAMPLES`.
+Their actual approved dynamic patterns still need verification before changing
+the legacy runtime OTP text. Confirm WhiteText/blacklist support and actual
+handset delivery with ParsGreen; sample approval alone is insufficient.
+SOAP 1.1 requires the `http://ParsGreen.com/` namespace and quoted
+`"http://ParsGreen.com/SendGroupSMS"` action (not `tempuri.org`). Failures emit
+only numeric, non-sensitive diagnostics to the server log.
 Provider credentials must never use a `VITE_*` name or enter frontend code.
 
 Google requires a Web OAuth client with:

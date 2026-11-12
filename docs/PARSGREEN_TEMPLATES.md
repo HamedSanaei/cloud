@@ -42,7 +42,7 @@ official API identifiers/method before sending transactional events in productio
 | orderPaid | order.paid | approved-sample | orderNumber, amount |
 | orderCreated | order.created | approved-sample | orderNumber |
 | newLogin | account.new_login | approved-sample | ip |
-| passwordChanged | account.password_changed | UNKNOWN | none |
+| passwordChanged | account.password_changed | approved-sample | none |
 
 The full original Persian message is retained in the TypeScript catalog; keep
 texts in sync with the ParsGreen panel after approvals or modifications.
@@ -58,13 +58,41 @@ texts in sync with the ParsGreen panel after approvals or modifications.
 - Numbers are stored as +989... and sent to ParsGreen SendGroupSMS as 09....
 - Current sender is sendSmsOtp in backend/src/modules/auth/delivery.ts, using
   PARSGREEN_SIGNATURE, PARSGREEN_FROM and PARSGREEN_ENDPOINT.
-- No approved OTP template is present in the user's supplied list. Confirm
-  the sender/method supports authentication OTP to blacklisted numbers; if
-  a dedicated WhiteText OTP API is required, obtain its documented credentials
-  and template metadata before changing the transport. A successful SOAP API
-  response does not prove delivery to the phone.
+- Four approved OTP **samples** are recorded in `PARSGREEN_AUTH_SAMPLES`:
+  phoneVerification, phoneLogin, passwordRecovery and accountOperation.
+  The first, third and fourth were supplied by the operator; phoneLogin was
+  also visible as approved in the current WhiteText panel on 2026-11-12.
+  The displayed sample is not proof of the stored approved dynamic pattern.
+  The panel guide explicitly uses `%%` for variable parts and requires all
+  other text to match exactly. The stored patterns were not exposed by the
+  displayed table. Confirm them before substituting a generated OTP.
+- The legacy runtime OTP text (`کد ورود پارس سرور: ...` followed by a safety
+  notice) differs from all four approved examples. It has NOT been switched
+  to one of those examples on the assumption of dynamic approval. Confirm
+  WhiteText/blacklist support and the exact pattern before live verification.
+- A successful SOAP API response does not prove delivery to the phone.
 - AUTH_DELIVERY_MODE=log is developer-only and must not be used in production.
   Live requires proper SMTP and ParsGreen settings. Never commit secrets.
+
+## SOAP failure diagnosed on 2026-11-12
+
+- Production used `http://tempuri.org/` in both the body namespace and
+  SOAPAction. ParsGreen rejected the request with HTTP 500 / SOAP Client
+  fault before processing its recipient or message. An operator-authorized
+  single OTP attempt reproduced the failure; no successful send was claimed.
+- [Official SendGroupSMS contract](https://login.parsgreen.com/Api/SendSMS.asmx?op=SendGroupSMS)
+  specifies namespace `http://ParsGreen.com/` and SOAPAction
+  `"http://ParsGreen.com/SendGroupSMS"`. The local adapter and regression
+  fixtures now use this exact contract. `retStr` remains an empty ArrayOfString.
+- A read-only GetSMSNumbers request from the server succeeded over HTTPS
+  with the corrected namespace/action and confirmed the configured sender
+  was in the returned list. No credentials or sender inventory were logged.
+- The sender now checks both `SendGroupSMSResult=1` and `success=1` for its
+  single recipient. Rejections log only HTTP status, numeric result/count
+  and a fixed reason; never raw SOAP, OTP, phone, signature or exception.
+  There is no automatic resend after a timeout.
+- Publication and a post-fix handset delivery test are still required; local
+  tests and the read-only probe do not establish live OTP delivery.
 
 ## Future agent update checklist
 
