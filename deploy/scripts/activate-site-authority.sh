@@ -39,7 +39,20 @@ SELECT CASE WHEN
   OR EXISTS (SELECT 1 FROM provider_operations)
   OR EXISTS (SELECT 1 FROM charge_requests)
 THEN 'BLOCKED_HAS_BUSINESS_DATA' ELSE 'EMPTY_SITE' END;" 2>/dev/null)" || { echo "cannot verify source dataset, leaving authority unchanged" >&2; exit 1; }
-[[ "$state" == EMPTY_SITE ]] || { echo "source change rejected: existing financial/server data or platform links" >&2; exit 1; }
+if [[ "$state" != EMPTY_SITE ]]; then
+  echo "source change rejected; read-only counts of existing site records:" >&2
+  docker exec tofan-cloud-postgres psql -X -A -t -v ON_ERROR_STOP=1 -U cloud -d cloud -c "
+    SELECT 'platform_links', count(*) FROM platform_links UNION ALL
+    SELECT 'wallet_transactions', count(*) FROM wallet_transactions UNION ALL
+    SELECT 'nonzero_wallets', count(*) FROM wallets WHERE balance_rial <> 0 UNION ALL
+    SELECT 'orders', count(*) FROM orders UNION ALL
+    SELECT 'servers', count(*) FROM servers UNION ALL
+    SELECT 'subscriptions', count(*) FROM subscriptions UNION ALL
+    SELECT 'invoices', count(*) FROM invoices UNION ALL
+    SELECT 'provider_operations', count(*) FROM provider_operations UNION ALL
+    SELECT 'charge_requests', count(*) FROM charge_requests;" >&2 || true
+  exit 1
+fi
 
 backup_key="$(grep '^BACKUP_ENCRYPTION_KEY=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || true)"
 case "$backup_key" in \"*\") backup_key="${backup_key:1:${#backup_key}-2}" ;; \'*\') backup_key="${backup_key:1:${#backup_key}-2}" ;; esac
