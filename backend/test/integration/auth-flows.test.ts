@@ -1,13 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../../src/app.js'
+import { users } from '../../src/db/schema.js'
 import { getConfig } from '../../src/config.js'
-import { generateTotpCode } from '../../src/modules/auth/totp.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 
+// SMS is the first authentication factor for passwordless phone login.
+// Email registration and password recovery still require ownership proof.
 const skip = !dbAvailable || getConfig().AUTH_DELIVERY_MODE !== 'log'
 
-describe.skipIf(skip)('multi-factor authentication flows (integration)', () => {
+describe.skipIf(skip)('site-wide single-step sign-in (integration)', () => {
   let app: FastifyInstance
   let ctx: Awaited<ReturnType<typeof getTestContext>>
 
@@ -23,20 +26,46 @@ describe.skipIf(skip)('multi-factor authentication flows (integration)', () => {
     await ctx?.close()
   })
 
-  it('registers with email OTP and then requires email OTP at password login', async () => {
+  it('keeps email verification for signup but signs in immediately with a correct password', async () => {
     const start = await app.inject({ method: 'POST', url: '/api/v1/auth/register/start', payload: { email: 'otp@test.local', password: 'SafePassword123!' } })
     expect(start.statusCode).toBe(202)
     const first = start.json<{ data: { challengeToken: string; developmentCode: string } }>().data
     const verified = await app.inject({ method: 'POST', url: '/api/v1/auth/challenge/verify', payload: { token: first.challengeToken, code: first.developmentCode } })
     expect(verified.statusCode).toBe(200)
-    expect(verified.json<{ data: { token: string } }>().data.token).toMatch(/^cls_/)
 
-    const login = await app.inject({ method: 'POST', url: '/api/v1/auth/login/start', payload: { email: 'otp@test.local', password: 'SafePassword123!' } })
-    expect(login.statusCode).toBe(202)
-    expect(login.json<{ data: { challengeType: string } }>().data.challengeType).toBe('email')
+    const invalid = await app.inject({ method: 'POST', url: '/api/v1/auth/login/start', payload: { email: 'otp@test.local', password: 'wrong' } })
+    expect(invalid.statusCode).toBe(401)
+
+    const signedIn = await app.inject({ method: 'POST', url: '/api/v1/auth/login/start', payload: { email: 'otp@test.local', password: 'SafePassword123!' } })
+    expect(signedIn.statusCode).toBe(200)
+    const data = signedIn.json<{ data: { token: string; user: { role: string; twoFactorEnabled: boolean }; challengeToken?: string } }>().data
+    expect(data.token).toMatch(/^cls_/)
+    expect(data.user.role).toBe('user')
+    expect(data.user.twoFactorEnabled).toBe(false)
+    expect(data.challengeToken).toBeUndefined()
+    const me = await app.inject({ url: '/api/v1/auth/me', headers: { authorization: 'Bearer ' + data.token } })
+    expect(me.statusCode).toBe(200)
   })
 
-  it('enforces resend cooldown on email and SMS challenges', async () => {
+  it('does not require TOTP for an admin even with an old two-factor-enabled record', async () => {
+    await ctx.db.update(users).set({ role: 'admin', twoFactorEnabled: true }).where(eq(users.email, 'otp@test.local'))
+    const signedIn = await app.inject({ method: 'POST', url: '/api/v1/auth/login/start', payload: { email: 'otp@test.local', password: 'SafePassword123!' } })
+    expect(signedIn.statusCode).toBe(200)
+    const data = signedIn.json<{ data: { token: string; user: { role: string; twoFactorEnabled: boolean }; challengeToken?: string } }>().data
+    expect(data.user.role).toBe('admin')
+    expect(data.user.twoFactorEnabled).toBe(false)
+    expect(data.challengeToken).toBeUndefined()
+
+    const headers = { authorization: 'Bearer ' + data.token }
+    const setup = await app.inject({ method: 'POST', url: '/api/v1/auth/2fa/setup', headers })
+    expect(setup.statusCode).toBe(403)
+    const enabled = await app.inject({ method: 'POST', url: '/api/v1/auth/2fa/enable', headers, payload: { code: '123456' } })
+    expect(enabled.statusCode).toBe(403)
+    const verify = await app.inject({ method: 'POST', url: '/api/v1/auth/2fa/verify', payload: { token: 'a'.repeat(24), code: '123456' } })
+    expect(verify.statusCode).toBe(403)
+  })
+
+  it('retains cooldown on password-recovery email challenges', async () => {
     const start = await app.inject({ method: 'POST', url: '/api/v1/auth/password/forgot', payload: { email: 'otp@test.local' } })
     const token = start.json<{ data: { challengeToken: string } }>().data.challengeToken
     const resend = await app.inject({ method: 'POST', url: '/api/v1/auth/challenge/resend', payload: { token } })
@@ -44,62 +73,28 @@ describe.skipIf(skip)('multi-factor authentication flows (integration)', () => {
     expect(resend.json<{ error: string }>().error).toBe('cooldown')
   })
 
-  it('registers with verified SMS and only allows mobile login after activation', async () => {
+  it('requires SMS ownership for phone-only login but no additional TOTP', async () => {
     const unknown = await app.inject({ method: 'POST', url: '/api/v1/auth/phone/start', payload: { mobile: '09123456789' } })
     expect(unknown.statusCode).toBe(400)
     const start = await app.inject({ method: 'POST', url: '/api/v1/auth/register/phone/start', payload: { mobile: '۰۹۱۲۳۴۵۶۷۸۹', firstName: 'Test' } })
     expect(start.statusCode).toBe(202)
-    const challenge = start.json<{ data: { challengeToken: string; developmentCode: string; destination: string } }>().data
-    expect(challenge.destination).toContain('09123')
+    const challenge = start.json<{ data: { challengeToken: string; developmentCode: string } }>().data
     const pending = await app.inject({ method: 'POST', url: '/api/v1/auth/phone/start', payload: { mobile: '09123456789' } })
     expect(pending.statusCode).toBe(400)
     const verified = await app.inject({ method: 'POST', url: '/api/v1/auth/challenge/verify', payload: { token: challenge.challengeToken, code: challenge.developmentCode } })
     expect(verified.statusCode).toBe(200)
-    expect(verified.json<{ data: { user: { mobile: string } } }>().data.user.mobile).toBe('+989123456789')
-    const duplicate = await app.inject({ method: 'POST', url: '/api/v1/auth/register/phone/start', payload: { mobile: '09123456789' } })
-    expect(duplicate.statusCode).toBe(409)
+    const user = await ctx.db.query.users.findFirst({ where: t => eq(t.mobile, '+989123456789') })
+    expect(user).toBeTruthy()
+    await ctx.db.update(users).set({ twoFactorEnabled: true }).where(eq(users.id, user!.id))
+
     const login = await app.inject({ method: 'POST', url: '/api/v1/auth/phone/start', payload: { mobile: '09123456789' } })
     expect(login.statusCode).toBe(202)
-    const next = login.json<{ data: { challengeToken: string; developmentCode: string } }>().data
-    const loggedIn = await app.inject({ method: 'POST', url: '/api/v1/auth/challenge/verify', payload: { token: next.challengeToken, code: next.developmentCode } })
-    expect(loggedIn.statusCode).toBe(200)
-  })
-
-  it('requires TOTP after an SMS login when the account has 2FA enabled', async () => {
-    const start = await app.inject({ method: 'POST', url: '/api/v1/auth/phone/start', payload: { mobile: '09123456789' } })
-    const sms = start.json<{ data: { challengeToken: string; developmentCode: string } }>().data
-    const verified = await app.inject({ method: 'POST', url: '/api/v1/auth/challenge/verify', payload: { token: sms.challengeToken, code: sms.developmentCode } })
-    const bearer = verified.json<{ data: { token: string } }>().data.token
-    const setup = await app.inject({ method: 'POST', url: '/api/v1/auth/2fa/setup', headers: { authorization: 'Bearer ' + bearer } })
-    expect(setup.statusCode).toBe(200)
-    const secret = setup.json<{ data: { secret: string } }>().data.secret
-    const enabled = await app.inject({ method: 'POST', url: '/api/v1/auth/2fa/enable', headers: { authorization: 'Bearer ' + bearer }, payload: { code: generateTotpCode(secret) } })
-    expect(enabled.statusCode).toBe(200)
-
-    const secondLogin = await app.inject({ method: 'POST', url: '/api/v1/auth/phone/start', payload: { mobile: '09123456789' } })
-    const nextSms = secondLogin.json<{ data: { challengeToken: string; developmentCode: string } }>().data
-    const nextStep = await app.inject({ method: 'POST', url: '/api/v1/auth/challenge/verify', payload: { token: nextSms.challengeToken, code: nextSms.developmentCode } })
-    expect(nextStep.statusCode).toBe(202)
-    const secondFactor = nextStep.json<{ data: { challengeType: string; challengeToken: string; token?: string } }>().data
-    expect(secondFactor.challengeType).toBe('totp')
-    expect(secondFactor.token).toBeUndefined()
-    const signedIn = await app.inject({ method: 'POST', url: '/api/v1/auth/2fa/verify', payload: { token: secondFactor.challengeToken, code: generateTotpCode(secret) } })
+    const sms = login.json<{ data: { challengeToken: string; developmentCode: string } }>().data
+    const signedIn = await app.inject({ method: 'POST', url: '/api/v1/auth/challenge/verify', payload: { token: sms.challengeToken, code: sms.developmentCode } })
     expect(signedIn.statusCode).toBe(200)
-  })
-
-  it('enables TOTP and requires it on the next password login', async () => {
-    const legacy = await app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { email: 'otp@test.local', password: 'SafePassword123!' } })
-    const token = legacy.json<{ data: { token: string } }>().data.token
-    const setup = await app.inject({ method: 'POST', url: '/api/v1/auth/2fa/setup', headers: { authorization: `Bearer ${token}` } })
-    expect(setup.statusCode).toBe(200)
-    const secret = setup.json<{ data: { secret: string } }>().data.secret
-    const enabled = await app.inject({ method: 'POST', url: '/api/v1/auth/2fa/enable', headers: { authorization: `Bearer ${token}` }, payload: { code: generateTotpCode(secret) } })
-    expect(enabled.statusCode).toBe(200)
-
-    const login = await app.inject({ method: 'POST', url: '/api/v1/auth/login/start', payload: { email: 'otp@test.local', password: 'SafePassword123!' } })
-    const challenge = login.json<{ data: { challengeToken: string; challengeType: string } }>().data
-    expect(challenge.challengeType).toBe('totp')
-    const verify = await app.inject({ method: 'POST', url: '/api/v1/auth/2fa/verify', payload: { token: challenge.challengeToken, code: generateTotpCode(secret) } })
-    expect(verify.statusCode).toBe(200)
+    const data = signedIn.json<{ data: { token: string; user: { twoFactorEnabled: boolean }; challengeToken?: string } }>().data
+    expect(data.token).toMatch(/^cls_/)
+    expect(data.challengeToken).toBeUndefined()
+    expect(data.user.twoFactorEnabled).toBe(false)
   })
 })

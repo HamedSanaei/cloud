@@ -122,7 +122,11 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
       else if (intent === 'register') setChallenge(await startRegistration({ email, password, firstName, lastName }))
       else if (intent === 'forgot') setChallenge(await startPasswordRecovery(email))
       else if (method === 'phone') setChallenge(await startPhoneLogin(mobile))
-      else setChallenge(await startEmailLogin(email, password))
+      else {
+        const result = await startEmailLogin(email, password)
+        if ('token' in result) complete(result)
+        else setChallenge(result)
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'انجام عملیات ناموفق بود.')
     } finally {

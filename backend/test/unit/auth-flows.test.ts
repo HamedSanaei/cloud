@@ -7,6 +7,12 @@ import { buildOtpAuthUri, createRecoveryCodes, createTotpSecret, decryptTotpSecr
 beforeEach(() => loadConfig({ NODE_ENV: 'test', PLATFORM_API_URL: 'http://127.0.0.1:9000', AUTH_SECRET: 'fixture-only-long-auth-encryption-key' }))
 
 describe('authentication helpers', () => {
+  it('disables login second factor site-wide by default, but supports an explicit policy override', () => {
+    expect(loadConfig({ NODE_ENV: 'production' }).AUTH_LOGIN_SECOND_FACTOR_ENABLED).toBe(false)
+    expect(loadConfig({ NODE_ENV: 'test', AUTH_LOGIN_SECOND_FACTOR_ENABLED: 'true' }).AUTH_LOGIN_SECOND_FACTOR_ENABLED).toBe(true)
+    expect(loadConfig({ NODE_ENV: 'test', AUTH_LOGIN_SECOND_FACTOR_ENABLED: 'false' }).AUTH_LOGIN_SECOND_FACTOR_ENABLED).toBe(false)
+  })
+
   it('brands new authenticator enrollment without changing its protocol parameters', () => {
     const uri = new URL(buildOtpAuthUri('JBSWY3DPEHPK3PXP', 'preview@example.test'))
     expect(decodeURIComponent(uri.pathname.slice(1))).toBe('پارس سرور:preview@example.test')

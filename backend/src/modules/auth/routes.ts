@@ -116,6 +116,11 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
   app.post('/auth/login/start', { config: { rateLimit: authLimiter } }, async (request, reply) => {
     const input = parse(loginSchema, request.body)
     const user = await verifyPrimaryCredentials(db, input)
+    // Global policy: email + verified password grants one session, without a
+    // second email OTP or TOTP challenge. Applies to admin and user roles.
+    if (!getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED) {
+      return { data: await establishSession(ctx, user, request, reply) }
+    }
     if (user.twoFactorEnabled) {
       const challenge = await issueChallenge(db, { kind: 'totp', identifier: user.email, userId: user.id })
       return reply.status(202).send({ data: challengeResponse(challenge, 'totp', 'برنامه احراز هویت') })
@@ -188,7 +193,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
     if (challenge.kind === 'phone_login' && (user.status !== 'active' || !user.mobileVerifiedAt)) {
       throw new ForbiddenError('شماره همراه این حساب تأیید نشده است')
     }
-    if (challenge.kind === 'phone_login' && user.twoFactorEnabled) {
+    if (challenge.kind === 'phone_login' && getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED && user.twoFactorEnabled) {
       const totpChallenge = await issueChallenge(db, { kind: 'totp', identifier: user.email, userId: user.id })
       return reply.status(202).send({ data: challengeResponse(totpChallenge, 'totp', 'برنامه احراز هویت') })
     }
@@ -230,6 +235,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
   })
 
   app.post('/auth/2fa/verify', { config: { rateLimit: authLimiter } }, async (request, reply) => {
+    if (!getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED) throw new ForbiddenError('تأیید دومرحله‌ای ورود غیرفعال است')
     const input = parse(verifySchema, request.body)
     const challenge = await findChallenge(db, input.token, 'totp')
     if (!challenge.userId) throw new BadRequestError('حساب کاربری یافت نشد')
@@ -243,6 +249,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
   })
 
   app.post('/auth/2fa/recovery', { config: { rateLimit: authLimiter } }, async (request, reply) => {
+    if (!getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED) throw new ForbiddenError('تأیید دومرحله‌ای ورود غیرفعال است')
     const input = parse(z.object({ token: z.string().min(20), recoveryCode: z.string().min(8).max(30) }), request.body)
     const challenge = await findChallenge(db, input.token, 'totp')
     if (!challenge.userId) throw new BadRequestError('حساب کاربری یافت نشد')
@@ -257,6 +264,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
   })
 
   app.post('/auth/2fa/setup', async (request) => {
+    if (!getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED) throw new ForbiddenError('فعال‌سازی تأیید دومرحله‌ای در سایت غیرفعال است')
     const auth = requireUser(request)
     const user = await db.query.users.findFirst({ where: (t) => eq(t.id, auth.id) })
     if (!user) throw new BadRequestError('کاربر یافت نشد')
@@ -268,6 +276,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
   })
 
   app.post('/auth/2fa/enable', async (request) => {
+    if (!getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED) throw new ForbiddenError('فعال‌سازی تأیید دومرحله‌ای در سایت غیرفعال است')
     const auth = requireUser(request)
     const input = parse(z.object({ code: otpCode }), request.body)
     const user = await db.query.users.findFirst({ where: (t) => eq(t.id, auth.id) })
@@ -327,5 +336,5 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
 }
 
 function publicUser(u: { id: string; email: string; role: string; status: string; firstName?: string | null; lastName?: string | null; mobile?: string | null; twoFactorEnabled?: boolean }) {
-  return { id: u.id, email: u.email.endsWith('@accounts.serverhub.invalid') ? '' : u.email, role: u.role, status: u.status, firstName: u.firstName ?? null, lastName: u.lastName ?? null, mobile: u.mobile ?? null, twoFactorEnabled: u.twoFactorEnabled ?? false }
+  return { id: u.id, email: u.email.endsWith('@accounts.serverhub.invalid') ? '' : u.email, role: u.role, status: u.status, firstName: u.firstName ?? null, lastName: u.lastName ?? null, mobile: u.mobile ?? null, twoFactorEnabled: getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED && (u.twoFactorEnabled ?? false) }
 }

@@ -40,6 +40,10 @@ const envSchema = z.object({
   // ledger/servers locally, subject to the audited migration gate at startup.
   DATA_AUTHORITY: z.enum(['auto', 'site', 'platform']).default('auto'),
   AUTH_DELIVERY_MODE: z.enum(['live', 'log']).default('log'),
+  // Disabled site-wide by default, for both admin and normal users.
+  // Primary password authentication and first-factor phone SMS remain required.
+  AUTH_LOGIN_SECOND_FACTOR_ENABLED: z.string().default('false')
+    .transform((v) => v === 'true' || v === '1'),
   AUTH_OTP_TTL_SECONDS: z.coerce.number().int().min(120).max(900).default(300),
   AUTH_OTP_RESEND_SECONDS: z.coerce.number().int().min(30).max(300).default(45),
   AUTH_OTP_MAX_ATTEMPTS: z.coerce.number().int().min(3).max(10).default(5),

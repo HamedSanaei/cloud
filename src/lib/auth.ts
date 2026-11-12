@@ -31,8 +31,10 @@ export async function getCurrentUser(): Promise<AuthUser> {
   return (await apiGet<Data<AuthUser>>('/auth/me')).data
 }
 
-export async function startEmailLogin(email: string, password: string): Promise<AuthChallenge> {
-  return (await apiPost<Data<AuthChallenge>>('/auth/login/start', { email, password })).data
+export async function startEmailLogin(email: string, password: string): Promise<AuthChallenge | AuthSession> {
+  const result = (await apiPost<Data<AuthChallenge | AuthSession>>('/auth/login/start', { email, password })).data
+  if ('token' in result) setAuthToken(result.token)
+  return result
 }
 
 export async function startRegistration(input: { email: string; password: string; firstName?: string; lastName?: string }): Promise<AuthChallenge> {
