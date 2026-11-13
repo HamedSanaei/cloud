@@ -49,9 +49,9 @@ export async function startPhoneLogin(mobile: string): Promise<AuthChallenge> {
   return (await apiPost<Data<AuthChallenge>>('/auth/phone/start', { mobile })).data
 }
 
-export async function verifyChallenge(token: string, code: string): Promise<AuthSession | AuthChallenge> {
-  const result = (await apiPost<Data<AuthSession | AuthChallenge>>('/auth/challenge/verify', { token, code })).data
-  if ('token' in result) setAuthToken(result.token)
+export async function verifyChallenge(token: string, code: string, signal?: AbortSignal): Promise<AuthSession | AuthChallenge> {
+  const result = (await apiPost<Data<AuthSession | AuthChallenge>>('/auth/challenge/verify', { token, code }, { signal })).data
+  if (!signal?.aborted && 'token' in result) setAuthToken(result.token)
   return result
 }
 

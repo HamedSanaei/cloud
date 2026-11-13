@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ArrowLeft, Check, Eye, EyeOff, KeyRound, LockKeyhole, Mail, Phone, RefreshCw, Server, ShieldCheck } from 'lucide-react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { BRAND_NAME, BrandMark } from '../components/Brand'
+import { ApiError } from '../lib/apiClient'
+import { toFaDigits } from '../lib/format'
 import {
   getGoogleLoginUrl,
   resendChallenge,
@@ -58,8 +60,10 @@ function OtpField({ value, onChange, disabled }: { value: string; onChange: (val
         dir="ltr"
         disabled={disabled}
         inputMode="numeric"
-        maxLength={6}
-        onChange={(event) => onChange(event.target.value.replace(/\D/g, '').slice(0, 6))}
+        onChange={(event) => onChange(event.target.value
+          .replace(/[۰-۹]/g, digit => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+          .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+          .replace(/\D/g, '').slice(0, 6))}
         placeholder="— — — — — —"
         value={value}
       />
@@ -87,6 +91,14 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
   const [countdown, setCountdown] = useState(0)
+  const [otpLocked, setOtpLocked] = useState(false)
+  const verification = useRef<AbortController | null>(null)
+  const mounted = useRef(true)
+
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false; verification.current?.abort() }
+  }, [intent])
 
   const returnTo = useMemo(() => {
     const from = (location.state as { from?: string } | null)?.from
@@ -134,23 +146,27 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
     }
   }
 
-  async function submitChallenge(event: FormEvent) {
-    event.preventDefault()
-    if (!challenge) return
+  async function submitChallenge(event?: FormEvent, submittedCode = code) {
+    event?.preventDefault()
+    if (!challenge || busy || success || otpLocked || verification.current) return
+    if (!recoveryMode && !/^\d{6}$/.test(submittedCode)) return
+    const controller = new AbortController()
+    verification.current = controller
     setBusy(true)
     setError('')
     try {
       if (intent === 'forgot') {
         if (password !== confirmPassword) throw new Error('تکرار رمز عبور با رمز اصلی یکسان نیست.')
-        await resetPassword(challenge.challengeToken, code, password)
+        await resetPassword(challenge.challengeToken, submittedCode, password)
         setSuccess(true)
         window.setTimeout(() => navigate('/login', { replace: true }), 1000)
       } else if (challenge.challengeType === 'totp' && recoveryMode) {
         complete(await verifyRecoveryCode(challenge.challengeToken, recoveryCode))
       } else if (challenge.challengeType === 'totp') {
-        complete(await verifyTotpChallenge(challenge.challengeToken, code))
+        complete(await verifyTotpChallenge(challenge.challengeToken, submittedCode))
       } else {
-        const result = await verifyChallenge(challenge.challengeToken, code)
+        const result = await verifyChallenge(challenge.challengeToken, submittedCode, controller.signal)
+        if (controller.signal.aborted || !mounted.current) return
         if ('challengeToken' in result) {
           setChallenge(result)
           setCode('')
@@ -159,14 +175,31 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
         }
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'کد تأیید معتبر نیست.')
+      if (controller.signal.aborted || !mounted.current) return
+      let message = caught instanceof Error ? caught.message : 'کد تأیید معتبر نیست.'
+      if (challenge.challengeType === 'sms') {
+        setCode('')
+        const remaining = caught instanceof ApiError
+          ? (caught.body as { details?: { attemptsRemaining?: number } } | null)?.details?.attemptsRemaining : undefined
+        if (typeof remaining === 'number') {
+          setOtpLocked(remaining === 0)
+          message += ` — ${toFaDigits(remaining)} تلاش باقی‌مانده`
+        }
+      }
+      setError(message)
     } finally {
-      setBusy(false)
+      if (verification.current === controller) verification.current = null
+      if (mounted.current) setBusy(false)
     }
   }
 
+  function changeOtp(value: string) {
+    setCode(value)
+    if (challenge?.challengeType === 'sms' && value.length === 6) void submitChallenge(undefined, value)
+  }
+
   async function resend() {
-    if (!challenge || countdown > 0) return
+    if (!challenge || countdown > 0 || busy || verification.current || otpLocked) return
     setBusy(true)
     setError('')
     try {
@@ -262,7 +295,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
                   {challenge.challengeType === 'totp' && !recoveryMode && <div className="auth-security-hint"><KeyRound size={18} /> Google Authenticator یا برنامه مشابه</div>}
                   {challenge.challengeType === 'totp' && recoveryMode ? (
                     <label className="auth-field"><span>کد بازیابی یک‌بارمصرف</span><input autoFocus dir="ltr" onChange={(e) => setRecoveryCode(e.target.value.toUpperCase())} placeholder="ABCDE-12345" required value={recoveryCode} /></label>
-                  ) : <OtpField disabled={busy} onChange={setCode} value={code} />}
+                  ) : <OtpField disabled={busy || success || otpLocked} onChange={changeOtp} value={code} />}
                   {intent === 'forgot' && (
                     <>
                       <label className="auth-field"><span>رمز عبور جدید</span><input autoComplete="new-password" dir="ltr" minLength={8} onChange={(e) => setPassword(e.target.value)} required type="password" value={password} /></label>
@@ -271,13 +304,13 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
                   )}
                   {challenge.developmentCode && <p className="auth-dev-code">حالت توسعه — کد: <b dir="ltr">{challenge.developmentCode}</b></p>}
                   {error && <p className="auth-error" role="alert">{error}</p>}
-                  <button className="auth-primary-button" disabled={busy || (!recoveryMode && code.length !== 6)} type="submit">{busy ? <RefreshCw className="spin" size={19} /> : intent === 'forgot' ? 'ثبت رمز عبور جدید' : intent === 'register' ? 'تأیید و تکمیل ثبت‌نام' : 'تأیید هویت و ورود'}</button>
+                  <button className="auth-primary-button" disabled={busy || success || otpLocked || (!recoveryMode && code.length !== 6)} type="submit">{busy ? <RefreshCw className="spin" size={19} /> : intent === 'forgot' ? 'ثبت رمز عبور جدید' : intent === 'register' ? 'تأیید و تکمیل ثبت‌نام' : 'تأیید هویت و ورود'}</button>
                   {challenge.challengeType === 'totp' ? (
-                    <button className="auth-secondary-button" onClick={() => { setRecoveryMode((value) => !value); setError('') }} type="button"><LockKeyhole size={17} /> {recoveryMode ? 'استفاده از کد برنامه' : 'استفاده از کد بازیابی'}</button>
+                    <button className="auth-secondary-button" disabled={busy} onClick={() => { setRecoveryMode((value) => !value); setError('') }} type="button"><LockKeyhole size={17} /> {recoveryMode ? 'استفاده از کد برنامه' : 'استفاده از کد بازیابی'}</button>
                   ) : (
-                    <button className="auth-resend" disabled={busy || countdown > 0} onClick={resend} type="button"><RefreshCw size={16} /> {countdown > 0 ? `ارسال مجدد تا ${countdown} ثانیه دیگر` : 'ارسال مجدد کد'}</button>
+                    <button className="auth-resend" disabled={busy || success || otpLocked || countdown > 0} onClick={resend} type="button"><RefreshCw size={16} /> {countdown > 0 ? `ارسال مجدد تا ${countdown} ثانیه دیگر` : 'ارسال مجدد کد'}</button>
                   )}
-                  <button className="auth-back" onClick={() => { setChallenge(null); setCode(''); setError('') }} type="button">اصلاح اطلاعات ورود</button>
+                  <button className="auth-back" disabled={busy || success} onClick={() => { setChallenge(null); setCode(''); setError(''); setOtpLocked(false) }} type="button">اصلاح اطلاعات ورود</button>
                 </form>
               )}
             </>

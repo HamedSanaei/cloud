@@ -68,7 +68,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const baseUrl = getApiBaseUrl()
   if (!baseUrl) throw new ApiError('API پیکربندی نشده است (VITE_API_BASE_URL).', 0)
 
-  const { body, timeoutMs = getTimeoutMs(), headers, ...rest } = options
+  const { body, timeoutMs = getTimeoutMs(), headers, signal, ...rest } = options
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), timeoutMs)
 
@@ -76,7 +76,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     const token = getAuthToken()
     const response = await fetch(`${baseUrl}${path.startsWith('/') ? path : `/${path}`}`, {
       ...rest,
-      signal: controller.signal,
+      signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',

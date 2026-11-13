@@ -210,6 +210,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
       userId: old.userId ?? undefined,
       payload: old.payload ?? undefined,
       resendCount: old.resendCount + 1,
+      resendToken: input.token,
     })
     const delivery = await deliverChallenge(old.kind, old.identifier, challenge.code)
     const isSms = old.kind === 'phone_login' || old.kind === 'phone_register'
