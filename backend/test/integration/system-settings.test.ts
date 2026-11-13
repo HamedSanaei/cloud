@@ -84,7 +84,7 @@ describe.skipIf(!dbAvailable)('store system security and real ledger integration
     expect(capabilities.statusCode).toBe(200)
     expect(capabilities.json().data.allowed).toBe(true)
     expect((await send(a, 'POST', base + '/mfa/setup', { password })).statusCode).toBe(404)
-    expect((await send(a, 'POST', base + '/authorize', { action: 'gateway.diagnose', payload: { confirm: true }, password })).statusCode).toBe(400)
+    expect((await send(a, 'POST', base + '/authorize', { action: 'gateway.diagnose', payload: { confirm: true }, password })).statusCode).toBe(422)
     expect((await send(a, 'POST', base + '/authorize', { action: 'gateway.diagnose', payload: { confirm: true } })).statusCode).toBe(200)
   })
   it('rejects expired grants and invalidates previously issued grants after password changes', async () => {
