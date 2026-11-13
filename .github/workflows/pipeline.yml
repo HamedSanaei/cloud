@@ -456,16 +456,27 @@ jobs:
           target="${DEPLOY_USER}@${DEPLOY_HOST}"
           bundle=".release-${RELEASE_SHA}-${GITHUB_RUN_ID}"
           common=(-o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -i "$HOME/.ssh/deploy_key")
-          ssh "${common[@]}" -p "$port" "$target" "test -d '$DEPLOY_PATH' && test -f '$DEPLOY_PATH/.env' && mkdir -m 700 '$DEPLOY_PATH/$bundle'"
-          for script in deploy.sh activate-site-authority.sh restore-site-authority.sh reconcile-runtime.sh runtime-reconcile.py; do
-            scp "${common[@]}" -P "$port" "deploy/scripts/$script" "${target}:${DEPLOY_PATH}/${bundle}/${script}"
+          scripts=(deploy.sh activate-site-authority.sh restore-site-authority.sh reconcile-runtime.sh runtime-reconcile.py)
+          manifest="$RUNNER_TEMP/release-script-checksums.sha256"
+          : > "$manifest"
+          for script in "${scripts[@]}"; do
             read -r checksum _ < <(sha256sum "deploy/scripts/$script")
-            actual="$(ssh "${common[@]}" -p "$port" "$target" "sha256sum '$DEPLOY_PATH/$bundle/$script'")"
-            [[ "${actual%% *}" == "$checksum" ]] || {
-              echo "::error::Release bundle integrity check failed"; exit 1;
-            }
+            printf '%s  %s\n' "$checksum" "$script" >> "$manifest"
           done
-
+          # Transfer and verify all files over ONE SSH connection. Separate scp/ssh
+          # for every file can exhaust sshd MaxStartups under internet scan load.
+          remote="set -euo pipefail; test -d '$DEPLOY_PATH' && test -f '$DEPLOY_PATH/.env' && install -d -m 700 '$DEPLOY_PATH/$bundle' && tar -C '$DEPLOY_PATH/$bundle' -xf - && cd '$DEPLOY_PATH/$bundle' && sha256sum -c release-script-checksums.sha256 && rm release-script-checksums.sha256"
+          for attempt in 1 2 3; do
+            if tar -C deploy/scripts -cf - "${scripts[@]}" -C "$RUNNER_TEMP" release-script-checksums.sha256 |
+              ssh "${common[@]}" -p "$port" "$target" "$remote"; then
+              echo "Verified release bundle delivered over a single SSH session"
+              exit 0
+            fi
+            echo "::warning::Release bundle transfer attempt $attempt/3 failed"
+            if (( attempt < 3 )); then sleep "$((attempt * 5))"; fi
+          done
+          echo "::error::Verified release bundle transfer failed after three attempts"
+          exit 1
       - name: Promote empty website installation to canonical site data
         if: github.ref == 'refs/heads/staging'
         run: |
