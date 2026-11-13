@@ -22,9 +22,9 @@ import { createWorkers } from './dist/jobs/workers.js'
 
 loadConfig(); await migrate()
 const handle = createDb(), db = handle.db, config = getConfig(), password = 'Smoke-fixture-only-123!'
-const allowed = config.SYSTEM_ADMIN_IDS.split(','), accounts = []
+const accounts = []
 for (let index = 0; index < 3; index++) {
-  const id = allowed[index] || randomUUID(), secret = createTotpSecret(), email = `fixture-${index}@example.test`
+  const id = randomUUID(), secret = createTotpSecret(), email = `fixture-${index}@example.test`
   await db.insert(users).values({ id, email, passwordHash: await hashPassword(password), role: index < 2 ? 'admin' : 'user', status: 'active',
     twoFactorEnabled: true, totpSecretEncrypted: encryptTotpSecret(secret) })
   const session = await createSession(db, id, {})

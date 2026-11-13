@@ -7,15 +7,15 @@ import { AuthProvider } from '../src/auth/AuthContext'
 import { ToastProvider } from '../src/components/ui/Toast'
 import { checkoutFixture, serverId } from './fixtures.mjs'
 
-let requests: Array<{ path: string; method: string; body: Record<string, unknown>; key?: string }>, allowed = true
+let requests: Array<{ path: string; method: string; body: Record<string, unknown>; key?: string }>, allowed = true, encryptionReady = true
 beforeEach(() => {
-  allowed = true; requests = []
+  allowed = true; encryptionReady = true; requests = []
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     const path = new URL(url, 'https://example.test').pathname.replace(/^\/api/, ''), method = init?.method || 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) : {}
     requests.push({ path, method, body, key: (init?.headers as Record<string, string>)?.['idempotency-key'] })
     let data = checkoutFixture(path)
-    if (path === '/admin/settings/capabilities') data = { data: { ...data.data, allowed } }
+    if (path === '/admin/settings/capabilities') data = { data: { ...data.data, allowed, encryptionReady } }
     if (path === '/admin/settings/authorize') data = { data: { proof: 'f07b9500-414e-4000-8000-000000000004' } }
     if (path === '/admin/settings/finance/adjustments' && method === 'POST') data = { data: { id: 'fixture-operation', status: 'completed', afterRial: 5500000 } }
     return new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } })
@@ -28,10 +28,17 @@ describe('store administration routes and explicit confirmations', () => {
     expect(await screen.findByRole('heading', { name: heading })).toBeTruthy()
     expect(screen.getByRole('navigation', { name: 'بخش‌های تنظیمات فروشگاه' })).toBeTruthy()
   })
-  it('does not fetch sensitive settings when the admin is outside the operator allowlist', async () => {
+  it('does not fetch sensitive settings for a rejected non-admin account', async () => {
     allowed = false; open('/admin/settings/gateway')
-    expect(await screen.findByText('دسترسی مدیر سیستم تنظیم نشده است')).toBeTruthy()
+    expect(await screen.findByText('دسترسی مدیریت مجاز نیست')).toBeTruthy()
     expect(requests.some(r => r.path === '/admin/settings/gateway')).toBe(false)
+  })
+  it('renders admin sections even when the merchant encryption key is not configured', async () => {
+    encryptionReady = false
+    open('/admin/settings/logs')
+    expect(await screen.findByRole('heading', { name: /Audit/ })).toBeTruthy()
+    expect(await screen.findByText(/STORE_SECRET_KEY/)).toBeTruthy()
+    expect(requests.some(r => r.path.startsWith('/admin/settings/logs'))).toBe(true)
   })
   it('requires exact user/wallet selection and reauthentication before a ledger request', async () => {
     open('/admin/settings/finance'); const user = userEvent.setup()

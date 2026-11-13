@@ -292,7 +292,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
     const user = await db.query.users.findFirst({ where: (t) => eq(t.id, auth.id) })
     if (!user) throw new BadRequestError('کاربر یافت نشد')
     await verifyPrimaryCredentials(db, { email: user.email, password: input.password })
-    if (getConfig().SYSTEM_ADMIN_IDS.split(',').map(v => v.trim()).includes(user.id) && user.twoFactorEnabled &&
+    if (user.role === 'admin' && user.status === 'active' && user.twoFactorEnabled &&
         (!input.code || !user.totpSecretEncrypted || !verifyTotp(decryptTotpSecret(user.totpSecretEncrypted), input.code))) {
       throw new ForbiddenError('برای غیرفعال کردن تأیید امنیتی مدیر سیستم، کد فعلی برنامه نیز الزامی است.')
     }

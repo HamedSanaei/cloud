@@ -23,7 +23,6 @@ try {
     NODE_ENV: 'test', APP_ENV: 'test', AUTH_SECRET: 'fixture-system-smoke-secret-only', AUTH_DELIVERY_MODE: 'log', DATA_AUTHORITY: 'site', PLATFORM_API_URL: '',
     DATABASE_URL: 'postgres://fixture:fixture-isolated-only@postgres:5432/fixture', REDIS_URL: 'redis://redis:6379',
     LEASEWEB_MODE: 'mock', LEASEWEB_ENABLED: 'false', LEASEWEB_ORDERING_ENABLED: 'false', HETZNER_ENABLED: 'false', TABAPAY_ENABLED: 'false',
-    SYSTEM_ADMIN_IDS: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa,bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
     STORE_SECRET_KEY: '1'.repeat(64), SYSTEM_BACKUP_KEY: '2'.repeat(64), SYSTEM_INSTANCE_ID: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', SYSTEM_BACKUP_ENABLED: 'true', SYSTEM_RESTORE_ENABLED: 'true', LOG_LEVEL: 'error',
   }
   const result = docker(['run', '--rm', '-i', '--name', id + '-api', '--label', `parserver.run=${id}`, '--network', id,
