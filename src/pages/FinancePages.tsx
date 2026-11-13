@@ -23,7 +23,7 @@ import { useToast } from '../components/ui/Toast'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { ApiError, isApiConfigured } from '../lib/apiClient'
 import { createWallet, getWalletSummary, listChargeRequests, listInvoices, listTransactions, listWallets } from '../lib/endpoints'
-import { formatCount, formatToman } from '../lib/format'
+import { formatCount, formatFaDateTime, formatToman } from '../lib/format'
 import { getIntegrationStatus } from '../lib/platformClient'
 import { WalletRecharge } from '../components/ui/WalletRecharge'
 import { WalletPaymentStatus } from '../components/ui/WalletPaymentStatus'
@@ -178,6 +178,10 @@ interface FinancialListProps {
   type: 'invoice' | 'charge'
 }
 
+const chargeStatusLabels: Record<string, string> = {
+  pending: 'در انتظار', approved: 'تایید شده', rejected: 'رد شده', processing: 'در حال پردازش',
+}
+
 function FinancialList({ type }: FinancialListProps) {
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
@@ -218,7 +222,7 @@ function FinancialList({ type }: FinancialListProps) {
       >
         <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="وضعیت">
           <option value="all">همه وضعیت‌ها</option>
-          {isInvoice ? <><option value="pending">در انتظار پرداخت</option><option value="paid">پرداخت شده</option><option value="cancelled">لغو شده</option><option value="refunded">مسترد شده</option></> : <><option value="pending">در انتظار</option><option value="approved">تایید شده</option><option value="rejected">رد شده</option><option value="processing">در حال پردازش</option></>}
+          {isInvoice ? <><option value="pending">در انتظار پرداخت</option><option value="paid">پرداخت شده</option><option value="cancelled">لغو شده</option><option value="refunded">مسترد شده</option></> : Object.entries(chargeStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </Select>
       </FilterPanel>
       <Card className={!active.loading && !active.error && !active.data?.unavailable && !rows.length ? 'resource-empty-card' : undefined}>
@@ -243,8 +247,8 @@ function FinancialList({ type }: FinancialListProps) {
                 <td>{row.number}</td>
                 <td>{isInvoice ? row.description : row.invoiceNumber ?? '—'}</td>
                 <td>{row.formattedAmount ?? formatToman(row.amount)}</td>
-                <td>{row.date}</td>
-                <td><Badge>{row.status}</Badge></td>
+                <td>{isInvoice ? row.date : formatFaDateTime(row.date)}</td>
+                <td><Badge>{isInvoice ? row.status : chargeStatusLabels[row.status] ?? 'نامشخص'}</Badge></td>
               </tr>
             ))}
           </Table>
