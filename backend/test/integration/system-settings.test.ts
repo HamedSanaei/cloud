@@ -22,7 +22,7 @@ describe.skipIf(!dbAvailable)('store system security and real ledger integration
   beforeAll(async () => {
     ctx = await getTestContext(); await truncateAll(ctx.db); await ctx.db.delete(settings).where(eq(settings.key, 'tabapay.active'))
     c = { ...config.getConfig(), DATA_AUTHORITY: 'site', STORE_SECRET_KEY: 'a'.repeat(64), SYSTEM_BACKUP_ENABLED: false, SYSTEM_RESTORE_ENABLED: false,
-      SYSTEM_ADMIN_IDS: '', SYSTEM_BACKUP_DIR: path.join(tmpdir(), 'codex-system-integration-' + randomUUID()), TABAPAY_ENABLED: true, TABAPAY_MERCHANT: oldMerchant, TABAPAY_SANDBOX: true, SYSTEM_DUAL_APPROVAL_RIAL: 1000000 }
+      SYSTEM_BACKUP_DIR: path.join(tmpdir(), 'codex-system-integration-' + randomUUID()), TABAPAY_ENABLED: true, TABAPAY_MERCHANT: oldMerchant, TABAPAY_SANDBOX: true, SYSTEM_DUAL_APPROVAL_RIAL: 1000000 }
     vi.spyOn(config, 'getConfig').mockImplementation(() => c)
     vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
       if (init.method === 'HEAD') return new Response(null, { status: 200 })
@@ -36,11 +36,10 @@ describe.skipIf(!dbAvailable)('store system security and real ledger integration
     app = await buildApp({ db: ctx.db, queues: ctx.queues, logger: testLogger }); await app.ready()
   })
   afterAll(async () => { await app?.close(); await ctx?.close(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
-  async function account(role: 'user' | 'admin' = 'admin', allowed = true) {
+  async function account(role: 'user' | 'admin' = 'admin') {
     const n = ++sequence, user = await registerUser(ctx.db, { email: `sys-${n}@fixture.test`, password, mobile: '+98912' + String(n).padStart(7, '0') })
     const secret = createTotpSecret()
     await ctx.db.update(users).set({ role, twoFactorEnabled: true, totpSecretEncrypted: encryptTotpSecret(secret) }).where(eq(users.id, user.id))
-    if (role === 'admin' && allowed) c.SYSTEM_ADMIN_IDS += (c.SYSTEM_ADMIN_IDS ? ',' : '') + user.id
     const session = await createSession(ctx.db, user.id, {}), wallet = await ensureDefaultWallet(ctx.db, user.id)
     return { user, wallet, secret, session, remoteAddress: `192.0.2.${n}`, headers: { authorization: `Bearer ${session.token}` } }
   }
@@ -52,14 +51,22 @@ describe.skipIf(!dbAvailable)('store system security and real ledger integration
     const response = await send(a, 'POST', base + '/authorize', { action, payload, password, code: currentTotp(a.secret) })
     expect(response.statusCode, response.body).toBe(200); return response.json().data.proof as string
   }
-  it('denies users, non-allowlisted admins, missing MFA and unauthorized uploads before parsing', async () => {
-    const user = await account('user'), other = await account('admin', false), admin = await account()
+  it('allows all active admins but denies users, missing MFA and unauthorized uploads', async () => {
+    const user = await account('user'), other = await account('admin'), admin = await account()
     expect((await app.inject(base + '/logs')).statusCode).toBe(401)
     expect((await send(user, 'GET', base + '/logs')).statusCode).toBe(403)
-    expect((await send(other, 'GET', base + '/gateway')).statusCode).toBe(403)
+    expect((await send(other, 'GET', base + '/gateway')).statusCode).toBe(200)
+    expect((await send(other, 'GET', base + '/capabilities')).json().data.allowed).toBe(true)
     expect((await app.inject({ method: 'POST', url: base + '/backups/upload', payload: Buffer.from('not a dump'), headers: { 'content-type': 'application/octet-stream' } })).statusCode).toBe(401)
     await ctx.db.update(users).set({ twoFactorEnabled: false }).where(eq(users.id, admin.user.id))
     expect((await send(admin, 'POST', base + '/authorize', { action: 'gateway.diagnose', payload: { confirm: true }, password, code: currentTotp(admin.secret) })).statusCode).toBe(403)
+  })
+  it('rejects a demoted admin even with a previously granted step-up proof', async () => {
+    const a = await account()
+    const payload = { confirm: true }
+    const grant = await proof(a, 'gateway.diagnose', payload)
+    await ctx.db.update(users).set({ role: 'user' }).where(eq(users.id, a.user.id))
+    expect((await send(a, 'POST', base + '/gateway/diagnose', { ...payload, proof: grant })).statusCode).toBe(403)
   })
   it('binds step-up to exact payload, action, session and a single use', async () => {
     const a = await account(), payload = { enabled: true, sandbox: true, merchant: nextMerchant, confirm: true }, grant = await proof(a, 'gateway.update', payload)

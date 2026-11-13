@@ -4,16 +4,15 @@
 
 UI: `/admin/settings/{gateway,logs,backups,finance}`. API: identical routes under
 `/api/admin/settings` and `/api/v1/admin/settings`. Requires site authority.
-Ordinary admins can read only their capability status. Sensitive access requires
-an active admin whose **exact user UUID** is in operator-managed `SYSTEM_ADMIN_IDS`.
-The panel cannot grant this role or edit this allowlist.
+All active admins can access store settings. The API verifies active admin status
+rather than a fixed UUID allowlist. Sensitive mutations still require password
+and TOTP reauthentication, and high-risk changes use a distinct second admin.
 
 Set secrets through the protected host environment/secret manager, never Git or
 `VITE_*`. Migration **0009** adds four tables; no balances or existing data are
-rewritten. Defaults leave system backups/restore disabled and the allowlist empty.
+rewritten. Defaults leave system backups/restore disabled.
 
 ```dotenv
-SYSTEM_ADMIN_IDS=<admin-uuid>,<second-admin-uuid>
 STORE_SECRET_KEY=<independent random 32-byte key as 64 hex characters>
 SYSTEM_BACKUP_KEY=<different independent random 32-byte key as 64 hex characters>
 SYSTEM_INSTANCE_ID=<stable unique deployment UUID>
@@ -34,7 +33,7 @@ keys, host settings, customer data or Production runtime were changed for this P
 The admin can enroll a step-up authenticator with password confirmation in the
 new panel. This protects administrative operations even when customer-login MFA
 is globally disabled. Existing MFA cannot be overwritten during setup; disabling
-it for an allowlisted admin also requires its current TOTP code. Google-only
+it for an active admin also requires its current TOTP code. Google-only
 admins must first establish a password through the normal verified recovery flow.
 Lost management MFA requires a separately authorized operator recovery; login
 recovery codes are not an administrative step-up bypass.
@@ -149,7 +148,7 @@ financial/security fingerprints and wallet/ledger consistency, and drops that DB
 The UI shows current/backup counts and the data-loss warning. A plan lasts 15 minutes;
 changed counts invalidate it. Restore requires `SYSTEM_RESTORE_ENABLED`, typed
 `RESTORE DATABASE`, fresh step-up and a separate admin's final confirmation within
-ten minutes; roles/allowlist are rechecked before execution.
+ten minutes; both approvers' active admin roles are rechecked before execution.
 
 Restore automatically refuses financial/security/configuration drift or unresolved
 orders/payments/provider operations. It does **not** rewind a newer ledger and

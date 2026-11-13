@@ -188,9 +188,8 @@ async function run(db: DbClient, job: BackupJob) {
       const live = await currentSnapshot(client), original = await decodeArtifact(candidate.sourceId!)
       if (live.financialHash !== original.header.financialHash || live.schemaHead !== original.header.schemaHead || live.pgMajor !== original.header.pgMajor) throw new ConflictError('دفتر مالی، سفارش‌ها، schema یا اعتبارنامه‌ها از زمان Backup تغییر کرده‌اند؛ تطبیق و بازیابی آفلاین لازم است.')
       if (JSON.stringify(live.counts) !== JSON.stringify(candidate.snapshot?.counts)) throw new ConflictError('خلاصهٔ تغییرات از زمان آزمایش بازیابی عوض شده است؛ آزمایش تازه و تأیید دوباره لازم است.')
-      const allowed = getConfig().SYSTEM_ADMIN_IDS.split(',').map(v => v.trim())
       const administrators = await client.query("select id from users where id=any($1::uuid[]) and role='admin' and status='active'", [[job.actorId, job.approvedBy]])
-      if (administrators.rowCount !== 2 || !allowed.includes(job.actorId) || !allowed.includes(job.approvedBy!)) throw new ForbiddenError('دسترسی یکی از مدیران تأییدکننده لغو شده است.')
+      if (administrators.rowCount !== 2 || job.actorId === job.approvedBy) throw new ForbiddenError('دسترسی یکی از مدیران تأییدکننده لغو شده است.')
       const active = await client.query("select 1 from wallet_payments where status in ('creating','pending','unknown') union all select 1 from provider_operations where status in ('pending','running','unknown','needs_reconciliation') union all select 1 from orders where status::text in ('pending_payment','paid','queued','provisioning','requires_review') limit 1")
       if (active.rowCount) throw new ConflictError('پرداخت یا عملیات سرویس‌دهندهٔ تعیین‌تکلیف‌نشده مانع Restore است.')
       const auditDelta = (await client.query('select * from audit_logs where id > $1 order by id limit 50001', [original.header.auditHead])).rows

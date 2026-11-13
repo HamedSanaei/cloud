@@ -101,7 +101,6 @@ const envSchema = z.object({
   TABAPAY_ENABLED: z.string().default('false').transform(v => v === 'true' || v === '1'),
   TABAPAY_MERCHANT: z.string().default(''),
   TABAPAY_SANDBOX: z.string().default('false').transform(v => v === 'true' || v === '1'),
-  SYSTEM_ADMIN_IDS: z.string().default(''),
   STORE_SECRET_KEY: z.string().default(''),
   SYSTEM_BACKUP_KEY: z.string().default(''),
   SYSTEM_INSTANCE_ID: z.string().default(''),
@@ -135,7 +134,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new Error('DATA_AUTHORITY=platform requires PLATFORM_API_URL')
   }
   const system = parsed.data
-  if (system.SYSTEM_ADMIN_IDS.split(',').map(v => v.trim()).filter(Boolean).some(v => !z.uuid().safeParse(v).success)) throw new Error('SYSTEM_ADMIN_IDS must contain UUIDs only')
   if (system.SYSTEM_RESTORE_ENABLED && !system.SYSTEM_BACKUP_ENABLED) throw new Error('Restore requires configured system backups')
   if (system.SYSTEM_BACKUP_ENABLED && (!/^[a-f0-9]{64}$/i.test(system.STORE_SECRET_KEY) || !/^[a-f0-9]{64}$/i.test(system.SYSTEM_BACKUP_KEY) || !z.uuid().safeParse(system.SYSTEM_INSTANCE_ID).success || !isAbsolute(system.SYSTEM_BACKUP_DIR))) throw new Error('System backup encryption keys, instance UUID and absolute private directory must be configured')
   if (parsed.data.TABAPAY_ENABLED && (!z.string().uuid().safeParse(parsed.data.TABAPAY_MERCHANT).success ||

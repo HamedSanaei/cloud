@@ -66,7 +66,7 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     const account = allowed ? await db.query.users.findFirst({ where: t => eq(t.id, user.id) }) : null
     return { data: { allowed, mfaEnabled: !!account?.twoFactorEnabled, encryptionReady: /^[a-f0-9]{64}$/i.test(c.STORE_SECRET_KEY), backupsEnabled: c.SYSTEM_BACKUP_ENABLED,
       restoreEnabled: c.SYSTEM_RESTORE_ENABLED, maxUploadBytes: max, dualApprovalRial: c.SYSTEM_DUAL_APPROVAL_RIAL,
-      requirements: ['SYSTEM_ADMIN_IDS', 'STORE_SECRET_KEY', 'SYSTEM_BACKUP_KEY', 'SYSTEM_INSTANCE_ID', 'SYSTEM_BACKUP_ENABLED', 'TOTP'] } }
+      requirements: ['STORE_SECRET_KEY', 'SYSTEM_BACKUP_KEY', 'SYSTEM_INSTANCE_ID', 'SYSTEM_BACKUP_ENABLED', 'TOTP'] } }
   })
   // Admin step-up MFA is independent of the optional customer-login toggle.
   // Password is mandatory for bootstrap; an already enabled key cannot be replaced.

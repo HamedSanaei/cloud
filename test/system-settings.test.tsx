@@ -28,9 +28,9 @@ describe('store administration routes and explicit confirmations', () => {
     expect(await screen.findByRole('heading', { name: heading })).toBeTruthy()
     expect(screen.getByRole('navigation', { name: 'بخش‌های تنظیمات فروشگاه' })).toBeTruthy()
   })
-  it('does not fetch sensitive settings when the admin is outside the operator allowlist', async () => {
+  it('does not fetch sensitive settings for a rejected non-admin account', async () => {
     allowed = false; open('/admin/settings/gateway')
-    expect(await screen.findByText('دسترسی مدیر سیستم تنظیم نشده است')).toBeTruthy()
+    expect(await screen.findByText('دسترسی مدیریت مجاز نیست')).toBeTruthy()
     expect(requests.some(r => r.path === '/admin/settings/gateway')).toBe(false)
   })
   it('requires exact user/wallet selection and reauthentication before a ledger request', async () => {

@@ -17,8 +17,8 @@ export function canonical(value: unknown): string {
 }
 const authorizationDigest = (payload: unknown, account: { passwordHash: string; totpSecretEncrypted: string | null }) => digest(canonical(payload) + ':' + digest(account.passwordHash + ':' + account.totpSecretEncrypted))
 export function systemAdmin(user: SessionUser) {
-  if (user.role !== 'admin' || user.status !== 'active' || !getConfig().SYSTEM_ADMIN_IDS.split(',').map(v => v.trim()).includes(user.id)) {
-    throw new ForbiddenError('این عملیات به مدیر سیستم مجاز نیاز دارد؛ دسترسی باید توسط اپراتور در SYSTEM_ADMIN_IDS تعیین شود.')
+  if (user.role !== 'admin' || user.status !== 'active') {
+    throw new ForbiddenError('این عملیات فقط برای مدیران فعال فروشگاه مجاز است.')
   }
 }
 export function secretKey(value = getConfig().STORE_SECRET_KEY) {
