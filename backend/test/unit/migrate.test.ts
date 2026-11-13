@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   clients: [] as Array<{ query: Mock; release: Mock; locked: boolean }>,
   migrate: vi.fn(), drizzle: vi.fn(), logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   lock: false, migrationError: undefined as Error | undefined, connectError: undefined as Error | undefined,
+  lockOwners: new Map<string, unknown>(),
 }))
 vi.mock('pg', () => ({ default: { Pool: class {
   connect = vi.fn(async () => {
@@ -12,16 +13,18 @@ vi.mock('pg', () => ({ default: { Pool: class {
     const client = {
       locked: false,
       on: vi.fn(),
-      query: vi.fn(async (text: string) => {
+      query: vi.fn(async (text: string, parameters: number[] = []) => {
         if (text.includes('pg_try_advisory_lock')) {
-          if (mocks.lock) return { rows: [{ acquired: false }] }
+          const key = parameters.join(':')
+          if (mocks.lockOwners.has(key) && mocks.lockOwners.get(key) !== client) return { rows: [{ acquired: false }] }
+          mocks.lockOwners.set(key, client)
           mocks.lock = true
           client.locked = true
           return { rows: [{ acquired: true }] }
         }
         return { rows: [] }
       }),
-      release: vi.fn(() => { if (client.locked) mocks.lock = false; client.locked = false }),
+      release: vi.fn(() => { for (const [key, owner] of mocks.lockOwners) if (owner === client) mocks.lockOwners.delete(key); mocks.lock = mocks.lockOwners.size > 0; client.locked = false }),
     }
     mocks.clients.push(client)
     return client
@@ -46,6 +49,7 @@ beforeEach(() => {
   mocks.pools.length = 0
   mocks.clients.length = 0
   mocks.lock = false
+  mocks.lockOwners.clear()
   mocks.connectError = undefined
   mocks.migrationError = undefined
   mocks.drizzle.mockImplementation((client) => ({ client }))

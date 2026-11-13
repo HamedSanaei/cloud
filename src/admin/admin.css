@@ -207,7 +207,7 @@
   .admin-mobile-record > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .admin-mobile-record strong { font-size: 13px; }
   .admin-mobile-record > span { color: #63748c; overflow-wrap: anywhere; }
-  .admin-bottom-nav { position: fixed; bottom: 0; right: 0; left: 0; z-index: 40; display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); min-height: 76px; background: var(--admin-paper); border-top: 1px solid var(--admin-line); padding-bottom: env(safe-area-inset-bottom); }
+  .admin-bottom-nav { position: fixed; bottom: 0; right: 0; left: 0; z-index: 40; display: grid; grid-template-columns: repeat(7,minmax(70px,1fr)); overflow-x: auto; min-height: 76px; background: var(--admin-paper); border-top: 1px solid var(--admin-line); padding-bottom: env(safe-area-inset-bottom); }
   .admin-bottom-nav__link { display: grid; justify-items: center; align-content: center; gap: 5px; font-size: 10px; color: var(--admin-subtle); }
   .admin-bottom-nav__link.is-active { color: var(--admin-blue); font-weight: 700; }
   .admin-wallet-total { flex-direction: column; gap: 8px; }

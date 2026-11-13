@@ -64,6 +64,13 @@
       "when": 1794526310591,
       "tag": "0008_wallet-payments-and-ticket-servers",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794588809121,
+      "tag": "0009_store-system-management",
+      "breakpoints": true
     }
   ]
 }

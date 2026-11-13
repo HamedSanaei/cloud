@@ -11,12 +11,7 @@ export function minimumCreationBalanceRial(totalRial: number, interval: string):
   return required
 }
 
-/** No extra debit/reservation: eligibility is serialized by the payment wallet. */
-export async function assertCreationFunding(db: DbOrTx, input: {
-  userId: string; walletId: string; totalRial: number; billingInterval: string
-}) {
-  const [wallet] = await db.select().from(wallets).where(eq(wallets.id, input.walletId)).for('update')
-  if (!wallet || wallet.userId !== input.userId) throw new NotFoundError('کیف پول یافت نشد')
+export async function walletCommitments(db: DbOrTx, input: { userId: string; walletId: string }) {
   const now = new Date()
   const horizon = now.getTime() + 7 * 86400000
   // Include queued orders so concurrent purchases cannot reuse the same funds
@@ -37,7 +32,16 @@ export async function assertCreationFunding(db: DbOrTx, input: {
       at = addInterval(new Date(at), subscription.billingInterval).getTime()
     }
   }
-  const requiredBalanceRial = minimumCreationBalanceRial(input.totalRial, input.billingInterval) + commitments
+  if (!Number.isSafeInteger(commitments)) throw new ValidationError('تعهد مالی خارج از محدوده است')
+  return commitments
+}
+/** No extra debit/reservation: eligibility is serialized by the payment wallet. */
+export async function assertCreationFunding(db: DbOrTx, input: {
+  userId: string; walletId: string; totalRial: number; billingInterval: string
+}) {
+  const [wallet] = await db.select().from(wallets).where(eq(wallets.id, input.walletId)).for('update')
+  if (!wallet || wallet.userId !== input.userId) throw new NotFoundError('کیف پول یافت نشد')
+  const requiredBalanceRial = minimumCreationBalanceRial(input.totalRial, input.billingInterval) + await walletCommitments(db, input)
   if (!Number.isSafeInteger(requiredBalanceRial)) throw new ValidationError('مبلغ سفارش بیش از حد مجاز است')
   if (wallet.balanceRial < requiredBalanceRial) throw new InsufficientFundsError('موجودی کیف پول شما کافی نیست.', {
     balanceRial: wallet.balanceRial, orderTotalRial: input.totalRial, requiredBalanceRial,

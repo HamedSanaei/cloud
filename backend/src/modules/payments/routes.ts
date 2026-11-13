@@ -9,7 +9,8 @@ import { ForbiddenError, NotFoundError } from '../../lib/errors.js'
 import { isSiteAuthority } from '../integration/authority.js'
 import { listWallets } from '../wallets/service.js'
 import { walletToDto } from '../../lib/dto.js'
-import { authenticCallback, gatewayReady } from './tabapay.js'
+import { authenticCallback, validToken } from './tabapay.js'
+import { effectiveGateway } from '../system/gateway.js'
 import { createRecharge, paymentDto, verifyRecharge } from './service.js'
 
 export const registerPaymentRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx: { db } }) => {
@@ -19,7 +20,8 @@ export const registerPaymentRoutes: FastifyPluginAsync<{ ctx: AppContext }> = as
   })
   app.get('/wallets/recharge/options', async request => {
     const user = requireUser(request)
-    return { data: { enabled: gatewayReady(), gateways: gatewayReady() ? ['tabapay'] : [], wallets: (await listWallets(db, user.id)).map(walletToDto) } }
+    const gateway = await effectiveGateway(db), enabled = gateway.enabled && validToken(gateway.merchant)
+    return { data: { enabled, gateways: enabled ? ['tabapay'] : [], wallets: (await listWallets(db, user.id)).map(walletToDto) } }
   })
   app.post('/wallets/recharges', { config: { rateLimit: { max: 10, timeWindow: '10 minutes' } } }, async request => {
     const user = requireUser(request)
@@ -46,9 +48,9 @@ export const registerPaymentRoutes: FastifyPluginAsync<{ ctx: AppContext }> = as
   app.route({ method: ['GET', 'POST'], url: '/payments/tabapay/callback', bodyLimit: 8192,
     config: { rateLimit: { max: 120, timeWindow: '1 minute' } }, handler: async (request, reply) => {
       const post = request.method === 'POST'
-      if (post && !authenticCallback(request.headers.authorize ?? request.headers.http_authorize)) throw new ForbiddenError()
       const { token } = parse(z.object({ token: z.string().uuid() }), post ? request.body : request.query)
       const payment = await db.query.walletPayments.findFirst({ where: t => eq(t.gatewayToken, token.toLowerCase()) })
+      if (post && (!payment || !authenticCallback(request.headers.authorize ?? request.headers.http_authorize, (await effectiveGateway(db, payment.merchantFingerprint)).merchant))) throw new ForbiddenError()
       if (!payment) throw new NotFoundError('درخواست پرداخت یافت نشد.')
       try {
         const result = await verifyRecharge(db, payment.id)

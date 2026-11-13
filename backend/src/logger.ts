@@ -1,5 +1,6 @@
 import { pino } from 'pino'
 import { getConfig } from './config.js'
+import { recordEvent } from './modules/system/events.js'
 
 /**
  * Structured logger. Only development uses the optional pretty-printer.
@@ -12,6 +13,14 @@ export function createLogger(name = 'cloud-server') {
     name,
     level: config.LOG_LEVEL,
     base: { env: config.NODE_ENV },
+    serializers: { req(request) { return { id: request.id, method: request.method, url: typeof request.url === 'string' ? request.url.split('?')[0] : undefined } } },
+    hooks: { logMethod(args, method, level) {
+      const event = args[0]
+      if (event && typeof event === 'object' && 'event' in event && typeof event.event === 'string' && /^[a-z0-9_.-]{1,100}$/i.test(event.event)) {
+        recordEvent(event.event, level >= 50 ? 'error' : level >= 40 ? 'warn' : 'info', name, event)
+      }
+      method.apply(this, args)
+    } },
     redact: {
       paths: [
         'req.headers.authorization',
@@ -19,6 +28,8 @@ export function createLogger(name = 'cloud-server') {
         'req.headers["x-lsw-auth"]',
         'req.headers.authorize',
         'req.headers.http_authorize',
+        'req.headers["x-system-proof"]',
+        '*.merchant', '*.encrypted', '*.proof', '*.secret', '*.code', '*.recoveryCodes', '*.STORE_SECRET_KEY', '*.SYSTEM_BACKUP_KEY',
         '*.TABAPAY_MERCHANT',
         '*.password',
         '*.passwordHash',

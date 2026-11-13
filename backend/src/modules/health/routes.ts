@@ -4,6 +4,7 @@ import type { AppContext } from '../../app.js'
 import { assertPlatformCompatibility, platformEnabled } from '../integration/platform.js'
 import { assertAuthenticationReady } from '../auth/readiness.js'
 import { isProduction } from '../../config.js'
+import { maintenanceActive } from '../system/writer-gate.js'
 
 export const registerHealthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
   // Liveness — the process is up. No dependencies checked.
@@ -11,6 +12,7 @@ export const registerHealthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
 
   // Unified readiness also requires the canonical service's financial contract.
   app.get('/health/ready', async (_request, reply) => {
+    if (await maintenanceActive()) return reply.status(503).send({ status: 'maintenance', checks: { maintenance: 'active' } })
     try {
       await ctx.db.execute(sql`select 1`)
     } catch {

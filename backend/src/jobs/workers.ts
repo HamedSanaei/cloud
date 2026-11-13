@@ -1,4 +1,4 @@
-import { Worker } from 'bullmq'
+import { Worker, DelayedError } from 'bullmq'
 import { Redis } from 'ioredis'
 import type { DbClient } from '../db/index.js'
 import { getConfig } from '../config.js'
@@ -6,6 +6,8 @@ import type { Logger } from '../logger.js'
 import { startupFailure } from '../lib/startup.js'
 import type { CloudQueues, JobName } from './queue.js'
 import { JOB_NAMES } from './queue.js'
+import { coordinationPool, sharedWriter } from '../modules/system/writer-gate.js'
+import { installEventSink, recordEvent } from '../modules/system/events.js'
 import {
   handleCatalogSync,
   handleProvision,
@@ -33,20 +35,32 @@ export function createWorkers(opts: { db: DbClient; queues: CloudQueues; logger:
   })
   const ctx: HandlerContext = { db: opts.db, queues: opts.queues }
   const workers: Worker[] = []
+  const gate = coordinationPool(24)
+  installEventSink(opts.db)
 
   function makeWorker(queueName: JobName, handler: (data: unknown) => Promise<unknown>) {
     const w = new Worker(
       queueName,
-      async (job) => {
+      async (job, token) => {
         const started = Date.now()
+        let release: () => void
+        try { release = await sharedWriter(gate) } catch (error) {
+          if (error && typeof error === 'object' && 'code' in error && error.code === 'maintenance') {
+            await job.moveToDelayed(Date.now() + 30000, token)
+            throw new DelayedError() // Do not burn attempts while writers are paused.
+          }
+          throw error
+        }
         try {
           const result = await handler(job.data)
           opts.logger.info({ queue: queueName, jobId: job.id, ms: Date.now() - started }, 'job completed')
+          recordEvent('job.completed', 'info', 'worker', { queue: queueName, jobId: job.id, elapsedMs: Date.now() - started })
           return result
         } catch (err) {
           opts.logger.warn({ queue: queueName, jobId: job.id, error: (err as Error).message }, 'job failed')
+          recordEvent('job.failed', 'error', 'worker', { queue: queueName, jobId: job.id })
           throw err
-        }
+        } finally { release() }
       },
       { connection, prefix: 'cloud', concurrency: 4, autorun: false },
     )
@@ -79,6 +93,7 @@ export function createWorkers(opts: { db: DbClient; queues: CloudQueues; logger:
     async close() {
       if (!ready) connection.disconnect()
       await Promise.all(workers.map((w) => w.close(!ready)))
+      await gate.end()
       connection.disconnect()
     },
   }

@@ -28,6 +28,15 @@ export function checkoutFixture(path) {
   const base = fixture(path)
   if (path === '/auth/me') return { data: { ...base.data, role: 'admin' } }
   if (path === '/integration/status') return { data: { enabled: false, linked: false } }
+  if (path === '/admin/settings/capabilities') return { data: { allowed: true, encryptionReady: true, mfaEnabled: true, backupsEnabled: true, restoreEnabled: true, maxUploadBytes: 67174400, dualApprovalRial: 100000000 } }
+  if (path === '/admin/settings/gateway') return { data: { enabled: true, sandbox: false, configured: true, source: 'store', maskedMerchant: '••••1111', domain: 'example.test', callbackUrl: 'https://example.test/api/v1/payments/tabapay/callback', returnUrl: 'https://example.test/wallet', versions: [] } }
+  if (path === '/admin/settings/logs') return { data: { items: [{ id: 'audit:1', createdAt: '2026-11-13T08:00:00Z', event: 'system.gateway_updated', service: 'audit', level: 'info', actorId: 'fixture-admin', requestId: 'fixture-request', metadata: { result: 'success' } }], total: 1, page: 1, pages: 1 } }
+  if (path === '/admin/settings/finance/users') return { data: [{ id: 'f07b9500-414e-4000-8000-000000000003', name: 'کاربر آزمایشی', email: 'customer@example.test', mobile: '+989120000000', status: 'active', wallets: [{ id: offerId, name: 'کیف پول آزمایشی', balanceRial: 5000000 }] }] }
+  if (path === '/admin/settings/finance/adjustments') return { data: { items: [], total: 0, page: 1, pages: 0 } }
+  if (path === '/admin/settings/backups') return { data: [
+    { id: offerId, kind: 'backup', status: 'completed', stage: 'encrypted', createdAt: '2026-11-13T08:00:00Z', size: 1048576, checksum: 'a'.repeat(64), snapshot: { pgMajor: 17, schemaHead: '0009', counts: { users: 3, tickets: 4 } } },
+    { id: serverId, kind: 'rehearsal', status: 'completed', stage: 'verified', sourceId: offerId, createdAt: '2026-11-13T08:10:00Z', snapshot: { pgMajor: 17, schemaHead: '0009', counts: { users: 3, tickets: 5 } }, restored: { counts: { users: 3, tickets: 4 } } },
+  ] }
   if (path === '/wallets') return { data: [{ id: 'preview-wallet', name: 'کیف پول آزمایشی', balance: 0, isDefault: true }] }
   if (path === '/wallets/summary') return { data: { totalBalance: 0, wallets: 1, defaultWallet: 'کیف پول آزمایشی', connectedProducts: 0 } }
   if (path === '/wallets/recharge/options') return { data: { enabled: true, gateways: ['tabapay'], wallets: [{ id: 'preview-wallet', name: 'کیف پول آزمایشی', balance: 0, isDefault: true }] } }

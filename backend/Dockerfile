@@ -35,9 +35,11 @@ FROM node:24-alpine AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /app
+RUN apk add --no-cache postgresql17-client
 
 # Non-root user
 RUN addgroup -S -g 10001 cloud && adduser -S -u 10001 -G cloud cloud
+RUN mkdir -p /var/lib/parserver/system && chown cloud:cloud /var/lib/parserver/system && chmod 700 /var/lib/parserver/system
 
 # node_modules (production-only, with native binaries from the build stage)
 COPY --from=build /app/node_modules ./node_modules

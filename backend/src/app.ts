@@ -1,4 +1,5 @@
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify'
+import { randomUUID } from 'node:crypto'
 import cookie from '@fastify/cookie'
 import cors from '@fastify/cors'
 import helmet from '@fastify/helmet'
@@ -30,6 +31,10 @@ import { registerAdminRoutes } from './modules/admin/routes.js'
 import { registerAdminConsoleRoutes } from './modules/admin/console.js'
 import { registerFrontendCompatRoutes } from './modules/frontend/routes.js'
 import { registerPaymentRoutes } from './modules/payments/routes.js'
+import { installWriterGate } from './modules/system/writer-gate.js'
+import { installEventSink, recordEvent } from './modules/system/events.js'
+import { registerSystemRoutes } from './modules/system/routes.js'
+import { initializeBackupJobs } from './modules/system/backups.js'
 
 export interface AppContext {
   db: DbClient
@@ -50,8 +55,16 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     loggerInstance: ctx.logger as unknown as FastifyBaseLogger,
     bodyLimit: 256 * 1024,
     maxParamLength: 200,
-    requestIdHeader: 'x-request-id',
+    requestIdHeader: false,
+    genReqId: () => randomUUID(),
     disableRequestLogging: isProduction(),
+  })
+  app.addHook('onSend', async (request, reply, payload) => { reply.header('X-Request-ID', request.id); return payload })
+  installEventSink(ctx.db)
+  app.addHook('onReady', initializeBackupJobs)
+  app.addHook('onResponse', async (request, reply) => {
+    if (reply.statusCode >= 400) recordEvent('http.request_failed', reply.statusCode >= 500 ? 'error' : 'warn', 'api', {
+      method: request.method, route: request.routeOptions.url, httpStatus: reply.statusCode }, request.id)
   })
 
   await app.register(sensible)
@@ -82,6 +95,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     timeWindow: '1 minute',
     errorResponseBuilder: () => ({ statusCode: 429, error: 'rate_limit', message: 'تعداد درخواست‌ها بیش از حد مجاز است' }),
   })
+  installWriterGate(app) // Reject rate-limited requests before reserving a DB slot.
 
   // ---- auth resolution -----------------------------------------------------
   app.decorateRequest('user', null)
@@ -121,7 +135,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     if (rawErr instanceof SyntaxError && 'statusCode' in rawErr) {
       return reply.status(400).send({ statusCode: 400, error: 'bad_request', message: 'بدنه درخواست نامعتبر است' })
     }
-    ctx.logger.error({ err: redactSecrets(err.message), stack: err.stack, path: request.url }, 'unhandled error')
+    ctx.logger.error({ err: redactSecrets(err.message), stack: redactSecrets(err.stack ?? ''), path: request.url.split('?')[0] }, 'unhandled error')
     const status = err.statusCode ?? 500
     return reply.status(status).send({
       statusCode: status,
@@ -148,6 +162,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   await app.register(registerUserRoutes, v1)
   await app.register(registerWalletRoutes, v1)
   await app.register(registerPaymentRoutes, v1)
+  await app.register(registerSystemRoutes, { ctx, prefix: '/api/v1/admin/settings' })
   await app.register(registerCatalogRoutes, v1)
   await app.register(registerQuoteRoutes, v1)
   await app.register(registerOrderRoutes, v1)
@@ -163,6 +178,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   await app.register(registerUserRoutes, compat)
   await app.register(registerWalletRoutes, compat)
   await app.register(registerPaymentRoutes, compat)
+  await app.register(registerSystemRoutes, { ctx, prefix: '/api/admin/settings' })
   await app.register(registerCatalogRoutes, compat)
   await app.register(registerQuoteRoutes, compat)
   await app.register(registerOrderRoutes, compat)

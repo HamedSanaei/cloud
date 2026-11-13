@@ -1,5 +1,5 @@
 import { X } from 'lucide-react'
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 
 export function Modal({
@@ -9,6 +9,7 @@ export function Modal({
   description,
   children,
   footer,
+  trapFocus = false,
 }: {
   open: boolean
   onClose: () => void
@@ -16,7 +17,22 @@ export function Modal({
   description?: string
   children: ReactNode
   footer?: ReactNode
+  trapFocus?: boolean
 }) {
+  const dialog = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (!open || !trapFocus || !dialog.current) return
+    const root = dialog.current, previous = document.activeElement
+    const controls = () => Array.from(root.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),a[href],summary')).filter(e => e.getClientRects().length)
+    const handleTab = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+      const items = controls(), first = items[0], last = items.at(-1)
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+    }
+    controls()[0]?.focus(); root.addEventListener('keydown', handleTab)
+    return () => { root.removeEventListener('keydown', handleTab); if (previous instanceof HTMLElement && previous.isConnected) previous.focus() }
+  }, [open, trapFocus])
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
@@ -34,7 +50,7 @@ export function Modal({
 
   return createPortal(
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={dialog} className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" onMouseDown={(event) => event.stopPropagation()}>
         <header className="modal__header">
           <div>
             <h2 id="modal-title">{title}</h2>

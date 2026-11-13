@@ -152,7 +152,7 @@ export async function applyWalletTransaction(
 }
 
 export async function debitWallet(
-  db: DbClient,
+  db: DbOrTx,
   userId: string,
   walletId: string,
   amountRial: number,
@@ -166,7 +166,7 @@ export async function debitWallet(
 }
 
 export async function creditWallet(
-  db: DbClient,
+  db: DbOrTx,
   userId: string,
   walletId: string,
   amountRial: number,

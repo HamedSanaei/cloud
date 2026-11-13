@@ -1,7 +1,8 @@
-import { ClipboardList, Gauge, HardDrive, Home, LogOut, ShieldCheck, Users, XCircle, Globe, LifeBuoy } from 'lucide-react'
+import { ClipboardList, Gauge, HardDrive, Home, LogOut, ShieldCheck, Users, XCircle, Globe, LifeBuoy, Settings2, Moon, Sun } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { AuthPage } from '../pages/AuthPages'
 import { useAuth } from '../auth/AuthContext'
+import { useTheme } from '../hooks/useTheme'
 import { BRAND_NAME, BrandMark } from '../components/Brand'
 import './admin.css'
 
@@ -12,14 +13,16 @@ const nav = [
   { to: '/admin/servers', label: 'سرورها', icon: HardDrive, end: false },
   { to: '/admin/datacenters', label: 'دیتاسنترها', icon: Globe, end: false },
   { to: '/admin/tickets', label: 'تیکت‌ها', icon: LifeBuoy, end: false },
+  { to: '/admin/settings', label: 'تنظیمات فروشگاه', icon: Settings2, end: false },
 ] as const
 
 const breadcrumb = (path: string) => path.startsWith('/admin/orders')
   ? 'سفارش‌ها' : path.startsWith('/admin/users')
     ? 'کاربران' : path.startsWith('/admin/servers')
-      ? 'سرورها' : path.startsWith('/admin/datacenters') ? 'دیتاسنترها' : path.startsWith('/admin/tickets') ? 'تیکت‌ها' : 'نمای کلی'
+      ? 'سرورها' : path.startsWith('/admin/datacenters') ? 'دیتاسنترها' : path.startsWith('/admin/tickets') ? 'تیکت‌ها' : path.startsWith('/admin/settings') ? 'تنظیمات فروشگاه' : 'نمای کلی'
 
 export function AdminLayout() {
+  const [dark, setDark] = useTheme()
   const { user, loading, logout } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
@@ -67,6 +70,7 @@ export function AdminLayout() {
       <div className="admin-shell__main">
         <header className="admin-topbar">
           <div className="admin-topbar__breadcrumb">{BRAND_NAME} <span>/</span> مدیریت <span>/</span> {breadcrumb(location.pathname)}</div>
+          <button className="icon-button" aria-label={dark ? 'فعال‌سازی حالت روشن' : 'فعال‌سازی حالت تاریک'} onClick={() => setDark(value => !value)}>{dark ? <Sun size={20} /> : <Moon size={20} />}</button>
           <div className="admin-topbar__account"><span className="admin-topbar__avatar"><ShieldCheck size={17} /></span><span>حساب مدیر</span></div>
         </header>
         <main className="admin-main"><Outlet /></main>

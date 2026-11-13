@@ -8,6 +8,7 @@ import pg, { type PoolClient } from 'pg'
 import { getConfig, loadConfig } from '../config.js'
 import { createLogger } from '../logger.js'
 import { retryStartup, startupFailure } from '../lib/startup.js'
+import { exclusive, writerLock } from '../modules/system/writer-gate.js'
 
 // Stable, database-scoped key shared by CLI, API and worker.
 const migrationLock = [1953457774, 1835624306] as const
@@ -43,6 +44,7 @@ export async function migrate(connectionString?: string): Promise<void> {
         'select pg_try_advisory_lock($1::integer, $2::integer) as acquired', [...migrationLock],
       )
       if (!lock.rows[0]?.acquired) throw Object.assign(new Error('Migration lock is held'), { code: 'migration_lock_busy' })
+      await exclusive(client, writerLock)
       await drizzleMigrate(drizzle(client), { migrationsFolder })
     } finally {
       // Destroy this session even on success: releasing a session lock this way
