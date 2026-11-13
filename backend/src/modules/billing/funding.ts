@@ -1,8 +1,9 @@
 import { and, eq, inArray, isNull, lte, or } from 'drizzle-orm'
 import type { DbOrTx } from '../../db/index.js'
-import { notifications, orders, providerOperations, servers, subscriptions, users, wallets } from '../../db/schema.js'
+import { orders, providerOperations, servers, subscriptions, users, wallets } from '../../db/schema.js'
 import { InsufficientFundsError } from '../../lib/errors.js'
 import { addInterval } from '../subscriptions/service.js'
+import { publishNotification } from '../notifications/service.js'
 
 type ServerRecord = typeof servers.$inferSelect
 type SubscriptionRecord = typeof subscriptions.$inferSelect
@@ -34,7 +35,7 @@ export interface ServerPowerPolicy {
   canReboot: boolean
   billingBlocked: boolean
   requiredBalanceToman: number | null
-  pendingAction: 'power_on' | 'power_off' | 'reboot' | null
+  pendingAction: 'power_on' | 'power_off' | 'shutdown' | 'reboot' | 'reset' | null
 }
 
 function renewable(subscription: SubscriptionRecord): boolean {
@@ -93,7 +94,8 @@ function fundingFor(fleet: FundingFleet, serverId: string) {
 
 export function serverPowerPolicy(server: ServerRecord, fleet: FundingFleet): ServerPowerPolicy {
   const operation = fleet.operations.find((item) => item.referenceId === server.id)
-  const pendingAction = operation?.action === 'power_on' || operation?.action === 'power_off' || operation?.action === 'reboot' ? operation.action : null
+  const action = operation?.action
+  const pendingAction = action === 'power_on' || action === 'power_off' || action === 'shutdown' || action === 'reboot' || action === 'reset' ? action : null
   const funding = fundingFor(fleet, server.id)
   const sufficient = !funding || funding.sufficient
   const ready = !!server.providerServerId && !operation && !server.terminatedAt && (!server.terminationState || server.terminationState === 'delete_failed')
@@ -130,8 +132,9 @@ export async function warnLowBalance(db: DbOrTx, userId: string, fleet: FundingF
   const minutes = Math.floor(Math.min(...endangered.map((group) => group.shortageAt - now.getTime())) / 60000)
   const topUpToman = Math.ceil(endangered.reduce((sum, group) => sum + group.topUpRial, 0) / 10)
   const names = endangered.flatMap((group) => group.names)
-  await db.insert(notifications).values({
+  await publishNotification(db, {
     userId,
+    eventKey: `low-balance:${now.toISOString()}`, href: '/wallet',
     title: 'هشدار کمبود موجودی و خطر حذف سرور',
     body: `اعتبار کیف پول پرداخت سرورهای ${names.join('، ')} برای ۳ روز آینده کافی نیست (شروع کمبود اعتبار حدود ${Math.floor(minutes / 60).toLocaleString('fa-IR')} ساعت و ${(minutes % 60).toLocaleString('fa-IR')} دقیقه دیگر). اگر موجودی برای یک ساعت آینده کافی نباشد، سرورهای ساعتی خاموش می‌شوند؛ سایر پلن‌ها طبق سررسید و مهلت پرداخت تعلیق می‌شوند. ادامه کمبود اعتبار، خطر حذف سرور را دارد. برای تأمین ۳ روز، کیف پول‌های پرداخت مربوط را در مجموع حداقل ${topUpToman.toLocaleString('fa-IR')} تومان افزایش دهید. این هشدار تا رفع کمبود، هر ۶ ساعت تکرار می‌شود.`,
     type: 'warning',

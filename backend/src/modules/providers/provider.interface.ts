@@ -183,6 +183,7 @@ export interface RecoveryResult {
 
 export interface ProviderActionResult {
   ok: boolean
+  completed?: boolean
   metadata?: Record<string, unknown>
 }
 

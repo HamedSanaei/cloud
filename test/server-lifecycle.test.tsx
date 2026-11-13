@@ -53,7 +53,9 @@ describe('authoritative provisioning and terminal notice claims', () => {
     view.unmount()
   })
   it('replaces only completed rows, keeps uncertain rows, and stops targeted polling on unmount', async () => {
-    const first = pending(), second = pending(); listServers.mockResolvedValue([first, second])
+    const first = pending(), second = pending()
+    first.tracking = { ...first.tracking!, source: 'platform' }
+    listServers.mockResolvedValue([first, second])
     getServerTracking.mockImplementation(async tracking => tracking.reference === first.tracking!.reference ? ready(first) : { ...second, lifecycle: 'outcome_unknown', tracking: { ...second.tracking!, state: 'outcome_unknown' } })
     const view = renderHook(() => useServerFleet())
     await waitFor(() => expect(view.result.current.data).toHaveLength(2))

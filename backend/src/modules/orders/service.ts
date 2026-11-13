@@ -9,6 +9,7 @@ import { applyWalletTransaction, getWallet } from '../wallets/service.js'
 import type { invoiceStatusEnum, orderStatusEnum } from '../../db/schema.js'
 import { assertCreationFunding } from '../billing/creation-funding.js'
 import { assertProviderPurchaseAllowed } from '../catalog/policy.js'
+import { publishNotification } from '../notifications/service.js'
 
 export type OrderStatus = (typeof orderStatusEnum.enumValues)[number]
 export type InvoiceStatus = (typeof invoiceStatusEnum.enumValues)[number]
@@ -40,13 +41,11 @@ export async function transitionOrder(
   to: OrderStatus,
   opts: { actorId?: string | null; reason?: string; metadata?: Record<string, unknown> } = {},
 ) {
-  const order = await db.query.orders.findFirst({ where: (t) => eq(t.id, orderId) })
-  if (!order) throw new NotFoundError('سفارش یافت نشد')
-  if (order.status === to) return order
-  if (!canTransition(order.status, to)) {
-    throw new ConflictError(`انتقال وضعیت سفارش از ${order.status} به ${to} مجاز نیست`)
-  }
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
+    const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).for('update')
+    if (!order) throw new NotFoundError('سفارش یافت نشد')
+    if (order.status === to) return order
+    if (!canTransition(order.status, to)) throw new ConflictError(`انتقال وضعیت سفارش از ${order.status} به ${to} مجاز نیست`)
     await tx.update(orders).set({ status: to, updatedAt: new Date() }).where(eq(orders.id, orderId))
     await tx.insert(orderEvents).values({
       orderId,
@@ -56,8 +55,19 @@ export async function transitionOrder(
       reason: opts.reason ?? null,
       metadata: opts.metadata ?? null,
     })
+    await notifyOrder(tx, order, to)
+    return order
   })
-  return order
+}
+
+async function notifyOrder(db: DbOrTx, order: typeof orders.$inferSelect, status: OrderStatus) {
+  const titles = { paid: 'پرداخت سفارش تأیید شد', awaiting_payment: 'سفارش در انتظار پرداخت است',
+    failed: 'ایجاد سرور ناموفق بود', requires_review: 'سفارش نیازمند بررسی است', cancelled: 'سفارش لغو شد', refunded: 'وجه سفارش بازگشت داده شد' } as const
+  if (!(status in titles)) return
+  const title = titles[status as keyof typeof titles]
+  await publishNotification(db, { userId: order.userId, eventKey: `order:${order.id}:${status}`, title,
+    body: `سفارش ${order.orderNumber} برای سرور «${order.hostname}».`, href: ['paid', 'awaiting_payment', 'cancelled', 'refunded'].includes(status) ? '/invoices' : '/servers',
+    type: status === 'failed' ? 'error' : status === 'requires_review' ? 'warning' : status === 'paid' ? 'success' : 'info' })
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +224,7 @@ export async function createOrderFromQuote(db: DbClient, input: CreateOrderInput
       })
     }
 
+    await notifyOrder(tx, order, order.status)
     return { order, invoice, created: true }
   })
 
@@ -275,6 +286,7 @@ export async function payOrder(
     if (inv) {
       await tx.update(invoices).set({ status: 'paid', paidAt: new Date() }).where(eq(invoices.id, inv.id))
     }
+    await notifyOrder(tx, updated, 'paid')
     // Return the FRESH row so callers never see the stale awaiting_payment state.
     return updated
   })

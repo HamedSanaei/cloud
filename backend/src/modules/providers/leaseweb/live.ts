@@ -107,7 +107,7 @@ function mapServer(raw: unknown, providerServerId: string): ProviderServerView {
     vcpu: numeric(record(resources.cpu).value) || undefined,
     memoryMb: numeric(record(resources.memory).value) ? numeric(record(resources.memory).value) * 1024 : undefined,
     diskGb: numeric(server.rootDiskSize) || undefined,
-    metadata: { raw: server },
+    metadata: { raw: server, rebooting: state.includes('reboot') },
   }
 }
 

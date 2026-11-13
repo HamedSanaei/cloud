@@ -8,6 +8,7 @@ import { applyWalletTransaction, getWallet } from '../wallets/service.js'
 import { writeAudit } from '../audit/service.js'
 import { GatewayRejected, paymentLink, tabapayRequest, validToken, responseCode } from './tabapay.js'
 import { effectiveGateway, gatewayLock } from '../system/gateway.js'
+import { publishNotification } from '../notifications/service.js'
 
 export function paymentDto(payment: typeof walletPayments.$inferSelect) {
   return { id: payment.id, walletId: payment.walletId, amountRial: payment.amountRial, status: payment.status,
@@ -48,6 +49,7 @@ export async function createRecharge(db: DbClient, userId: string, walletId: str
       const failed = error instanceof GatewayRejected
       await tx.update(walletPayments).set({ status: failed ? 'failed' : 'unknown', updatedAt: new Date() }).where(eq(walletPayments.id, payment.id))
       await tx.update(chargeRequests).set({ status: failed ? 'rejected' : 'processing', updatedAt: new Date() }).where(eq(chargeRequests.id, payment.chargeRequestId))
+      await notifyRechargeIssue(tx, payment, failed)
       await writeAudit(tx, { actorId: userId, action: 'payment.create_failed', targetType: 'wallet_payment', targetId: payment.id, metadata: { code: error instanceof AppError ? error.code : 'unknown', result: failed ? 'rejected' : 'unknown' } })
     })
     // The durable attempt remains available to the owner for tracking. No blind retry.
@@ -72,9 +74,10 @@ export async function verifyRecharge(db: DbClient, id: string) {
     if (matching && responseCode(result.responseCode) === -102 && result.status === 'error') {
       await db.transaction(async tx => {
         const [locked] = await tx.select().from(walletPayments).where(eq(walletPayments.id, id)).for('update')
-        if (locked?.status === 'succeeded') return
+        if (!locked || ['succeeded', 'failed'].includes(locked.status)) return
         await tx.update(walletPayments).set({ status: 'failed', updatedAt: new Date() }).where(eq(walletPayments.id, id))
         await tx.update(chargeRequests).set({ status: 'rejected', updatedAt: new Date() }).where(eq(chargeRequests.id, payment.chargeRequestId))
+        await notifyRechargeIssue(tx, payment, true)
       })
     }
   } else await db.transaction(async tx => {
@@ -88,4 +91,11 @@ export async function verifyRecharge(db: DbClient, id: string) {
       metadata: { amountRial: payment.amountRial, walletId: payment.walletId, reference } })
   })
   return paymentDto((await db.query.walletPayments.findFirst({ where: t => eq(t.id, id) }))!)
+}
+
+function notifyRechargeIssue(db: Parameters<typeof publishNotification>[0], payment: typeof walletPayments.$inferSelect, failed: boolean) {
+  return publishNotification(db, { userId: payment.userId, eventKey: `payment:${payment.id}:${failed ? 'failed' : 'unknown'}`,
+    title: failed ? 'پرداخت شارژ کیف پول ناموفق بود' : 'وضعیت پرداخت شارژ کیف پول نامشخص است',
+    body: `جزئیات درخواست پرداخت ${payment.id} را در بخش درخواست‌های شارژ بررسی کنید.`,
+    href: '/charge-requests', type: failed ? 'error' : 'warning' })
 }

@@ -772,10 +772,12 @@ export const notifications = pgTable(
     title: text('title').notNull(),
     body: text('body'),
     type: varchar('type', { length: 30 }).notNull().default('info'),
+    eventKey: text('event_key'),
+    href: text('href'),
     read: boolean('read').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('notifications_user_idx').on(t.userId, t.createdAt)],
+  (t) => [index('notifications_user_idx').on(t.userId, t.createdAt), uniqueIndex('notifications_user_event_idx').on(t.userId, t.eventKey)],
 )
 
 export const tickets = pgTable(

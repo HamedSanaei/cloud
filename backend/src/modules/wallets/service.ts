@@ -2,8 +2,9 @@ import { and, eq, sql } from 'drizzle-orm'
 import type { DbClient, DbOrTx } from '../../db/index.js'
 import { walletTransactions, wallets } from '../../db/schema.js'
 import { ConflictError, InsufficientFundsError, NotFoundError } from '../../lib/errors.js'
-import { assertNonNegative } from '../../lib/money.js'
+import { assertNonNegative, rialToToman } from '../../lib/money.js'
 import { writeAudit } from '../audit/service.js'
+import { publishNotification } from '../notifications/service.js'
 
 export type WalletTxType = 'deposit' | 'purchase' | 'renewal' | 'refund' | 'manual_credit' | 'manual_debit' | 'adjustment'
 
@@ -130,6 +131,12 @@ export async function applyWalletTransaction(
     if (!txRow) throw new Error('failed to insert wallet transaction')
 
     await tx.update(wallets).set({ balanceRial: balanceAfter }).where(eq(wallets.id, walletId))
+    const titles = { deposit: 'کیف پول شارژ شد', refund: 'مبلغ به کیف پول بازگشت', manual_credit: 'موجودی کیف پول افزایش یافت',
+      manual_debit: 'از کیف پول برداشت شد', adjustment: 'موجودی کیف پول اصلاح شد', renewal: 'پرداخت تمدید تأیید شد' } as const
+    if (input.type !== 'purchase' && input.amountRial > 0) {
+      await publishNotification(tx, { userId, eventKey: `wallet-transaction:${txRow.id}`, title: titles[input.type],
+        body: `مبلغ ${rialToToman(input.amountRial).toLocaleString('fa-IR')} تومان.`, href: '/wallet', type: 'success' })
+    }
     return { transaction: txRow, balanceAfterRial: balanceAfter, duplicate: false as const }
   })
 

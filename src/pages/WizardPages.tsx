@@ -108,7 +108,9 @@ export function CreateServerPage() {
       const result = await createServer({ name: name.trim(), offerId: offer.id, os: selectedOs.id, walletId: wallet.id, billingPeriod, pricing: offer.canonicalPricing, idempotencyKey: purchaseKey.current })
       const accepted = { ...result, name: result.name || name.trim(), datacenter: result.datacenter || location, os: result.os || selectedOs.label || selectedOs.id, serverType: result.serverType || offer.name }
       rememberAcceptedServer(user?.id ?? '', accepted)
-      await claimLifecycleNotice(user?.id ?? '', accepted.tracking ? { ...accepted, tracking: { ...accepted.tracking, state: 'queued' } } : accepted)
+      if (accepted.tracking?.source === 'platform') {
+        await claimLifecycleNotice(user?.id ?? '', { ...accepted, tracking: { ...accepted.tracking, state: 'queued' } })
+      }
       showToast('درخواست ساخت سرور ثبت شد؛ سرور در حال آماده‌سازی است.', 'info', `accepted:${result.tracking?.reference ?? result.id}`)
       clearCheckoutDraft(user?.id)
       navigate('/servers')

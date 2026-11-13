@@ -538,7 +538,30 @@ textarea:focus-visible {
 
 .notification-item {
   border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
 }
+
+.notification-center__heading,
+.notification-item footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 7px;
+}
+
+.notification-center__heading { justify-content: space-between; }
+.notification-item footer { color: var(--muted); font-size: 12px; }
+.notification-item footer a { padding: 0; }
+.notification-item footer button,
+.notification-center__read {
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.notification-center__read { margin: 4px 7px 8px; }
 
 .notification-item p {
   margin: 0;
@@ -551,6 +574,14 @@ textarea:focus-visible {
   color: var(--brand-600);
   font-size: 12px;
 }
+
+:root[data-theme='dark'] .notification-item a { color: #93c5fd; }
+:root[data-theme='dark'] .Toastify__toast {
+  --toastify-color-light: var(--surface-raised);
+  --toastify-text-color-light: var(--ink);
+  border-color: var(--border);
+}
+:root[data-theme='dark'] .Toastify__close-button { color: var(--ink); }
 
 .popover__user {
   display: flex;

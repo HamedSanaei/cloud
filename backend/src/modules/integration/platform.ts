@@ -10,6 +10,7 @@ import { requireUser } from '../../http/auth.js'
 import { parse } from '../../http/validate.js'
 import { AppError, BadRequestError, ConflictError } from '../../lib/errors.js'
 import { storefrontProjection, type ConsoleOffer } from './storefront.js'
+import { listNotifications, publishNotification } from '../notifications/service.js'
 import { isPlatformAuthority } from './authority.js'
 
 export function platformEnabled(): boolean { return isPlatformAuthority() }
@@ -215,6 +216,26 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
       reply.header('Cache-Control', 'no-store')
       return reply.send(data)
     }
+    if (pathname === '/api/notifications/read' && request.method === 'PATCH') return
+    if (pathname === '/api/notifications' && request.method === 'GET') {
+      const user = requireUser(request)
+      const link = await ctx.db.query.platformLinks.findFirst({ where: t => eq(t.userId, user.id) })
+      if (link?.tokenEncrypted) {
+        const token = decryptPlatformToken(link.tokenEncrypted, user.id)
+        const { data } = await platformRequest<{ data: Array<{ id: string; text: string; createdAt: string }> }>(token, '/notifications')
+        await ctx.db.transaction(async tx => {
+          for (const notice of data) {
+            const createdAt = new Date(notice.createdAt)
+            if (!notice.id || !notice.text || !Number.isFinite(createdAt.getTime())) continue
+            const [title = notice.text, ...body] = notice.text.split('\n')
+            await publishNotification(tx, { userId: user.id, eventKey: `platform:${notice.id}`, title,
+              body: body.join('\n'), type: 'info', createdAt })
+          }
+        })
+      }
+      reply.header('Cache-Control', 'no-store')
+      return reply.send({ data: await listNotifications(ctx.db, user.id) })
+    }
     const economic = /^\/api\/(wallets|servers|catalog|quotes|orders|subscriptions|invoices|charge-requests|dashboard|notifications|admin)(\/|$)/.test(pathname)
     if (!economic) return
     const token = await linkedToken(ctx, request)
@@ -251,10 +272,6 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
         return { id: item.entry_id, amount: item.amount_minor, formattedAmount: item.formatted, description: item.description, wallet: 'مشترک تلگرام و سایت', type: item.entry_type, date: item.created_at, status: 'success' }
       }) })
       return reply.send({ data: [{ id: 'platform', name: 'مشترک تلگرام و سایت', balance: amount, isDefault: true }] })
-    }
-    if (pathname === '/api/notifications') {
-      const { data } = await platformRequest<{ data: Array<{ id: string; text: string; createdAt: string }> }>(token, '/notifications')
-      return reply.send({ data: data.map(n => ({ id: n.id, title: n.text.split('\n')[0], body: n.text, type: 'info', read: false, createdAt: n.createdAt })) })
     }
     if (pathname === '/api/dashboard/summary') {
       const [{ data: fleet }, { data: wallet }] = await Promise.all([

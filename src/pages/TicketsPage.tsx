@@ -1,5 +1,6 @@
 import { Clock3, Inbox, LifeBuoy, MessageCircleReply, Plus, SearchCheck } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Button } from '../components/ui/Button'
 import { Card, SectionHeading } from '../components/ui/Card'
 import { FilterPanel } from '../components/ui/FilterPanel'
@@ -12,7 +13,7 @@ import { Badge, Table } from '../components/ui/Table'
 import { useToast } from '../components/ui/Toast'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { isApiConfigured } from '../lib/apiClient'
-import { createTicket, getTicketSummary, listTickets, listTicketServers } from '../lib/endpoints'
+import { createTicket, getTicket, getTicketSummary, listTickets, listTicketServers } from '../lib/endpoints'
 import type { Ticket } from '../lib/types'
 import { formatCount } from '../lib/format'
 
@@ -26,6 +27,11 @@ export function TicketsPage() {
   const [description, setDescription] = useState('')
   const [serverId, setServerId] = useState('')
   const [detail, setDetail] = useState<Ticket | null>(null)
+  const [search, setSearch] = useSearchParams()
+  const linkedId = search.get('ticket')
+  const linked = useApiQuery(() => linkedId ? getTicket(linkedId) : Promise.resolve(null), [linkedId])
+  const selected = linkedId ? linked.data?.id === linkedId ? linked.data : null : detail
+  const closeDetail = () => { setDetail(null); if (linkedId) setSearch({}, { replace: true }) }
   const [submitting, setSubmitting] = useState(false)
   const { showToast } = useToast()
 
@@ -62,7 +68,7 @@ export function TicketsPage() {
       setServerId('')
       tickets.refetch()
       summary.refetch()
-      showToast('تیکت با موفقیت ثبت شد.')
+      window.dispatchEvent(new Event('notifications-changed'))
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'ثبت تیکت ناموفق بود.')
     } finally {
@@ -147,9 +153,10 @@ export function TicketsPage() {
           <label className="field"><span className="field__label">شرح درخواست</span><textarea className="textarea" rows={5} placeholder="جزئیات درخواست خود را بنویسید..." required value={description} onChange={(event) => setDescription(event.target.value)} /></label>
         </form>
       </Modal>
-      <Modal open={!!detail} onClose={() => setDetail(null)} title={detail?.title || 'جزئیات تیکت'}>
-        {detail ? <div className="form-stack"><p>{detail.description}</p><strong>سرور مربوطه: {detail.relatedServer?.name ?? 'سفارشی ندارم'}</strong>
-          {detail.relatedServer ? <><p dir="ltr">{detail.relatedServer.ip || detail.relatedServer.id}</p>{!detail.serverId ? <p>این سرور حذف شده است؛ اطلاعات زمان ثبت درخواست نگه داشته شده است.</p> : null}</> : null}</div> : null}
+      <Modal open={!!selected || !!linkedId} onClose={closeDetail} title={selected?.title || 'جزئیات تیکت'}>
+        {selected ? <div className="form-stack"><p>{selected.description}</p><strong>سرور مربوطه: {selected.relatedServer?.name ?? 'سفارشی ندارم'}</strong>
+          {selected.relatedServer ? <><p dir="ltr">{selected.relatedServer.ip || selected.relatedServer.id}</p>{!selected.serverId ? <p>این سرور حذف شده است؛ اطلاعات زمان ثبت درخواست نگه داشته شده است.</p> : null}</> : null}</div>
+          : linked.error ? <QueryError message={linked.error} onRetry={linked.refetch} /> : <LoadingState label="در حال دریافت تیکت…" />}
       </Modal>
     </div>
   )

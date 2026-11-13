@@ -27,8 +27,9 @@ export function useServerFleet(enabled = true) {
       if (changed) window.dispatchEvent(new Event('server-lifecycle-changed'))
       for (const row of rows) {
         if (!valid()) return
-        const notify = await claimLifecycleNotice(user?.id ?? '', row, valid)
         if (!isProvisioning(row)) forgetAcceptedServer(user?.id ?? '', row)
+        if (row.tracking?.source !== 'platform') continue
+        const notify = await claimLifecycleNotice(user?.id ?? '', row, valid)
         if (notify && valid()) {
           const ready = row.tracking?.state === 'ready'
           showToast(ready ? `سرور «${row.name}» با موفقیت ساخته شد و آماده استفاده است.` : `ساخت سرور «${row.name}» تکمیل نشد؛ برای پیگیری با پشتیبانی تماس بگیرید.`, ready ? 'success' : 'error', `${user?.id}:${serverRowKey(row)}:terminal`)
@@ -36,7 +37,7 @@ export function useServerFleet(enabled = true) {
       }
     }
     const schedule = () => {
-      if (!valid() || !rows.some(isProvisioning)) return
+      if (!valid() || !rows.some(row => isProvisioning(row) || row.power.pendingAction)) return
       if (rounds.current >= 60) { setPaused(true); return }
       timer = window.setTimeout(poll, Math.min(3000 * 1.3 ** rounds.current, 30000))
     }
@@ -45,10 +46,15 @@ export function useServerFleet(enabled = true) {
       if (document.visibilityState === 'hidden') { schedule(); return }
       rounds.current++
       const pending = rows.filter(isProvisioning)
-      const results = await Promise.allSettled(pending.map(row => getServerTracking(row.tracking!, controller.signal)))
+      const hasPendingPower = rows.some(row => row.power.pendingAction)
+      const [results, fleet] = await Promise.all([
+        Promise.allSettled(pending.map(row => getServerTracking(row.tracking!, controller.signal))),
+        hasPendingPower ? listServers().catch(() => null) : null,
+      ])
       if (!valid()) return
-      setError(results.some(result => result.status === 'rejected') ? 'ارتباط موقتاً قطع است؛ آخرین وضعیت حفظ شده و دوباره بررسی می‌شود.' : null)
+      setError((hasPendingPower && !fleet) || results.some(result => result.status === 'rejected') ? 'ارتباط موقتاً قطع است؛ آخرین وضعیت حفظ شده و دوباره بررسی می‌شود.' : null)
       const replacements = new Map(results.flatMap((result, i) => result.status === 'fulfilled' ? [[serverRowKey(pending[i]), result.value] as const] : []))
+      for (const row of fleet ?? []) if (!replacements.has(serverRowKey(row))) replacements.set(serverRowKey(row), row)
       await publish(rows.map(row => replacements.get(serverRowKey(row)) ?? row))
       if (valid()) schedule()
     }

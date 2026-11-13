@@ -90,6 +90,10 @@ export async function getNotifications(): Promise<AppNotification[]> {
   return unwrapList<AppNotification>(payload)
 }
 
+export async function markNotificationsRead(ids: string[]): Promise<void> {
+  await apiPatch('/notifications/read', { ids })
+}
+
 // --- Servers / IPs / traffic / domains ------------------------------------
 
 export async function listServers(): Promise<Server[]> {
@@ -247,6 +251,10 @@ export async function listTickets(): Promise<Ticket[]> {
   if (noApi()) return []
   const payload = await apiGet<Paginated<Ticket> | Ticket[]>('/tickets')
   return unwrapList<Ticket>(payload)
+}
+
+export async function getTicket(id: string): Promise<Ticket> {
+  return (await apiGet<{ data: Ticket }>(`/tickets/${encodeURIComponent(id)}`)).data
 }
 
 export async function listTicketServers(): Promise<Array<{ id: string; name: string; ip: string | null; status: string }>> {
