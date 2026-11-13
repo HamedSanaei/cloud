@@ -171,6 +171,9 @@ export interface Ticket {
   status: string
   updatedAt?: string
   unread?: boolean
+  description?: string
+  serverId?: string | null
+  relatedServer?: { id: string; name: string; ip: string | null; provider: string } | null
 }
 
 export interface TicketSummary {
@@ -185,6 +188,7 @@ export interface CreateTicketPayload {
   title: string
   department: TicketDepartment | string
   description: string
+  serverId?: string | null
 }
 
 export interface CreateWalletPayload {

@@ -57,6 +57,13 @@
       "when": 1794445897877,
       "tag": "0007_handy_the_renegades",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794526310591,
+      "tag": "0008_wallet-payments-and-ticket-servers",
+      "breakpoints": true
     }
   ]
 }

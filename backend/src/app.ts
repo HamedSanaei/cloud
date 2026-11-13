@@ -29,6 +29,7 @@ import { registerServerRoutes } from './modules/servers/routes.js'
 import { registerAdminRoutes } from './modules/admin/routes.js'
 import { registerAdminConsoleRoutes } from './modules/admin/console.js'
 import { registerFrontendCompatRoutes } from './modules/frontend/routes.js'
+import { registerPaymentRoutes } from './modules/payments/routes.js'
 
 export interface AppContext {
   db: DbClient
@@ -146,6 +147,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   await app.register(registerAuthRoutes, v1)
   await app.register(registerUserRoutes, v1)
   await app.register(registerWalletRoutes, v1)
+  await app.register(registerPaymentRoutes, v1)
   await app.register(registerCatalogRoutes, v1)
   await app.register(registerQuoteRoutes, v1)
   await app.register(registerOrderRoutes, v1)
@@ -160,6 +162,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   await app.register(registerAuthRoutes, compat)
   await app.register(registerUserRoutes, compat)
   await app.register(registerWalletRoutes, compat)
+  await app.register(registerPaymentRoutes, compat)
   await app.register(registerCatalogRoutes, compat)
   await app.register(registerQuoteRoutes, compat)
   await app.register(registerOrderRoutes, compat)

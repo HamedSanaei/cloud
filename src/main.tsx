@@ -14,6 +14,7 @@ import './penpot.css'
 import './public.css'
 import './auth-layout.css'
 import './panel-layout.css'
+import './dropdown.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

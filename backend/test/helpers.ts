@@ -81,6 +81,7 @@ export async function getTestContext(): Promise<TestContext> {
 /** Wipe all business tables between tests (schema stays). */
 export async function truncateAll(db: DbClient): Promise<void> {
   const tables = [
+    'wallet_payments',
     'renewal_attempts',
     'subscription_events',
     'subscriptions',

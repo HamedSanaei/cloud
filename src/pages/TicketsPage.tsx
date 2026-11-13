@@ -12,7 +12,8 @@ import { Badge, Table } from '../components/ui/Table'
 import { useToast } from '../components/ui/Toast'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { isApiConfigured } from '../lib/apiClient'
-import { createTicket, getTicketSummary, listTickets } from '../lib/endpoints'
+import { createTicket, getTicketSummary, listTickets, listTicketServers } from '../lib/endpoints'
+import type { Ticket } from '../lib/types'
 import { formatCount } from '../lib/format'
 
 export function TicketsPage() {
@@ -23,11 +24,14 @@ export function TicketsPage() {
   const [title, setTitle] = useState('')
   const [ticketDepartment, setTicketDepartment] = useState('technical')
   const [description, setDescription] = useState('')
+  const [serverId, setServerId] = useState('')
+  const [detail, setDetail] = useState<Ticket | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const { showToast } = useToast()
 
   const summary = useApiQuery(getTicketSummary)
   const tickets = useApiQuery(listTickets)
+  const servers = useApiQuery(() => modalOpen ? listTicketServers() : Promise.resolve([]), [modalOpen])
 
   const filtered = useMemo(() => {
     const items = tickets.data ?? []
@@ -51,10 +55,11 @@ export function TicketsPage() {
     }
     setSubmitting(true)
     try {
-      await createTicket({ title, department: ticketDepartment, description })
+      await createTicket({ title, department: ticketDepartment, description, serverId: serverId || null })
       setModalOpen(false)
       setTitle('')
       setDescription('')
+      setServerId('')
       tickets.refetch()
       summary.refetch()
       showToast('تیکت با موفقیت ثبت شد.')
@@ -110,12 +115,14 @@ export function TicketsPage() {
             action={<Button icon={<Plus size={17} />} onClick={() => setModalOpen(true)}>ایجاد تیکت جدید</Button>}
           />
         ) : (
-          <Table headers={['عنوان', 'بخش', 'وضعیت']}>
+          <Table headers={['عنوان', 'بخش', 'سرور مربوطه', 'وضعیت', 'جزئیات']}>
             {filtered.map((ticket) => (
               <tr key={ticket.id}>
                 <td>{ticket.title}</td>
                 <td>{ticket.department}</td>
+                <td>{ticket.relatedServer?.name ?? 'سفارشی ندارم'}</td>
                 <td><Badge>{ticket.status}</Badge></td>
+                <td><Button variant="secondary" size="sm" onClick={() => setDetail(ticket)}>مشاهده تیکت</Button></td>
               </tr>
             ))}
           </Table>
@@ -132,8 +139,17 @@ export function TicketsPage() {
         <form id="ticket-form" className="form-stack" onSubmit={submitTicket}>
           <Input label="عنوان تیکت" placeholder="عنوان کوتاه و واضح" required value={title} onChange={(event) => setTitle(event.target.value)} />
           <Select label="بخش مربوطه" required value={ticketDepartment} onChange={(event) => setTicketDepartment(event.target.value)}><option value="technical">پشتیبانی فنی</option><option value="finance">امور مالی</option><option value="sales">فروش</option></Select>
+          <Select label="سرور مربوطه" value={serverId} onChange={event => setServerId(event.target.value)}>
+            <option value="">سفارشی ندارم</option>
+            {servers.data?.map(server => <option key={server.id} value={server.id}>{server.name} — {server.ip || server.id.slice(0, 8)}</option>)}
+          </Select>
+          {servers.loading ? <p role="status">در حال دریافت سرورهای شما…</p> : servers.error ? <p role="status">دریافت سرورها ممکن نشد؛ می‌توانید «سفارشی ندارم» را انتخاب و درخواست را ثبت کنید.</p> : null}
           <label className="field"><span className="field__label">شرح درخواست</span><textarea className="textarea" rows={5} placeholder="جزئیات درخواست خود را بنویسید..." required value={description} onChange={(event) => setDescription(event.target.value)} /></label>
         </form>
+      </Modal>
+      <Modal open={!!detail} onClose={() => setDetail(null)} title={detail?.title || 'جزئیات تیکت'}>
+        {detail ? <div className="form-stack"><p>{detail.description}</p><strong>سرور مربوطه: {detail.relatedServer?.name ?? 'سفارشی ندارم'}</strong>
+          {detail.relatedServer ? <><p dir="ltr">{detail.relatedServer.ip || detail.relatedServer.id}</p>{!detail.serverId ? <p>این سرور حذف شده است؛ اطلاعات زمان ثبت درخواست نگه داشته شده است.</p> : null}</> : null}</div> : null}
       </Modal>
     </div>
   )

@@ -30,6 +30,8 @@ export function checkoutFixture(path) {
   if (path === '/integration/status') return { data: { enabled: false, linked: false } }
   if (path === '/wallets') return { data: [{ id: 'preview-wallet', name: 'کیف پول آزمایشی', balance: 0, isDefault: true }] }
   if (path === '/wallets/summary') return { data: { totalBalance: 0, wallets: 1, defaultWallet: 'کیف پول آزمایشی', connectedProducts: 0 } }
+  if (path === '/wallets/recharge/options') return { data: { enabled: true, gateways: ['tabapay'], wallets: [{ id: 'preview-wallet', name: 'کیف پول آزمایشی', balance: 0, isDefault: true }] } }
+  if (path === '/tickets/servers') return { data: [{ id: serverId, name: 'سرور آزمایشی آلمان', ip: '192.0.2.10', status: 'active' }, { id: offerId, name: 'سرور آزمایشی فنلاند', ip: '192.0.2.20', status: 'active' }] }
   if (path === '/admin/console/providers') return { data: [{ id: 'hetzner', name: 'Hetzner', enabled: true, configured: true }, { id: 'leaseweb', name: 'Leaseweb', enabled: false, configured: true }] }
   if (path === '/catalog/storefront') {
     const locations = [{ code: 'nbg1', country: 'DE', city: 'Nuremberg' }, { code: 'fsn1', country: 'DE', city: 'Falkenstein' }, { code: 'hel1', country: 'FI', city: 'Helsinki' }, { code: 'ash', country: 'US', city: 'Ashburn' }, { code: 'sin', country: 'SG', city: 'Singapore' }]

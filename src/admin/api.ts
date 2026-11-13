@@ -1,4 +1,5 @@
 import { apiGet, apiPatch } from '../lib/apiClient'
+import type { Ticket } from '../lib/types'
 
 export interface AdminUser {
   id: string
@@ -123,6 +124,7 @@ const fetchData = async <T>(path: string): Promise<T> =>
 const listQuery = ({ page, search, status, limit = 20 }: ListFilters) =>
   '?' + new URLSearchParams({ page: String(page), limit: String(limit), search: search.trim(), status }).toString()
 export const adminApi = {
+  tickets: (filter: ListFilters) => fetchData<Paged<Ticket & { ownerEmail: string }>>('/tickets' + listQuery(filter)),
   providers: () => fetchData<Array<{ id: string; name: string; enabled: boolean; configured: boolean }>>('/providers'),
   setProviderSales: (id: string, enabled: boolean) => apiPatch(prefix + '/providers/' + encodeURIComponent(id), { enabled }),
   overview: () => fetchData<AdminOverview>('/overview'),

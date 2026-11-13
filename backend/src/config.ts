@@ -97,6 +97,9 @@ const envSchema = z.object({
   RENEWAL_GRACE_DAYS: z.coerce.number().int().positive().default(3),
 
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
+  TABAPAY_ENABLED: z.string().default('false').transform(v => v === 'true' || v === '1'),
+  TABAPAY_MERCHANT: z.string().default(''),
+  TABAPAY_SANDBOX: z.string().default('false').transform(v => v === 'true' || v === '1'),
 })
 
 export type AppConfig = z.infer<typeof envSchema> & ProviderRuntimeConfig
@@ -117,6 +120,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   if (parsed.data.DATA_AUTHORITY === 'platform' && !parsed.data.PLATFORM_API_URL) {
     throw new Error('DATA_AUTHORITY=platform requires PLATFORM_API_URL')
+  }
+  if (parsed.data.TABAPAY_ENABLED && (!z.string().uuid().safeParse(parsed.data.TABAPAY_MERCHANT).success ||
+      ((parsed.data.NODE_ENV === 'production' || parsed.data.APP_ENV === 'staging') && (parsed.data.TABAPAY_SANDBOX || !parsed.data.FRONTEND_URL.startsWith('https://'))))) {
+    throw new Error('Invalid TabaPay configuration: valid merchant and production HTTPS callback required; sandbox is forbidden in production/staging')
   }
   const platformAuthority = parsed.data.DATA_AUTHORITY !== 'site' &&
     (parsed.data.DATA_AUTHORITY === 'platform' || !!parsed.data.PLATFORM_API_URL)
@@ -157,7 +164,7 @@ export function redactSecrets(input: string): string {
     c.PROVIDERS.asiatech.apiKey,
     c.SMTP_PASSWORD,
     c.PARSGREEN_SIGNATURE,
-    c.GOOGLE_CLIENT_SECRET,
+    c.GOOGLE_CLIENT_SECRET, c.TABAPAY_MERCHANT,
     ...Object.values(c.PROVIDERS).flatMap((provider) =>
       'accounts' in provider ? provider.accounts.flatMap((account) => [account.apiKey ?? '', account.apiToken ?? '']) : []),
   ].filter((secret) => secret.length > 0).sort((a, b) => b.length - a.length)

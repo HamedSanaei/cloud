@@ -18,14 +18,16 @@ import { ticketToDto } from '../../lib/dto.js'
 import { countOpenInvoices } from '../invoices/service.js'
 import { totalBalanceRial } from '../wallets/service.js'
 import { rialToToman } from '../../lib/money.js'
-import { tickets, notifications, users } from '../../db/schema.js'
-import { writeAudit } from '../audit/service.js'
+import { notifications, users } from '../../db/schema.js'
 import { BadRequestError } from '../../lib/errors.js'
+import { NotFoundError } from '../../lib/errors.js'
+import { createSupportTicket, ticketServers } from '../tickets/service.js'
 
 const ticketSchema = z.object({
   title: z.string().min(3, 'عنوان تیکت باید حداقل ۳ کاراکتر باشد').max(200),
   department: z.enum(['technical', 'finance', 'sales']).default('technical'),
   description: z.string().max(5000).optional(),
+  serverId: z.string().uuid().nullable().optional(),
 })
 
 export const registerFrontendCompatRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
@@ -72,6 +74,14 @@ export const registerFrontendCompatRoutes: FastifyPluginAsync<{ ctx: AppContext 
   })
 
   // ---- Tickets -----------------------------------------------------------------
+  app.get('/tickets/servers', async request => ({ data: await ticketServers(db, requireUser(request).id) }))
+  app.get('/tickets/:id', async request => {
+    const user = requireUser(request)
+    const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
+    const ticket = await db.query.tickets.findFirst({ where: t => eq(t.id, id) })
+    if (!ticket || ticket.userId !== user.id) throw new NotFoundError('تیکت یافت نشد.')
+    return { data: ticketToDto(ticket) }
+  })
   app.get('/tickets', async (request) => {
     const user = requireUser(request)
     const query = parse(z.object({ limit: z.coerce.number().int().positive().max(200).optional() }), request.query)
@@ -100,13 +110,7 @@ export const registerFrontendCompatRoutes: FastifyPluginAsync<{ ctx: AppContext 
   app.post('/tickets', async (request) => {
     const user = requireUser(request)
     const input = parse(ticketSchema, request.body)
-    const [ticket] = await db
-      .insert(tickets)
-      .values({ userId: user.id, title: input.title, department: input.department, description: input.description ?? null, status: 'pending' })
-      .returning()
-    if (!ticket) throw new Error('failed to create ticket')
-    await writeAudit(db, { actorId: user.id, action: 'ticket.created', targetType: 'ticket', targetId: ticket.id })
-    return { data: ticketToDto(ticket) }
+    return { data: await createSupportTicket(db, user.id, input) }
   })
 
   // ---- Charge requests ------------------------------------------------------------
@@ -193,6 +197,5 @@ export const registerFrontendCompatRoutes: FastifyPluginAsync<{ ctx: AppContext 
   app.post('/domains', notOffered('ثبت دامنه'))
   app.post('/domains/transfer', notOffered('انتقال دامنه'))
 
-  // Charge-request creation is intentionally not exposed yet: wallet charging
-  // goes through admin credit or a payment gateway in a later phase.
+  // Site wallet recharge and issuer verification live in the payment routes.
 }
