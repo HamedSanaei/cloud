@@ -71,6 +71,8 @@ describe.skipIf(!dbAvailable)('site wallet gateway and ticket ownership integrat
     expect(await balance(a.wallet.id)).toBe(200000)
     const ledger = await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.referenceId, payment.id) })
     expect(ledger).toHaveLength(1); expect(ledger[0]!.amountRial).toBe(200000)
+    const notices = await app.inject({ url: '/api/notifications', headers: a.headers })
+    expect(notices.json().data).toEqual([expect.objectContaining({ title: 'کیف پول شارژ شد', href: '/wallet' })])
   })
   it('rejects foreign wallets, foreign receipt reads and forged webhooks', async () => {
     const a = await account(), b = await account(), payment = await intent(a)
@@ -126,6 +128,8 @@ describe.skipIf(!dbAvailable)('site wallet gateway and ticket ownership integrat
     const created = await app.inject({ method: 'POST', url: '/api/tickets', headers: a.headers, payload: ticket })
     expect(created.json().data.relatedServer).toMatchObject({ id: server.id, name: server.hostname, ip: server.ipv4 })
     const id = created.json().data.id
+    const notices = await app.inject({ url: '/api/notifications', headers: a.headers })
+    expect(notices.json().data).toEqual([expect.objectContaining({ title: 'تیکت ثبت شد', href: `/tickets?ticket=${id}` })])
     expect((await app.inject({ url: `/api/tickets/${id}`, headers: b.headers })).statusCode).toBe(404)
     expect((await app.inject({ url: '/api/admin/console/tickets', headers: b.headers })).statusCode).toBe(403)
     expect((await app.inject({ url: '/api/admin/console/tickets', headers: admin.headers })).json().data.items[0].relatedServer.id).toBe(server.id)

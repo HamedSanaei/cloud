@@ -221,7 +221,7 @@ export function createMockLeasewebProvider(): MockLeasewebProvider {
       const vps = vpsList.get(providerServerId)
       if (!vps) throw new ProviderPermanentError(`VPS ${providerServerId} not found (mock)`)
       vps.state = 'running'
-      return { ok: true }
+      return { ok: true, completed: true }
     },
 
     async powerOff(providerServerId: string): Promise<ProviderActionResult> {
@@ -229,7 +229,7 @@ export function createMockLeasewebProvider(): MockLeasewebProvider {
       const vps = vpsList.get(providerServerId)
       if (!vps) throw new ProviderPermanentError(`VPS ${providerServerId} not found (mock)`)
       vps.state = 'stopped'
-      return { ok: true }
+      return { ok: true, completed: true }
     },
 
     async reboot(providerServerId: string): Promise<ProviderActionResult> {
@@ -237,7 +237,7 @@ export function createMockLeasewebProvider(): MockLeasewebProvider {
       const vps = vpsList.get(providerServerId)
       if (!vps) throw new ProviderPermanentError(`VPS ${providerServerId} not found (mock)`)
       vps.state = 'running'
-      return { ok: true }
+      return { ok: true, completed: true }
     },
 
     setBehavior(next: Partial<MockBehavior>) {

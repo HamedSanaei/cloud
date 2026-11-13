@@ -19,7 +19,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <ToastContainer rtl position="top-center" autoClose={5000} limit={4} pauseOnFocusLoss closeOnClick={false} />
+      <ToastContainer rtl position="top-right" autoClose={5000} limit={4} pauseOnFocusLoss closeOnClick={false} />
     </ToastContext.Provider>
   )
 }

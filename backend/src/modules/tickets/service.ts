@@ -4,6 +4,7 @@ import { servers, tickets } from '../../db/schema.js'
 import { NotFoundError } from '../../lib/errors.js'
 import { writeAudit } from '../audit/service.js'
 import { ticketToDto } from '../../lib/dto.js'
+import { publishNotification } from '../notifications/service.js'
 
 export async function ticketServers(db: DbClient, userId: string) {
   return db.select({ id: servers.id, name: servers.hostname, ip: servers.ipv4, status: servers.status })
@@ -24,6 +25,8 @@ export async function createSupportTicket(db: DbClient, userId: string, input: {
     const [ticket] = await tx.insert(tickets).values({ userId, title: input.title, department: input.department,
       description: input.description ?? null, serverId: input.serverId ?? null, serverSnapshot: snapshot, status: 'pending' }).returning()
     await writeAudit(tx, { actorId: userId, action: 'ticket.created', targetType: 'ticket', targetId: ticket!.id, metadata: { serverId: input.serverId ?? null } })
+    await publishNotification(tx, { userId, eventKey: `ticket:${ticket!.id}:created`, title: 'تیکت ثبت شد',
+      body: `تیکت «${ticket!.title}» برای پشتیبانی ثبت شد.`, href: `/tickets?ticket=${ticket!.id}`, type: 'info' })
     return ticketToDto(ticket!)
   })
 }

@@ -4,6 +4,7 @@ import type { DbClient, DbOrTx } from '../../db/index.js'
 import { invoices, providerOperations, renewalAttempts, servers, serverSecrets, subscriptionEvents, subscriptions, users } from '../../db/schema.js'
 import { AppError, ConflictError, ForbiddenError, InsufficientFundsError, NotFoundError, ProviderPermanentError, ProviderUnknownError, ValidationError } from '../../lib/errors.js'
 import type { SessionUser } from '../auth/service.js'
+import type { ProviderServerView } from '../providers/provider.interface.js'
 import { writeAudit } from '../audit/service.js'
 import { assertPowerOnFunding } from '../billing/funding.js'
 import { getProvider } from '../providers/registry.js'
@@ -11,10 +12,44 @@ import { managementActions, type ManagementAction } from '../providers/customer.
 import { hetznerCommands } from '../providers/hetzner/customer.js'
 import { getServerForUser, updateServerFromView } from './service.js'
 import { sealServerSecret } from './secrets.js'
+import { notifyServerOperation } from '../notifications/service.js'
 
 const unresolved = ['pending', 'running', 'unknown', 'needs_reconciliation'] as const
 type Operation = typeof providerOperations.$inferSelect
 type Server = typeof servers.$inferSelect
+const operationTimeoutMs = 2 * 60 * 1000
+
+export function operationDelayed(op: Operation) {
+  return !op.completedAt && Date.now() - op.createdAt.getTime() >= operationTimeoutMs
+}
+
+export async function notifyDelayedOperations(db: DbClient, server: Server) {
+  const operations = await db.query.providerOperations.findMany({ where: t => and(eq(t.referenceId, server.id),
+    inArray(t.kind, ['server_action', 'server_management']), inArray(t.status, [...unresolved]), isNull(t.completedAt)) })
+  for (const op of operations) {
+    if (op.status === 'unknown' || op.status === 'needs_reconciliation' || operationDelayed(op)) {
+      await db.transaction(async tx => {
+        const [current] = await tx.select().from(providerOperations).where(and(eq(providerOperations.id, op.id),
+          inArray(providerOperations.status, [...unresolved]), isNull(providerOperations.completedAt))).for('update')
+        if (current) await notifyServerOperation(tx, server, current, 'unknown')
+      })
+    }
+  }
+}
+
+export async function recordOperationFailure(db: DbOrTx, server: Server, operation: Operation,
+  lastError: string, result: 'failed' | 'unknown', from: Array<Operation['status']>) {
+  await db.transaction(async tx => {
+    const now = new Date()
+    if (operation.action === 'delete') await tx.select({ id: servers.id }).from(servers).where(eq(servers.id, server.id)).for('update')
+    const [changed] = await tx.update(providerOperations).set({ status: result, lastError, updatedAt: now,
+      completedAt: result === 'failed' ? now : null }).where(and(eq(providerOperations.id, operation.id),
+      isNull(providerOperations.completedAt), inArray(providerOperations.status, from))).returning({ id: providerOperations.id })
+    if (!changed) return
+    if (operation.action === 'delete') await tx.update(servers).set({ terminationState: result === 'failed' ? 'delete_failed' : 'outcome_unknown' }).where(eq(servers.id, server.id))
+    await notifyServerOperation(tx, server, operation, result)
+  })
+}
 export function customerProvider(server: Server) {
   const manager = getProvider(server.provider).customer
   if (!manager || server.provider !== 'hetzner') throw new ValidationError('مدیریت این قابلیت برای ارائه‌دهندهٔ سرور پشتیبانی نمی‌شود')
@@ -23,10 +58,11 @@ export function customerProvider(server: Server) {
 }
 export function managementDto(op: Operation) {
   const meta = op.responseMetadata as { actionId?: number; accepted?: boolean; reconciledAt?: string } | null
-  return { id: op.id, action: op.action, status: op.status === 'pending' ? 'queued' : op.status === 'succeeded' ? 'confirmed'
-    : op.status === 'unknown' || op.status === 'needs_reconciliation' ? 'outcome_unknown' : op.status === 'failed' ? 'failed' : meta?.accepted ? 'provider_accepted' : 'dispatching',
+  const unknown = op.status === 'unknown' || op.status === 'needs_reconciliation' || operationDelayed(op)
+  return { id: op.id, action: op.action, status: op.status === 'succeeded' ? 'confirmed' : op.status === 'failed' ? 'failed'
+    : unknown ? 'outcome_unknown' : op.status === 'pending' ? 'queued' : meta?.accepted ? 'provider_accepted' : 'dispatching',
     actionId: meta?.actionId ?? null, createdAt: op.createdAt.toISOString(), updatedAt: op.updatedAt.toISOString(),
-    completedAt: op.completedAt?.toISOString() ?? null, message: op.status === 'failed' ? 'عملیات انجام نشد؛ حفاظت، وضعیت سرور یا دسترسی پروژه را بررسی کنید.' : op.status === 'unknown' ? 'نتیجهٔ ارائه‌دهنده هنوز قابل تأیید نیست؛ عملیات را تکرار نکنید.' : null }
+    completedAt: op.completedAt?.toISOString() ?? null, message: op.status === 'failed' ? 'عملیات انجام نشد؛ حفاظت، وضعیت سرور یا دسترسی پروژه را بررسی کنید.' : unknown ? 'نتیجهٔ ارائه‌دهنده هنوز قابل تأیید نیست؛ وضعیت را دوباره بررسی کنید.' : null }
 }
 function inputHash(value: unknown) { return createHash('sha256').update(JSON.stringify(value)).digest('hex') }
 export async function requestManagement(db: DbClient, user: SessionUser, serverId: string, action: ManagementAction, input: Record<string, unknown>, key: string) {
@@ -78,6 +114,7 @@ export async function confirmTermination(db: DbClient, serverId: string, operati
     await tx.update(servers).set({ status: 'terminated', terminationState: 'terminated', terminatedAt: now, lastSyncedAt: now }).where(eq(servers.id, server.id))
     await tx.update(providerOperations).set({ status: 'failed', completedAt: now, updatedAt: now, lastError: 'server terminated; stale job cancelled' }).where(and(eq(providerOperations.referenceId, server.id), inArray(providerOperations.kind, ['server_action', 'server_management']), inArray(providerOperations.status, [...unresolved]), sql`${providerOperations.id} <> ${operationId}`))
     await tx.update(providerOperations).set({ status: 'succeeded', completedAt: now, updatedAt: now, responseMetadata: { ...((operation.responseMetadata ?? {}) as object), reconciledAt: now.toISOString(), providerAbsent: true } }).where(eq(providerOperations.id, operationId))
+    await notifyServerOperation(tx, server, operation, 'succeeded')
     await tx.update(serverSecrets).set({ encrypted: null, acknowledgedAt: now }).where(eq(serverSecrets.serverId, server.id))
     await writeAudit(tx, { actorId: server.userId, action: 'server.termination.confirmed', targetType: 'server', targetId: server.id, metadata: { operationId, financialHistoryRetained: true, futureBillingStopped: true } })
   })
@@ -114,15 +151,14 @@ export async function handleCustomerOperation(db: DbClient, operationId: string)
     await tx.select({ id: users.id }).from(users).where(eq(users.id, server.userId)).for('no key update')
     const [current] = await tx.select().from(servers).where(eq(servers.id, server.id)).for('update')
     if (!current || current.terminatedAt || (action !== 'delete' && current.terminationState && current.terminationState !== 'delete_failed')) {
-      await tx.update(providerOperations).set({ status: 'failed', completedAt: new Date(), lastError: 'server is terminating', updatedAt: new Date() }).where(eq(providerOperations.id, operation.id))
+      await recordOperationFailure(tx, server, operation, 'server is terminating', 'failed', ['pending'])
       return false
     }
     if (['power_on', 'reboot', 'reset'].includes(action)) {
       try { await assertPowerOnFunding(tx, current) } catch (error) {
         if (!(error instanceof InsufficientFundsError)) throw error
-        const [failed] = await tx.update(providerOperations).set({ status: 'failed', completedAt: new Date(), lastError: 'insufficient funding before provider dispatch', updatedAt: new Date() })
-          .where(and(eq(providerOperations.id, operation.id), eq(providerOperations.status, 'pending'))).returning({ id: providerOperations.id })
-        if (failed) await writeAudit(tx, { actorId: server.userId, action: 'server.action.funding_rejected', targetType: 'server', targetId: server.id, metadata: { operationId: operation.id } })
+        await recordOperationFailure(tx, server, operation, 'insufficient funding before provider dispatch', 'failed', ['pending'])
+        await writeAudit(tx, { actorId: server.userId, action: 'server.action.funding_rejected', targetType: 'server', targetId: server.id, metadata: { operationId: operation.id } })
         return false
       }
     }
@@ -138,18 +174,21 @@ export async function handleCustomerOperation(db: DbClient, operationId: string)
     dispatched = true
     const result = await provider.submit(server.providerServerId!, action, input)
     accepted = true
+    const receipt = { actionId: result.actionId, accepted: true, command: result.command }
     // Secret output never enters operation metadata or histories.
     await db.transaction(async tx => {
-      await tx.update(providerOperations).set({ responseMetadata: { actionId: result.actionId, accepted: true }, updatedAt: new Date() }).where(eq(providerOperations.id, operation.id))
+      if (action === 'delete') await tx.select({ id: servers.id }).from(servers).where(eq(servers.id, server.id)).for('update')
+      const [recorded] = await tx.update(providerOperations).set({ responseMetadata: receipt, updatedAt: new Date() })
+        .where(and(eq(providerOperations.id, operation.id), isNull(providerOperations.completedAt))).returning({ id: providerOperations.id })
+      if (!recorded) return
       if (result.secret) await sealServerSecret(tx, server, operation, result.secret)
       if (action === 'delete') await tx.update(servers).set({ terminationState: 'deleting' }).where(eq(servers.id, server.id))
     })
-    await reconcileCustomerOperation(db, server, { ...operation, status: 'running', responseMetadata: { actionId: result.actionId, accepted: true } })
+    await reconcileCustomerOperation(db, server, { ...operation, status: 'running', responseMetadata: receipt })
   } catch (error) {
     const definite = !dispatched || (!accepted && (error instanceof ProviderPermanentError || (error instanceof AppError && [403, 409, 422].includes(error.status))))
-    await db.update(providerOperations).set({ status: definite ? 'failed' : 'unknown', completedAt: definite ? new Date() : null,
-      lastError: definite ? 'provider action rejected or precondition not met' : 'provider outcome requires reconciliation', updatedAt: new Date() }).where(eq(providerOperations.id, operation.id))
-    if (action === 'delete') await db.update(servers).set({ terminationState: definite ? 'delete_failed' : 'outcome_unknown' }).where(eq(servers.id, server.id))
+    await recordOperationFailure(db, server, operation, definite ? 'provider action rejected or precondition not met'
+      : 'provider outcome requires reconciliation', definite ? 'failed' : 'unknown', ['running', 'unknown'])
   }
 }
 
@@ -157,47 +196,59 @@ export async function reconcileCustomerOperation(db: DbClient, server: Server, o
   if (operation.completedAt || !operation.action || operation.status === 'pending') return
   const provider = customerProvider(server), action = operation.action as ManagementAction
   if (action === 'delete' && await provider.absent(server.providerServerId!)) { await confirmTermination(db, server.id, operation.id); return }
-  const actionId = (operation.responseMetadata as { actionId?: number } | null)?.actionId
+  const receipt = operation.responseMetadata as { actionId?: number; command?: string; accepted?: boolean } | null
+  const actionId = receipt?.actionId
   if (!actionId) {
     // Older releases discarded the Action ID after a proven accepted power
     // request. Only an observed target state can recover on/off, never reboot.
-    if (operation.kind === 'server_action' && (operation.responseMetadata as { accepted?: boolean } | null)?.accepted && ['power_on', 'power_off'].includes(action)) {
+    if (operation.kind === 'server_action' && receipt?.accepted && ['power_on', 'power_off'].includes(action)) {
       const view = await provider.inspect(server.providerServerId!)
       if (view.state === (action === 'power_off' ? 'suspended' : 'active')) {
-        await updateServerFromView(db, server.id, view)
-        await db.update(providerOperations).set({ status: 'succeeded', completedAt: new Date(), updatedAt: new Date(), responseMetadata: { accepted: true, legacyTargetStateObserved: view.state, reconciledAt: new Date().toISOString() } }).where(and(eq(providerOperations.id, operation.id), isNull(providerOperations.completedAt), inArray(providerOperations.status, ['running', 'unknown'])))
+        await confirmCustomerOperation(db, server, operation, view)
         return
       }
     }
-    await db.update(providerOperations).set({ status: 'unknown', updatedAt: new Date() }).where(eq(providerOperations.id, operation.id))
+    // A running worker can still be saving the provider receipt.
     return
   }
   const observed = await provider.observe(server.providerServerId!, actionId)
-  if (observed.command !== hetznerCommands[action]) throw new ProviderUnknownError('Provider action command does not match the requested operation')
+  // The provider's receipt command can differ from the URL suffix. Older rows
+  // only have the action ID, so accept the known aliases for that same action.
+  const legacyCommand: Partial<Record<ManagementAction, string>> = {
+    power_on: 'start_server', power_off: 'stop_server', shutdown: 'shutdown_server', reboot: 'reboot_server', reset: 'reset_server',
+  }
+  const expected = receipt?.command ? [receipt.command] : [hetznerCommands[action], legacyCommand[action]]
+  if (!expected.includes(observed.command)) throw new ProviderUnknownError('Provider action command does not match the requested operation')
   if (observed.status === 'running') return
   if (observed.status === 'error') {
-    await db.update(providerOperations).set({ status: 'failed', lastError: 'provider_action_failed', completedAt: new Date(), updatedAt: new Date() }).where(eq(providerOperations.id, operation.id))
-    if (action === 'delete') await db.update(servers).set({ terminationState: 'delete_failed' }).where(eq(servers.id, server.id))
+    await recordOperationFailure(db, server, operation, 'provider_action_failed', 'failed', ['running', 'unknown', 'needs_reconciliation'])
     return
   }
   const view = await provider.inspect(server.providerServerId!)
   if (action === 'delete') return // A success Action without authoritative absence is still unresolved.
   if (['power_off', 'shutdown'].includes(action) && view.state !== 'suspended') return
   if (['power_on', 'reboot', 'reset'].includes(action) && view.state !== 'active') return
-  await updateServerFromView(db, server.id, view)
+  await confirmCustomerOperation(db, server, operation, view, actionId)
+}
+
+async function confirmCustomerOperation(db: DbClient, server: Server, operation: Operation, view: ProviderServerView, actionId?: number) {
+  const action = operation.action
   await db.transaction(async tx => {
     await tx.select({ id: users.id }).from(users).where(eq(users.id, server.userId)).for('no key update')
     const [current] = await tx.select().from(servers).where(eq(servers.id, server.id)).for('update')
     if (!current || current.terminatedAt) return
     const [locked] = await tx.select().from(providerOperations).where(eq(providerOperations.id, operation.id)).for('update')
     if (!locked || locked.completedAt) return
+    await updateServerFromView(tx, server.id, view)
     if (action === 'resize') await applyResizeSnapshot(tx, current, locked, view.metadata?.serverType)
     if (action === 'rebuild') {
       const image = (operation.requestMetadata as { input?: { image?: string } })?.input?.image
       if (view.metadata?.imageId !== image) return
       await tx.update(servers).set({ operatingSystem: image! }).where(eq(servers.id, server.id))
     }
-    await tx.update(providerOperations).set({ status: 'succeeded', responseMetadata: { ...((operation.responseMetadata ?? {}) as object), reconciledAt: new Date().toISOString() }, completedAt: new Date(), updatedAt: new Date() }).where(eq(providerOperations.id, operation.id))
+    const now = new Date()
+    await tx.update(providerOperations).set({ status: 'succeeded', lastError: null, responseMetadata: { ...((locked.responseMetadata ?? {}) as object), reconciledAt: now.toISOString() }, completedAt: now, updatedAt: now }).where(eq(providerOperations.id, operation.id))
+    await notifyServerOperation(tx, current, locked, 'succeeded')
     await writeAudit(tx, { actorId: server.userId, action: `server.${action}.confirmed`, targetType: 'server', targetId: server.id, metadata: { operationId: operation.id, actionId } })
   })
 }

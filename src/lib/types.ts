@@ -40,7 +40,7 @@ export interface Server {
     canReboot: boolean
     billingBlocked: boolean
     requiredBalanceToman: number | null
-    pendingAction: 'power_on' | 'power_off' | 'reboot' | null
+    pendingAction: 'power_on' | 'power_off' | 'shutdown' | 'reboot' | 'reset' | null
   }
 }
 
@@ -234,6 +234,7 @@ export interface AppNotification {
   body: string | null
   type: string
   read: boolean
+  href?: string | null
   createdAt?: string
 }
 

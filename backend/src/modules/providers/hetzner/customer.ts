@@ -23,7 +23,8 @@ export function createCustomerProvider(resolve: (id: string) => { id: string; cl
       const result = object(data.action)
       if (!Number.isSafeInteger(result.id) || Number(result.id) <= 0) throw new ProviderUnknownError('Provider action identity was not returned; manual reconciliation is required')
       if (result.status === 'error') throw new ProviderPermanentError('Hetzner rejected the action')
-      return { actionId: Number(result.id), ...(typeof data.root_password === 'string' && data.root_password.length <= 4096 ? { secret: data.root_password } : {}) }
+      return { actionId: Number(result.id), ...(typeof result.command === 'string' ? { command: result.command } : {}),
+        ...(typeof data.root_password === 'string' && data.root_password.length <= 4096 ? { secret: data.root_password } : {}) }
     },
     async observe(id, actionId) {
       const route = resolve(id)

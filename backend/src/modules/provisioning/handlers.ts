@@ -10,9 +10,9 @@
  *    schedules reconciliation — never a blind re-order and never an
  *    automatic refund.
  */
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, sql } from 'drizzle-orm'
 import type { DbClient } from '../../db/index.js'
-import { invoices, invoiceItems, notifications, orderEvents, orders, providerOperations, renewalAttempts, servers, subscriptions, users } from '../../db/schema.js'
+import { invoices, invoiceItems, orderEvents, orders, providerOperations, renewalAttempts, servers, subscriptions, users } from '../../db/schema.js'
 import {
   AppError,
   ProviderPermanentError,
@@ -29,7 +29,8 @@ import { applyWalletTransaction } from '../wallets/service.js'
 import type { CloudQueues } from '../../jobs/queue.js'
 import type { ProviderBillingOption, ProviderServerView, RecoveryResult } from '../providers/provider.interface.js'
 import { assertPowerOnFunding, loadFundingFleet, warnLowBalance } from '../billing/funding.js'
-import { handleCustomerOperation, reconcileCustomerOperations } from '../servers/management.js'
+import { handleCustomerOperation, notifyDelayedOperations, reconcileCustomerOperations, recordOperationFailure } from '../servers/management.js'
+import { notifyServerOperation, publishNotification } from '../notifications/service.js'
 import type { ManagementAction } from '../providers/customer.interface.js'
 import { purgeExpiredServerSecrets } from '../servers/secrets.js'
 
@@ -287,16 +288,7 @@ function asString(v: unknown): string | undefined {
 async function failServerOrder(ctx: HandlerContext, orderId: string, error: string) {
   const { db } = ctx
   await transitionOrder(db, orderId, 'failed', { actorId: null, reason: error })
-  const order = await db.query.orders.findFirst({ where: (t) => eq(t.id, orderId) })
-  if (order) {
-    await db.update(orders).set({ error, updatedAt: new Date() }).where(eq(orders.id, orderId))
-    await db.insert(notifications).values({
-      userId: order.userId,
-      title: 'ایجاد سرور ناموفق بود',
-      body: error,
-      type: 'error',
-    })
-  }
+  await db.update(orders).set({ error, updatedAt: new Date() }).where(eq(orders.id, orderId))
   await writeAudit(db, { action: 'provider.order.failed', targetType: 'order', targetId: orderId, metadata: { error } })
 }
 
@@ -439,12 +431,6 @@ export async function resolveOperationByAdmin(
       reason: 'operator confirmed no provider server was created',
     })
     await db.update(orders).set({ error: input.note ?? 'operator rejected the operation', updatedAt: new Date() }).where(eq(orders.id, op.referenceId))
-    await db.insert(notifications).values({
-      userId: (await db.query.orders.findFirst({ where: (t) => eq(t.id, op.referenceId) }))?.userId ?? '',
-      title: 'بررسی سفارش کامل شد',
-      body: 'هیچ سروری توسط سرویس‌دهنده ساخته نشده است؛ سفارش لغو شد. بازگشت وجه به‌صورت جداگانه انجام می‌شود.',
-      type: 'warning',
-    })
   }
   await writeAudit(db, {
     actorId: input.actorId,
@@ -550,16 +536,20 @@ export async function handleServerSync(ctx: HandlerContext, data: { serverId?: s
   }
   const server = await db.query.servers.findFirst({ where: (t) => eq(t.id, data.serverId!) })
   if (!server?.providerServerId) return { status: 'skipped' }
-  if (server.provider === 'hetzner') {
-    await reconcileCustomerOperations(db, server)
-    const current = await db.query.servers.findFirst({ where: t => eq(t.id, server.id) })
-    if (current?.terminatedAt) return { status: 'terminated' }
+  try {
+    if (server.provider === 'hetzner') {
+      await reconcileCustomerOperations(db, server)
+      const current = await db.query.servers.findFirst({ where: t => eq(t.id, server.id) })
+      if (current?.terminatedAt) return { status: 'terminated' }
+    }
+    const view = await getProvider(server.provider).getServer(server.providerServerId)
+    if (view.state === 'active' && !server.subscriptionId) await finishServerActivation(db, server.id, view)
+    if (server.provider === 'hetzner') await updateServerFromView(db, server.id, view)
+    else await syncLegacyPowerState(db, server, view)
+    return { status: 'synced' }
+  } finally {
+    await notifyDelayedOperations(db, server)
   }
-  const view = await getProvider(server.provider).getServer(server.providerServerId)
-  if (view.state === 'active' && !server.subscriptionId) await finishServerActivation(db, server.id, view)
-  await updateServerFromView(db, server.id, view)
-  if (server.provider !== 'hetzner') await completeObservedPowerActions(db, server.id, view)
-  return { status: 'synced' }
 }
 
 /** Start the purchased period only after the provider proves the server is running. */
@@ -577,13 +567,16 @@ async function finishServerActivation(db: DbClient, serverId: string, view: Prov
     await tx.update(servers).set({ subscriptionId: sub.id }).where(eq(servers.id, server.id))
     await tx.update(orders).set({ status: 'active', updatedAt: new Date() }).where(eq(orders.id, order.id))
     await tx.insert(orderEvents).values({ orderId: order.id, fromStatus: order.status, toStatus: 'active', reason: 'provider server is running' })
-    await tx.insert(notifications).values({ userId: order.userId, title: 'سرور شما آماده است', body: `سرور ${order.hostname} با موفقیت ساخته شد.`, type: 'success' })
+    await publishNotification(tx, { userId: order.userId, eventKey: `order:${order.id}:active`,
+      title: 'سرور شما آماده است', body: `سرور «${order.hostname}» با موفقیت ساخته شد.`, type: 'success',
+      href: server.provider === 'hetzner' ? `/servers/${server.id}` : '/servers' })
   })
 }
 
 export async function handleServerAction(
   ctx: HandlerContext,
   data: { operationId: string; serverId: string; action: ManagementAction },
+  finalAttempt = false,
 ) {
   const { db, queues } = ctx
   const op = await db.query.providerOperations.findFirst({ where: (t) => eq(t.id, data.operationId) })
@@ -598,51 +591,64 @@ export async function handleServerAction(
     orderBy: (t, { desc }) => [desc(t.createdAt)],
   })
   if (latest?.id !== op.id) {
-    await db.update(providerOperations).set({ status: 'failed', lastError: 'superseded by a newer power request', completedAt: new Date(), updatedAt: new Date() }).where(and(eq(providerOperations.id, op.id), inArray(providerOperations.status, ['pending', 'failed'])))
+    await recordOperationFailure(db, server, op, 'superseded by a newer power request', 'failed', ['pending', 'failed'])
     return { status: 'superseded' }
   }
   const [claimed] = await db.update(providerOperations).set({ status: 'running', attemptCount: op.attemptCount + 1, updatedAt: new Date() })
     .where(and(eq(providerOperations.id, op.id), inArray(providerOperations.status, ['pending', 'failed']))).returning({ id: providerOperations.id })
   if (!claimed) return { status: 'in_progress' }
+  let providerCompleted = false
   try {
     if (data.action === 'power_on' || data.action === 'reboot') await assertPowerOnFunding(db, server)
     const provider = getProvider(server.provider)
-    if (data.action === 'power_on') await provider.powerOn(server.providerServerId)
-    else if (data.action === 'power_off') await provider.powerOff(server.providerServerId)
-    else await provider.reboot(server.providerServerId)
+    const result = data.action === 'power_on' ? await provider.powerOn(server.providerServerId)
+      : data.action === 'power_off' ? await provider.powerOff(server.providerServerId) : await provider.reboot(server.providerServerId)
+    if (!result.ok) throw new ProviderPermanentError('Provider rejected the power operation')
+    providerCompleted = result.completed === true
   } catch (err) {
     const blocked = err instanceof AppError && err.code === 'insufficient_funds'
     const unknown = err instanceof ProviderUnknownError
-    await db.update(providerOperations).set({
-      status: unknown ? 'unknown' : 'failed',
-      lastError: (err as Error).message,
-      completedAt: blocked || err instanceof ProviderPermanentError ? new Date() : null,
-      updatedAt: new Date(),
-    }).where(eq(providerOperations.id, op.id))
+    if (unknown || blocked || err instanceof ProviderPermanentError || finalAttempt) {
+      await recordOperationFailure(db, server, op, (err as Error).message, unknown ? 'unknown' : 'failed', ['running'])
+    } else {
+      await db.update(providerOperations).set({ status: 'pending', lastError: (err as Error).message,
+        updatedAt: new Date() }).where(eq(providerOperations.id, op.id))
+    }
     if (unknown) { await queues.addServerSync(server.id); return { status: 'unknown' } }
     if (blocked) return { status: 'insufficient_funds' }
     throw err
   }
   // A successful command is not proof that an asynchronous provider has stopped/started the VM.
-  await db.update(providerOperations).set({ responseMetadata: { accepted: true }, updatedAt: new Date() }).where(eq(providerOperations.id, op.id))
+  await db.update(providerOperations).set({ responseMetadata: { accepted: true, providerCompleted }, updatedAt: new Date() }).where(eq(providerOperations.id, op.id))
   if (data.action === 'power_on') {
     await db.update(servers).set({ billingPowerBlocked: false, billingPowerBlockedAt: null }).where(eq(servers.id, server.id))
   }
   await queues.addServerSync(server.id, 5000)
   const view = await getProvider(server.provider).getServer(server.providerServerId)
-  await updateServerFromView(db, server.id, view)
-  await completeObservedPowerActions(db, server.id, view)
-  return { status: view.state === (data.action === 'power_off' ? 'suspended' : 'active') ? 'done' : 'awaiting_provider' }
+  const completed = await syncLegacyPowerState(db, server, view)
+  return { status: completed.includes(op.id) ? 'done' : 'awaiting_provider' }
 }
 
-async function completeObservedPowerActions(db: DbClient, serverId: string, view: ProviderServerView) {
-  if (view.state !== 'active' && view.state !== 'suspended') return
-  await db.update(providerOperations).set({ status: 'succeeded', completedAt: new Date(), updatedAt: new Date() }).where(and(
-    eq(providerOperations.kind, 'server_action'),
-    eq(providerOperations.referenceId, serverId),
-    inArray(providerOperations.status, ['running', 'unknown']),
-    inArray(providerOperations.action, view.state === 'suspended' ? ['power_off'] : ['power_on', 'reboot']),
-  ))
+async function syncLegacyPowerState(db: DbClient, server: typeof servers.$inferSelect, view: ProviderServerView) {
+  return db.transaction(async tx => {
+    await updateServerFromView(tx, server.id, view)
+    const accepted = and(eq(providerOperations.kind, 'server_action'), eq(providerOperations.referenceId, server.id),
+      inArray(providerOperations.status, ['running', 'unknown']), sql`${providerOperations.responseMetadata}->>'accepted' = 'true'`)
+    if (view.state === 'provisioning' && view.metadata?.rebooting === true) {
+      await tx.update(providerOperations).set({ responseMetadata: sql`${providerOperations.responseMetadata} || '{"observedReboot":true}'::jsonb` })
+        .where(and(accepted, eq(providerOperations.action, 'reboot')))
+    }
+    if (view.state !== 'active' && view.state !== 'suspended') return []
+    const now = new Date()
+    const target = view.state === 'suspended' ? eq(providerOperations.action, 'power_off') : sql`(${providerOperations.action} = 'power_on' or
+      (${providerOperations.action} = 'reboot' and (${providerOperations.responseMetadata}->>'providerCompleted' = 'true'
+        or ${providerOperations.responseMetadata}->>'observedReboot' = 'true')))`
+    const completed = await tx.update(providerOperations).set({ status: 'succeeded', lastError: null, completedAt: now, updatedAt: now }).where(and(
+      accepted, target,
+    )).returning({ id: providerOperations.id, action: providerOperations.action })
+    for (const op of completed) await notifyServerOperation(tx, server, op, 'succeeded')
+    return completed.map(op => op.id)
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -704,8 +710,9 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
           referenceId: current.id,
         })
         if (!current.autoRenew) {
-          await tx.insert(notifications).values({
+          await publishNotification(tx, {
             userId: current.userId,
+            eventKey: `invoice:${invoice.id}:issued`, href: '/invoices',
             title: 'فاکتور تمدید صادر شد',
             body: `فاکتور ${invoice.invoiceNumber} به مبلغ ${Math.ceil(current.priceRial / 10).toLocaleString('fa-IR')} تومان صادر شد.`,
             type: 'info',
@@ -738,8 +745,9 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
         await tx.update(renewalAttempts).set({ status: 'insufficient_funds', error: (err as Error).message }).where(eq(renewalAttempts.id, attempt.id))
         if (current.status !== 'grace') {
           await enterGracePeriod(tx, current.id)
-          await tx.insert(notifications).values({
+          await publishNotification(tx, {
             userId: current.userId,
+            eventKey: `invoice:${invoice.id}:insufficient-funds`, href: '/wallet',
             title: 'تمدید ناموفق بود',
             body: `موجودی برای پرداخت فاکتور ${invoice.invoiceNumber} کافی نیست.`,
             type: 'warning',
@@ -766,8 +774,9 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
       const operation = await createServerActionOperation(db, sub.serverId, 'power_off', { businessKey: `grace-expiry:${sub.id}:${sub.graceUntil?.toISOString()}` })
       await queues.addServerAction({ operationId: operation.id, serverId: sub.serverId, action: 'power_off' })
     }
-    await db.insert(notifications).values({
+    await publishNotification(db, {
       userId: sub.userId,
+      eventKey: `subscription:${sub.id}:suspended:${sub.graceUntil?.toISOString()}`, href: '/invoices',
       title: 'سرویس به حالت تعلیق درآمد',
       body: 'مهلت پرداخت به پایان رسیده است. برای فعال‌سازی مجدد، فاکتور را پرداخت کنید.',
       type: 'warning',
@@ -805,6 +814,7 @@ async function protectHourlyServers(ctx: HandlerContext): Promise<Set<string>> {
               status: 'failed', lastError: 'insufficient funds; superseded by automatic shutdown', completedAt: now, updatedAt: now,
             }).where(and(eq(providerOperations.id, inFlight.id), eq(providerOperations.status, 'pending'))).returning({ id: providerOperations.id })
             if (!cancelled) continue
+            await notifyServerOperation(tx, member.server, inFlight, 'failed')
           }
           let operation = await createServerActionOperation(tx, member.server.id, 'power_off', {
             businessKey: `low-balance:${member.server.id}:${blockedAt.toISOString()}`, reason: 'low_balance',

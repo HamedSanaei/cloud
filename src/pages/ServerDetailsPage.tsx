@@ -28,6 +28,7 @@ export function ServerDetailsPage() {
   const [secretOperation, setSecretOperation] = useState<string | null>(null), rounds = useRef(0), key = useRef('')
   const server = detail.data, refresh = detail.refetch
   const pending = server?.operations.some(op => !['confirmed', 'failed'].includes(op.status)) ?? false
+  const awaiting = server?.operations.some(op => ['queued', 'dispatching', 'provider_accepted'].includes(op.status)) ?? false
   useEffect(() => {
     const resume = () => { if (document.visibilityState !== 'hidden' && pending) { rounds.current = 0; refresh() } }
     window.addEventListener('focus', resume); document.addEventListener('visibilitychange', resume)
@@ -57,6 +58,7 @@ export function ServerDetailsPage() {
     <Card className="server-identity"><div><h2>{server.name}</h2><p>{[server.facts?.location || server.datacenter, server.facts?.image || server.os, server.facts?.serverType || server.serverType].filter(Boolean).join(' · ')}</p></div>
       <LifecycleBadge state={server.lifecycle} /><div><p>IPv4: <bdi>{server.facts?.ipv4 ?? missing}</bdi></p><p>IPv6: <bdi>{server.facts?.ipv6 ?? missing}</bdi></p></div>
     </Card>
+    {pending && !awaiting && <p className="server-notice" role="status">نتیجه عملیات هنوز مشخص نیست. برای بررسی دوباره وضعیت، «بروزرسانی» را بزنید.</p>}
     <nav className="server-detail-tabs" aria-label="مدیریت سرور">{tabs.map(([value, label]) => <button key={value} aria-current={(value === tab || value === 'console' && ['storage', 'network'].includes(tab)) ? 'page' : undefined} onClick={() => setSearch({ tab: value })}>{label}</button>)}</nav>
     {!server.providerAvailable && server.lifecycle !== 'terminated' && <p className="server-notice" role="status">اطلاعات زندهٔ ارائه‌دهنده فعلاً قابل دریافت نیست. نتیجهٔ عملیات یا مقدار مصرف حدس زده نمی‌شود.</p>}
     {detail.error && <QueryError message={detail.error} onRetry={refresh} />}

@@ -78,6 +78,13 @@
       "when": 1794606878491,
       "tag": "0010_customer-server-management",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794613358817,
+      "tag": "0011_notification-events",
+      "breakpoints": true
     }
   ]
 }

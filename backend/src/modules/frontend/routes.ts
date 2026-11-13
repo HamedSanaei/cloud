@@ -18,7 +18,8 @@ import { ticketToDto } from '../../lib/dto.js'
 import { countOpenInvoices } from '../invoices/service.js'
 import { totalBalanceRial } from '../wallets/service.js'
 import { rialToToman } from '../../lib/money.js'
-import { notifications, users } from '../../db/schema.js'
+import { users } from '../../db/schema.js'
+import { listNotifications, readNotifications } from '../notifications/service.js'
 import { BadRequestError } from '../../lib/errors.js'
 import { NotFoundError } from '../../lib/errors.js'
 import { createSupportTicket, ticketServers } from '../tickets/service.js'
@@ -57,19 +58,16 @@ export const registerFrontendCompatRoutes: FastifyPluginAsync<{ ctx: AppContext 
   })
 
   // ---- Notifications ----------------------------------------------------------
-  app.get('/notifications', async (request) => {
+  app.get('/notifications', async (request, reply) => {
     const user = requireUser(request)
-    const rows = await db.query.notifications.findMany({
-      where: (t) => eq(t.userId, user.id),
-      orderBy: (t, { desc }) => [desc(t.createdAt)],
-      limit: 50,
-    })
-    return { data: rows.map((n) => ({ id: n.id, title: n.title, body: n.body, type: n.type, read: n.read, createdAt: n.createdAt.toISOString() })) }
+    reply.header('Cache-Control', 'no-store')
+    return { data: await listNotifications(db, user.id) }
   })
 
   app.patch('/notifications/read', async (request) => {
     const user = requireUser(request)
-    await db.update(notifications).set({ read: true }).where(eq(notifications.userId, user.id))
+    const input = parse(z.object({ ids: z.array(z.string().uuid()).min(1).max(50) }).optional(), request.body)
+    await readNotifications(db, user.id, input?.ids)
     return { data: { ok: true } }
   })
 

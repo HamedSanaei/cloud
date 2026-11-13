@@ -55,7 +55,7 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     if (method === 'GET') return json({ server: machines.get(id) })
     if (command === 'request_console') return json({ action: { id: 8, status: 'success' }, wss_url: 'wss://console.hetzner.cloud/fixture?ticket=fixture-ticket', password: 'fixture-console-password' })
     const actionId = 1000 + calls.length
-    actions.set(actionId, { id: actionId, status: 'running', command: method === 'DELETE' ? 'delete_server' : command })
+    actions.set(actionId, { id: actionId, status: 'running', command: method === 'DELETE' ? 'delete_server' : command === 'poweroff' ? 'stop_server' : command })
     if (method === 'DELETE' && loseDeleteResponse) { machines.delete(id); throw new Error('fixture lost response') }
     return json({ action: actions.get(actionId), ...(['reset_password', 'rebuild', 'enable_rescue'].includes(command ?? '') ? { root_password: 'Fixture-sensitive-root-password!' } : {}) })
   }
@@ -86,6 +86,8 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
   }
   it('recovers one owned pending row and never labels an accepted create as ready', async () => {
     const p = await buy()
+    const notices = async () => (await app.inject({ url: '/api/notifications', headers: p.headers })).json().data as Array<{ id: string; title: string; read: boolean; href: string }>
+    expect((await notices()).filter(item => item.title === 'سرور شما آماده است')).toHaveLength(0)
     expect(p.initial).toMatchObject({ id: `order:${p.orderId}`, lifecycle: 'queued', tracking: { orderId: p.orderId, serverId: null, state: 'queued' } })
     expect(p.initial.ip).toBeUndefined(); expect(p.initial.cpu).toBe('')
     const pending = await app.inject({ url: `/api/servers/provisioning/${p.orderId}`, headers: p.headers })
@@ -93,6 +95,17 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     await activate(p)
     const ready = await app.inject({ url: `/api/servers/provisioning/${p.orderId}`, headers: p.headers })
     expect(ready.json().data).toMatchObject({ id: p.server.id, tracking: { state: 'ready', orderId: p.orderId }, ip: '192.0.2.10', cpu: '2 vCPU' })
+    await handleServerSync(ctx, { serverId: p.server.id })
+    const completion = (await notices()).filter(item => item.title === 'سرور شما آماده است')
+    expect(completion).toEqual([expect.objectContaining({ read: false, href: `/servers/${p.server.id}` })])
+    const [notice] = completion
+    const other = await registerUser(ctx.db, { email: `notification-${randomUUID()}@fixture.test`, password: 'Fixture-customer-123!' })
+    const otherSession = await createSession(ctx.db, other.id, {})
+    await app.inject({ method: 'PATCH', url: '/api/notifications/read', headers: { authorization: `Bearer ${otherSession.token}` }, payload: { ids: [notice!.id] } })
+    expect((await notices()).find(item => item.id === notice!.id)?.read).toBe(false)
+    const marked = await app.inject({ method: 'PATCH', url: '/api/notifications/read', headers: p.headers, payload: { ids: [notice!.id] } })
+    expect(marked.statusCode).toBe(200)
+    expect((await notices()).find(item => item.id === notice!.id)?.read).toBe(true)
   })
   it('fixes Power Off with fractional traffic, preserves Action ID and waits for the confirmed off state', async () => {
     const p = await buy(); await activate(p)
@@ -103,17 +116,30 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     let op = (await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.id, id) }))!
     expect(op.status).toBe('running'); expect(op.responseMetadata).toMatchObject({ accepted: true, actionId: expect.any(Number) })
     const actionId = (op.responseMetadata as { actionId: number }).actionId
+    // A receipt written by the previous release only recorded the action ID.
+    await ctx.db.update(providerOperations).set({ responseMetadata: { accepted: true, actionId } }).where(eq(providerOperations.id, id))
     machines.get(p.providerId)!.status = 'off'
     await handleServerSync(ctx, { serverId: p.server.id })
     expect((await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.id, id) }))!.status).toBe('running')
-    actions.get(actionId)!.status = 'success'
+    expect(await ctx.db.query.notifications.findFirst({ where: t => eq(t.eventKey, `server-operation:${id}:succeeded`) })).toBeUndefined()
+    await ctx.db.update(providerOperations).set({ createdAt: new Date(Date.now() - 180000) }).where(eq(providerOperations.id, id))
     await handleServerSync(ctx, { serverId: p.server.id })
+    const delayed = await app.inject({ url: `/api/servers/${p.server.id}/management`, headers: p.headers })
+    expect(delayed.json().data.operations[0].status).toBe('outcome_unknown')
+    expect(await ctx.db.query.notifications.findFirst({ where: t => eq(t.eventKey, `server-operation:${id}:unknown`) })).toMatchObject({ type: 'warning' })
+    actions.get(actionId)!.status = 'success'
+    await Promise.all([handleServerSync(ctx, { serverId: p.server.id }), handleServerSync(ctx, { serverId: p.server.id })])
     const server = (await ctx.db.query.servers.findFirst({ where: t => eq(t.id, p.server.id) }))!
     expect(server.status).toBe('suspended'); expect(server.trafficUsedGb).toBe(0)
     expect(server.providerMetadata).toMatchObject({ outgoingTrafficBytes: 250000000 })
     op = (await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.id, id) }))!; expect(op.status).toBe('succeeded')
     await handleServerAction(ctx, { operationId: id, serverId: server.id, action: 'power_off' })
     expect(calls.filter(c => c.method === 'POST' && c.path === `/servers/${p.providerId}/actions/poweroff`)).toHaveLength(1)
+    const final = await app.inject({ url: `/api/servers/${p.server.id}/management`, headers: p.headers })
+    expect(final.json().data).toMatchObject({ providerState: 'suspended', power: { pendingAction: null }, operations: [expect.objectContaining({ status: 'confirmed' })] })
+    expect(await ctx.db.query.notifications.findMany({ where: t => eq(t.eventKey, `server-operation:${id}:succeeded`) })).toEqual([
+      expect.objectContaining({ userId: p.user.id, title: 'سرور خاموش شد', href: `/servers/${p.server.id}?tab=operations` }),
+    ])
   })
   it('reconciles a lost delete response, fences concurrent renewals and retains the paid ledger', async () => {
     const p = await buy(); await activate(p)

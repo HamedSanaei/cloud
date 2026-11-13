@@ -27,7 +27,7 @@ const actionInput = z.discriminatedUnion('action', [
 ])
 const cache = new Map<string, { expiresAt: number; value: Promise<ProviderServerView> }>()
 async function liveView(server: Awaited<ReturnType<typeof getServerForUser>>) {
-  const key = `${server.id}:${server.providerServerId}`, prior = cache.get(key)
+  const key = `${server.id}:${server.providerServerId}:${server.status}`, prior = cache.get(key)
   if (prior && prior.expiresAt > Date.now()) return prior.value
   if (cache.size >= 200) cache.delete(cache.keys().next().value!)
   const value = customerProvider(server).inspect(server.providerServerId!)

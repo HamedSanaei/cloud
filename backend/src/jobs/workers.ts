@@ -38,7 +38,7 @@ export function createWorkers(opts: { db: DbClient; queues: CloudQueues; logger:
   const gate = coordinationPool(24)
   installEventSink(opts.db)
 
-  function makeWorker(queueName: JobName, handler: (data: unknown) => Promise<unknown>) {
+  function makeWorker(queueName: JobName, handler: (data: unknown, finalAttempt: boolean) => Promise<unknown>) {
     const w = new Worker(
       queueName,
       async (job, token) => {
@@ -52,7 +52,7 @@ export function createWorkers(opts: { db: DbClient; queues: CloudQueues; logger:
           throw error
         }
         try {
-          const result = await handler(job.data)
+          const result = await handler(job.data, job.attemptsMade + 1 >= (job.opts.attempts ?? 1))
           opts.logger.info({ queue: queueName, jobId: job.id, ms: Date.now() - started }, 'job completed')
           recordEvent('job.completed', 'info', 'worker', { queue: queueName, jobId: job.id, elapsedMs: Date.now() - started })
           return result
@@ -78,8 +78,8 @@ export function createWorkers(opts: { db: DbClient; queues: CloudQueues; logger:
   makeWorker(JOB_NAMES.PROVISION, (data) => handleProvision(ctx, data as { orderId: string }))
   makeWorker(JOB_NAMES.RECONCILE, (data) => handleReconcile(ctx, data as { operationId?: string }))
   makeWorker(JOB_NAMES.SERVER_SYNC, (data) => handleServerSync(ctx, data as { serverId?: string }))
-  makeWorker(JOB_NAMES.SERVER_ACTION, (data) =>
-    handleServerAction(ctx, data as { operationId: string; serverId: string; action: 'power_on' | 'power_off' | 'reboot' }),
+  makeWorker(JOB_NAMES.SERVER_ACTION, (data, finalAttempt) =>
+    handleServerAction(ctx, data as Parameters<typeof handleServerAction>[1], finalAttempt),
   )
   makeWorker(JOB_NAMES.RENEWAL_SWEEP, () => handleRenewalSweep(ctx))
   // Initial failures reject readiness instead of reconnecting forever. Runtime
