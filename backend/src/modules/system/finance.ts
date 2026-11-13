@@ -10,6 +10,7 @@ import { writeAudit } from '../audit/service.js'
 import { consumeAuthorization, canonical, systemAdmin } from './security.js'
 import { ConflictError, ForbiddenError, InsufficientFundsError, NotFoundError, ValidationError } from '../../lib/errors.js'
 import { getConfig } from '../../config.js'
+import { isSiteAuthority } from '../integration/authority.js'
 
 export const adjustmentSchema = z.object({ userId: z.string().uuid(), walletId: z.string().uuid(), direction: z.enum(['credit', 'debit']),
   amountRial: z.number().int().positive().max(1_000_000_000_000), reason: z.string().trim().min(10).max(500), reference: z.string().trim().min(3).max(120), confirm: z.literal(true) }).strict()
@@ -40,6 +41,7 @@ async function execute(tx: DbOrTx, adjustment: typeof adminAdjustments.$inferSel
   return done!
 }
 export async function requestAdjustment(db: DbClient, user: SessionUser, input: AdjustmentInput, key: string, proof: string) {
+  if (!isSiteAuthority()) throw new ForbiddenError('تعدیل کیف پول فقط در حالت مرجع سایت مجاز است.')
   systemAdmin(user)
   return db.transaction(async tx => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`adjustment:${user.id}:${key}`}, 0))`)
@@ -60,6 +62,7 @@ export async function requestAdjustment(db: DbClient, user: SessionUser, input: 
   })
 }
 export async function approveAdjustment(db: DbClient, user: SessionUser, id: string, proof: string) {
+  if (!isSiteAuthority()) throw new ForbiddenError('تعدیل کیف پول فقط در حالت مرجع سایت مجاز است.')
   return db.transaction(async tx => {
     await consumeAuthorization(tx, user, proof, 'wallet.approve', { id, confirm: true })
     const [row] = await tx.select().from(adminAdjustments).where(eq(adminAdjustments.id, id)).for('update')

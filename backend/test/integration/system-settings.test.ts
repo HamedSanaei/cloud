@@ -7,11 +7,12 @@ import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../../src/app.js'
 import * as config from '../../src/config.js'
 import { orders, users, systemEvents, settings, adminAuthorizations } from '../../src/db/schema.js'
-import { createSession, registerUser, hashPassword } from '../../src/modules/auth/service.js'
+import { createSession, registerUser, hashPassword, authenticateToken } from '../../src/modules/auth/service.js'
 import { createTotpSecret, generateTotpCode as currentTotp, encryptTotpSecret } from '../../src/modules/auth/totp.js'
 import { ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/service.js'
 import { writeAudit } from '../../src/modules/audit/service.js'
 import { coordinationPool, exclusive, operationsLock, sharedWriter, writerLock } from '../../src/modules/system/writer-gate.js'
+import { requestAdjustment, approveAdjustment } from '../../src/modules/system/finance.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 
 const password = 'Fixture-system-only-123!', oldMerchant = '11111111-1111-4111-8111-111111111111', nextMerchant = '22222222-2222-4222-8222-222222222222', base = '/api/admin/settings'
@@ -125,6 +126,21 @@ describe.skipIf(!dbAvailable)('store system security and real ledger integration
     const foreign = { ...payload, walletId: other.wallet.id }
     expect((await send(a, 'POST', base + '/finance/adjustments', { ...foreign, proof: await proof(a, 'wallet.adjust', foreign) }, { 'idempotency-key': randomUUID() })).statusCode).toBe(404)
     expect((await send(a, 'POST', `/api/admin/wallets/${customer.wallet.id}/credit`, { amountRial: 1000, note: 'old bypass' })).statusCode).toBe(422)
+  })
+  it('blocks financial service mutations after an authority cutover even with previously valid grants', async () => {
+    const a = await account(), b = await account(), customer = await account('user')
+    const input = { userId: customer.user.id, walletId: customer.wallet.id, direction: 'credit' as const, amountRial: 1000000, reason: 'Fixture authority correction', reference: 'FIXTURE-AUTHORITY', confirm: true as const }
+    const grant = await proof(a, 'wallet.adjust', input)
+    const pending = await requestAdjustment(ctx.db, (await authenticateToken(ctx.db, a.session.token))!, input, randomUUID(), grant)
+    const freshGrant = await proof(a, 'wallet.adjust', input), approval = await proof(b, 'wallet.approve', { id: pending.id, confirm: true })
+    const actor = (await authenticateToken(ctx.db, a.session.token))!, approver = (await authenticateToken(ctx.db, b.session.token))!
+    c.DATA_AUTHORITY = 'platform'
+    try {
+      await expect(requestAdjustment(ctx.db, actor, input, randomUUID(), freshGrant)).rejects.toMatchObject({ status: 403 })
+      await expect(approveAdjustment(ctx.db, approver, pending.id, approval)).rejects.toMatchObject({ status: 403 })
+      expect((await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, customer.wallet.id) }))!.balanceRial).toBe(0)
+      expect((await ctx.db.query.adminAdjustments.findFirst({ where: t => eq(t.id, pending.id) }))!.status).toBe('awaiting_approval')
+    } finally { c.DATA_AUTHORITY = 'site' }
   })
   it('requires a distinct authorized second admin for a large credit', async () => {
     const a = await account(), b = await account(), customer = await account('user')
