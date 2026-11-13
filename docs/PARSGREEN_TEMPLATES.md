@@ -74,6 +74,31 @@ texts in sync with the ParsGreen panel after approvals or modifications.
 - AUTH_DELIVERY_MODE=log is developer-only and must not be used in production.
   Live requires proper SMTP and ParsGreen settings. Never commit secrets.
 
+## Issue #11: saved panel evidence and remaining delivery prerequisite
+
+The operator-supplied `سامانه جامع پیامک.html` was inspected on 2026-11-14.
+Its WhiteText table contains approved static OTP samples, but no `patternId`,
+`otpType`, dynamic stored pattern, or OTP-specific routing contract. ASP.NET
+`ctl24`–`ctl27` control names are row indices, not provider template IDs.
+Do not commit this authenticated panel export or its companion files.
+
+The saved panel FAQ says WhiteText is matched by the provider against the
+submitted message and variable sections must use `%%`; no special sending
+code is required. It recommends SendOtp for OTP, but this does not establish
+the approved parameters or blacklist coverage of this particular account.
+The official [SendOtp contract](https://login.parsgreen.com/Api/SendSMS.asmx?op=SendOtp)
+accepts `signature`, `mobile`, `Lang`, `otpType`, `patternId` and returns the
+provider-generated `otpCode`. Substituting the app-generated code or treating
+the returned code as a client-visible value would be incorrect.
+
+This PR implements SMS auto-verification and an independent three-failure
+budget, preserved with the original TTL through resend/restart. It does not
+claim the delivery/latency part of #11 is resolved. Obtain the approved dynamic
+WhiteText pattern or the account's SendOtp parameters and service/blacklist
+confirmation from ParsGreen support before changing the live sender. Then
+perform consented handset/DLR tests and record acceptance and delivery latency
+separately; no live SMS was sent during this change.
+
 ## SOAP failure diagnosed on 2026-11-12
 
 - Production used `http://tempuri.org/` in both the body namespace and
