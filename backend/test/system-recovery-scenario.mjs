@@ -8,7 +8,8 @@ import { eq } from 'drizzle-orm'
 import { loadConfig, getConfig } from './dist/config.js'
 import { createDb } from './dist/db/index.js'
 import { migrate } from './dist/db/migrate.js'
-import { users, tickets } from './dist/db/schema.js'
+import { users, tickets, orders, servers, serverSecrets } from './dist/db/schema.js'
+import { encryptOutput } from './dist/modules/servers/secrets.js'
 import { buildApp } from './dist/app.js'
 import { createLogger } from './dist/logger.js'
 import { hashPassword, createSession } from './dist/modules/auth/service.js'
@@ -33,6 +34,13 @@ for (let index = 0; index < 3; index++) {
 let [a, b, customer] = accounts
 const wallet = await ensureDefaultWallet(db, customer.id)
 await creditWallet(db, customer.id, wallet.id, 100000, { idempotencyKey: 'fixture-opening-credit' })
+// Transient provider output must never be revived by a database restore.
+const [secretOrder] = await db.insert(orders).values({ orderNumber: 'fixture-secret-order', userId: customer.id, status: 'cancelled', totalRial: 0,
+  provider: 'fixture', providerProductId: 'fixture', providerLocation: 'fixture', hostname: 'fixture-secret-server', operatingSystem: 'fixture' }).returning()
+const [secretServer] = await db.insert(servers).values({ userId: customer.id, orderId: secretOrder.id, provider: 'fixture', providerProductId: 'fixture',
+  providerLocation: 'fixture', hostname: 'fixture-secret-server', operatingSystem: 'fixture', status: 'terminated', terminatedAt: new Date(), vcpu: 1, memoryMb: 1024, diskGb: 10 }).returning()
+await db.insert(serverSecrets).values({ userId: customer.id, serverId: secretServer.id, sessionId: customer.sessionId, kind: 'password',
+  encrypted: encryptOutput('fixture-transient-provider-output', 'fixture-backup-only'), expiresAt: new Date(Date.now() + 600000) })
 const authorize = async (actor, action, payload) => (await issueAuthorization(db, actor, action, payload)).proof
 async function refreshSessions() { for (const actor of [a, b]) { const session = await createSession(db, actor.id, {}); actor.sessionId = session.sessionId; actor.token = session.token } }
 async function jobDone(id) {
@@ -117,6 +125,7 @@ try {
   assert.equal((await db.select().from(tickets)).length, 0)
   assert.equal((await db.query.wallets.findFirst({ where: t => eq(t.id, wallet.id) })).balanceRial, 100000)
   assert.equal((await db.query.sessions.findMany()).length, 0, 'revoked grants are never revived')
+  assert.equal((await db.select().from(serverSecrets)).length, 0, 'one-time provider secrets and console grants must not be restored')
   assert.equal((await access(config.SYSTEM_BACKUP_DIR + '/maintenance.lock').then(() => true, () => false)), false)
   await refreshSessions()
   await creditWallet(db, customer.id, wallet.id, 1, { idempotencyKey: 'fixture-new-money' })

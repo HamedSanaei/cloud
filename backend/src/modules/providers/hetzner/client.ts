@@ -15,7 +15,7 @@ export class HetznerApiError extends ProviderPermanentError {
 export class HetznerClient {
   constructor(private readonly baseUrl: string, private readonly token: string, private readonly fetcher: typeof fetch) {}
 
-  async request(method: 'GET' | 'POST', path: string, body?: ApiObject): Promise<ApiObject> {
+  async request(method: 'GET' | 'POST' | 'DELETE', path: string, body?: ApiObject): Promise<ApiObject> {
     let response: Response
     let payload: unknown
     try {
@@ -28,28 +28,28 @@ export class HetznerClient {
       })
       payload = await response.json()
     } catch {
-      if (method === 'POST') throw new ProviderUnknownError('Hetzner mutation outcome is unknown; do not submit another order')
+      if (method !== 'GET') throw new ProviderUnknownError('Hetzner mutation outcome is unknown; do not dispatch again')
       throw new ProviderRetryableError('Hetzner read request is unavailable')
     }
     const data = object(payload)
     if (!response.ok) {
       const rawCode = object(data.error).code
       // Allowlisted codes only: a provider error string may contain a credential.
-      const knownCodes = ['resource_limit_exceeded', 'resource_unavailable', 'invalid_input', 'json_error', 'unsupported_error', 'unauthorized', 'forbidden', 'not_found', 'conflict', 'locked', 'rate_limit_exceeded']
+      const knownCodes = ['resource_limit_exceeded', 'resource_unavailable', 'invalid_input', 'json_error', 'unsupported_error', 'unauthorized', 'forbidden', 'not_found', 'conflict', 'locked', 'rate_limit_exceeded', 'protected', 'action_failed', 'service_error', 'uniqueness_error']
       const code = typeof rawCode === 'string' && knownCodes.includes(rawCode) ? rawCode : 'unclassified'
       const capacity = (response.status === 403 && code === 'resource_limit_exceeded') || (response.status === 412 && code === 'resource_unavailable')
       if (capacity) throw new HetznerApiError(response.status, code, true)
       const definitive = [401, 403, 404, 409, 423].includes(response.status)
         || (response.status === 400 && code === 'json_error')
         || (response.status === 422 && ['invalid_input', 'unsupported_error'].includes(code))
-      if (method === 'POST' && !definitive) throw new ProviderUnknownError('Hetzner mutation outcome is unknown', { httpStatus: response.status })
+      if (method !== 'GET' && !definitive) throw new ProviderUnknownError('Hetzner mutation outcome is unknown', { httpStatus: response.status })
       if (response.status === 429 || response.status >= 500 || response.status === 408) {
         throw new ProviderRetryableError('Hetzner read request is unavailable', { httpStatus: response.status })
       }
       throw new HetznerApiError(response.status, code, false)
     }
     if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
-      if (method === 'POST') throw new ProviderUnknownError('Hetzner mutation returned an invalid response')
+      if (method !== 'GET') throw new ProviderUnknownError('Hetzner mutation returned an invalid response')
       throw new ProviderRetryableError('Hetzner read returned an invalid response')
     }
     return data

@@ -69,7 +69,10 @@ export async function activateServer(db: DbOrTx, serverId: string, view?: Provid
   if (view?.ipv4) update.ipv4 = view.ipv4
   if (view?.ipv6) update.ipv6 = view.ipv6
   if (view?.hostname) update.hostname = view.hostname
-  if (view?.trafficUsedGb !== undefined) update.trafficUsedGb = view.trafficUsedGb
+  if (view?.trafficUsedGb !== undefined) update.trafficUsedGb = Math.floor(view.trafficUsedGb)
+  if (view?.vcpu !== undefined) update.vcpu = view.vcpu
+  if (view?.memoryMb !== undefined) update.memoryMb = view.memoryMb
+  if (view?.diskGb !== undefined) update.diskGb = view.diskGb
   if (view?.metadata) update.providerMetadata = view.metadata as never
   await db.update(servers).set(update).where(eq(servers.id, serverId))
 }
@@ -85,11 +88,15 @@ export async function updateServerFromView(db: DbOrTx, serverId: string, view: P
     await tx.select({ id: users.id }).from(users).where(eq(users.id, owner.userId)).for('no key update')
     const [server] = await tx.select().from(servers).where(eq(servers.id, serverId)).for('update')
     if (!server) return
+    if (server.terminatedAt || server.status === 'terminated') return
     const update: Partial<typeof servers.$inferInsert> = { lastSyncedAt: new Date() }
     if (view.state === 'active' && view.ipv4) update.ipv4 = view.ipv4
     if (view.state === 'active' && view.ipv6) update.ipv6 = view.ipv6
     if (view.hostname) update.hostname = view.hostname
-    if (view.trafficUsedGb !== undefined) update.trafficUsedGb = view.trafficUsedGb
+    if (view.trafficUsedGb !== undefined) update.trafficUsedGb = Math.floor(view.trafficUsedGb)
+    if (view.vcpu !== undefined) update.vcpu = view.vcpu
+    if (view.memoryMb !== undefined) update.memoryMb = view.memoryMb
+    if (view.diskGb !== undefined) update.diskGb = view.diskGb
     if (view.metadata) update.providerMetadata = view.metadata
     if (view.state === 'suspended' || view.state === 'terminated' || view.state === 'active') update.status = view.state
     let billingBlocked = server.billingPowerBlocked
@@ -129,13 +136,14 @@ export async function createServerActionOperation(
     await tx.select({ id: users.id }).from(users).where(eq(users.id, owner.userId)).for('no key update')
     const [server] = await tx.select().from(servers).where(eq(servers.id, serverId)).for('update')
     if (!server?.providerServerId) throw new ConflictError('سرور هنوز در سرویس‌دهنده ثبت نشده است')
+    if (server.terminatedAt || (server.terminationState && server.terminationState !== 'delete_failed')) throw new ConflictError('سرور در حال حذف است یا حذف شده است')
     if (server.status !== 'active' && server.status !== 'suspended') throw new ConflictError('وضعیت سرور برای عملیات برق مناسب نیست')
     if (action === 'power_on' && server.status !== 'suspended') throw new ConflictError('فقط سرور خاموش را می‌توان روشن کرد')
     if (action === 'reboot' && server.status !== 'active') throw new ConflictError('فقط سرور روشن را می‌توان راه‌اندازی مجدد کرد')
     getProvider(server.provider).require(action)
     if (action === 'power_on' || action === 'reboot') await assertPowerOnFunding(tx, server)
     const pending = await tx.query.providerOperations.findFirst({
-      where: (t) => and(eq(t.kind, 'server_action'), eq(t.referenceId, server.id), inArray(t.status, ['pending', 'running', 'unknown'])),
+      where: (t) => and(inArray(t.kind, ['server_action', 'server_management']), eq(t.referenceId, server.id), inArray(t.status, ['pending', 'running', 'unknown', 'needs_reconciliation'])),
     })
     if (pending) {
       if (pending.action !== action || pending.status === 'unknown') throw new ConflictError('عملیات قبلی سرور هنوز نهایی نشده است')

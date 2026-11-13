@@ -29,15 +29,18 @@ export async function exclusive(client: PoolClient, key: readonly number[]) {
   const result = await client.query('select pg_try_advisory_lock($1,$2) as acquired', [...key])
   if (!result.rows[0]?.acquired) throw new AppError(409, 'system_busy', 'عملیات دیگری، نویسندهٔ فعال یا Migration در حال اجراست؛ بعداً دوباره تلاش کنید.')
 }
+const held = new WeakMap<FastifyRequest, () => void>()
+/** Release only after the WebSocket handler has consumed its one-use grant. */
+export function releaseRequestWriter(request: FastifyRequest) { held.get(request)?.(); held.delete(request) }
 export function installWriterGate(app: FastifyInstance) {
-  const pool = coordinationPool(), held = new WeakMap<FastifyRequest, () => void>()
+  const pool = coordinationPool()
   app.addHook('onRequest', async request => {
     // Monitoring remains reachable. All business routes, including GET payment
     // callbacks and auth session refreshes, must drain before a restore starts.
     if (/^\/api(?:\/v1)?\/health(?:\/|$)/.test(request.url.split('?')[0] ?? '')) return
     held.set(request, await sharedWriter(pool))
   })
-  const release = (request: FastifyRequest) => { held.get(request)?.(); held.delete(request) }
+  const release = releaseRequestWriter
   // Business handlers have completed at onSend. A slow file download must not
   // hold a PostgreSQL session/maintenance lock for its entire network transfer.
   app.addHook('onSend', async (request, _reply, payload) => { release(request); return payload })

@@ -110,7 +110,7 @@ async function makeBackup(client: PoolClient, job: BackupJob) {
     const file = path.join(dir, 'data.dump')
     // Excluded session/challenge data prevents restoring revoked access grants.
     await tool('pg_dump', ['-Fc', '--no-owner', '--no-acl', '--schema=public', '--schema=drizzle',
-      '--exclude-table-data=public.sessions', '--exclude-table-data=public.auth_challenges', '--exclude-table-data=public.admin_authorizations', `--snapshot=${exported}`, '--file', file], undefined, file)
+      '--exclude-table-data=public.sessions', '--exclude-table-data=public.auth_challenges', '--exclude-table-data=public.admin_authorizations', '--exclude-table-data=public.server_secrets', `--snapshot=${exported}`, '--file', file], undefined, file)
     await client.query('commit')
     if ((await stat(file)).size > c.SYSTEM_BACKUP_MAX_MB * 1048576) throw new ValidationError('حجم Backup بیش از سقف پیکربندی‌شده است.')
     const dump = await readFile(file), header: Header = { ...details, id: job.id, createdAt: job.createdAt, checksum: digest(dump) }

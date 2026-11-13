@@ -13,6 +13,9 @@ import { ValidationError } from '../../lib/errors.js'
 import { retailBilling } from '../pricing/periods.js'
 import type { ProviderBillingOption } from '../providers/provider.interface.js'
 import { loadFundingFleet, serverPowerPolicy } from '../billing/funding.js'
+import { pendingProvisioningRows, provisioningRow } from './provisioning.js'
+import { registerCustomerServerRoutes } from './customer-routes.js'
+import { registerServerConsole } from './console.js'
 
 const wizardSchema = z.object({
   name: z.string().min(3).max(63),
@@ -24,13 +27,27 @@ const wizardSchema = z.object({
 
 export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
   const { db, queues } = ctx
+  await app.register(registerCustomerServerRoutes, { ctx })
+  await app.register(registerServerConsole, { ctx })
 
   app.get('/servers', async (request) => {
     const user = requireUser(request)
     const query = parse(z.object({ limit: z.coerce.number().int().positive().max(200).optional() }), request.query)
     const rows = await listServersForUser(db, user.id, { limit: query.limit ?? 50 })
     const fleet = await loadFundingFleet(db, user.id)
-    return { data: rows.map((server) => serverToDto(server, serverPowerPolicy(server, fleet))) }
+    const pending = await pendingProvisioningRows(db, user.id, query.limit ?? 50)
+    return { data: [...pending, ...rows.map((server) => serverToDto(server, serverPowerPolicy(server, fleet)))] }
+  })
+
+  app.get('/servers/provisioning/:orderId', async request => {
+    const user = requireUser(request)
+    const { orderId } = parse(z.object({ orderId: z.string().uuid() }), request.params)
+    return { data: await provisioningRow(db, user.id, orderId) }
+  })
+  // Platform-mode middleware handles this route with the authenticated linked token.
+  app.get('/servers/provisioning/platform/:id', async request => {
+    requireUser(request)
+    throw new ValidationError('این درخواست متعلق به سرویس مشترک است؛ اتصال پلتفرم فعال نیست')
   })
 
   app.get('/servers/:id', async (request) => {
@@ -74,25 +91,7 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
       await queues.addProvision(result.order.id)
     }
 
-    // Try to return the server record; it may not exist yet (provisioning
-    // still queued) — return a building placeholder then.
-    const server = await db.query.servers.findFirst({ where: (t) => eq(t.orderId, result.order.id) })
-    if (server) {
-      return reply.status(result.created ? 201 : 200).send({ data: serverToDto(server, serverPowerPolicy(server, await loadFundingFleet(db, user.id))) })
-    }
-    return reply.status(result.created ? 201 : 200).send({
-      data: {
-        id: result.order.id,
-        name: result.order.hostname,
-        status: 'building',
-        datacenter: result.order.providerLocation,
-        cpu: '',
-        ram: '',
-        disk: '',
-        createdAt: result.order.createdAt.toISOString(),
-        power: { canPowerOn: false, canPowerOff: false, canReboot: false, billingBlocked: false, requiredBalanceToman: null, pendingAction: null },
-      },
-    })
+    return reply.status(result.created ? 201 : 200).send({ data: await provisioningRow(db, user.id, result.order.id) })
   })
 
   // Provider actions — enqueued to the worker, operation tracked + audited.
@@ -104,6 +103,10 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     )
     const server = await getServerForUser(db, user.id, id)
     const mapped = action === 'power-on' ? 'power_on' : action === 'power-off' ? 'power_off' : 'reboot'
+    if (server.provider === 'hetzner' && action === 'power-off') {
+      const confirmation = parse(z.object({ confirm: z.literal(true), hostname: z.string() }).strict(), request.body)
+      if (confirmation.hostname !== server.hostname) throw new ValidationError('نام سرور برای تأیید خاموشی اجباری مطابقت ندارد')
+    }
     const op = await createServerActionOperation(db, server.id, mapped)
     await queues.addServerAction({ operationId: op.id, serverId: server.id, action: mapped })
     await recordServerActionAudit(db, user.id, server.id, mapped, true)

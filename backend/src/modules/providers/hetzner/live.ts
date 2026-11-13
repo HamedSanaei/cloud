@@ -7,6 +7,7 @@ import {
 } from '../provider.interface.js'
 import { decimal, readCatalog, type HetznerCatalog } from './catalog.js'
 import { HetznerApiError, HetznerClient, object, type ApiObject } from './client.js'
+import { createCustomerProvider } from './customer.js'
 
 export interface HetznerProviderOptions { fetch?: typeof fetch }
 
@@ -53,6 +54,7 @@ export function createHetznerProvider(config: HetznerConfig, options: HetznerPro
     const network = object(server.public_net)
     const ipv4 = object(network.ipv4).ip
     const ipv6 = object(network.ipv6).ip
+    const location = object(server.location).name ?? object(object(server.datacenter).location).name ?? object(server.datacenter).name
     const state: ProviderServerView['state'] = server.status === 'running' ? 'active'
       : server.status === 'off' ? 'suspended'
         : ['initializing', 'starting', 'stopping', 'rebuilding', 'migrating'].includes(String(server.status)) ? 'provisioning' : 'unknown'
@@ -63,17 +65,29 @@ export function createHetznerProvider(config: HetznerConfig, options: HetznerPro
       ...(typeof ipv6 === 'string' ? { ipv6: clean(ipv6) } : {}),
       ...(typeof type.cores === 'number' ? { vcpu: type.cores } : {}),
       ...(typeof type.memory === 'number' ? { memoryMb: Math.round(type.memory * 1024) } : {}),
-      ...(typeof type.disk === 'number' ? { diskGb: type.disk } : {}),
+      ...(typeof server.primary_disk_size === 'number' ? { diskGb: server.primary_disk_size } : typeof type.disk === 'number' ? { diskGb: type.disk } : {}),
       ...(typeof server.outgoing_traffic === 'number' ? { trafficUsedGb: server.outgoing_traffic / 1_000_000_000 } : {}),
       // Safe, allowlisted fields only. An inventory listing must never
       // forward the API response, private user_data or provider credentials.
       metadata: {
         ...(typeof server.created === 'string' ? { createdAt: clean(server.created) } : {}),
         ...(typeof type.name === 'string' ? { serverType: clean(type.name) } : {}),
-        ...(typeof object(server.datacenter).name === 'string'
-          ? { location: clean(String(object(server.datacenter).name)) } : {}),
+        ...(typeof location === 'string' ? { location: clean(location) } : {}),
         ...(typeof object(server.image).name === 'string'
           ? { operatingSystem: clean(String(object(server.image).name)) } : {}),
+        ...(typeof object(server.image).id === 'number' ? { imageId: String(object(server.image).id) } : {}),
+        ...(typeof type.architecture === 'string' ? { architecture: clean(type.architecture) } : {}),
+        ...(typeof type.storage_type === 'string' ? { storageType: clean(type.storage_type) } : {}),
+        ...(typeof server.outgoing_traffic === 'number' ? { outgoingTrafficBytes: server.outgoing_traffic } : {}),
+        ...(typeof server.included_traffic === 'number' ? { includedTrafficBytes: server.included_traffic } : {}),
+        ...(typeof server.backup_window === 'string' ? { backupWindow: clean(server.backup_window) } : {}),
+        rescueEnabled: server.rescue_enabled === true,
+        protection: { delete: object(server.protection).delete === true, rebuild: object(server.protection).rebuild === true },
+        volumes: Array.isArray(server.volumes) ? server.volumes.filter(v => Number.isSafeInteger(v)) : [],
+        ...(typeof object(server.iso).id === 'number' ? { isoId: String(object(server.iso).id) } : {}),
+        privateNetworks: Array.isArray(server.private_net) ? server.private_net.map(object).map(n => ({ id: n.network, ip: n.ip })).filter(n => typeof n.id === 'number' && typeof n.ip === 'string') : [],
+        firewalls: Array.isArray(network.firewalls) ? network.firewalls.map(object).map(f => ({ id: f.id, status: f.status })).filter(f => typeof f.id === 'number') : [],
+        floatingIps: Array.isArray(network.floating_ips) ? network.floating_ips.filter(v => Number.isSafeInteger(v)) : [],
       },
     }
   }
@@ -87,6 +101,17 @@ export function createHetznerProvider(config: HetznerConfig, options: HetznerPro
   const capabilities: ProviderCapability[] = ['catalog', 'provision', 'power_on', 'power_off', 'reboot', 'reconcile', 'traffic']
   return {
     id: 'hetzner', name: clean(config.displayName), capabilities,
+    customer: createCustomerProvider(id => {
+      if (!/^[a-z0-9][a-z0-9_-]{0,62}:[1-9]\d*$/.test(id)) throw new ProviderPermanentError('Explicit owning project identity is required')
+      const route = owner(id)
+      return { id: route.id, client: clientFor(route.account) }
+    }, async id => {
+      if (!/^[a-z0-9][a-z0-9_-]{0,62}:[1-9]\d*$/.test(id)) throw new ProviderPermanentError('Explicit owning project identity is required')
+      const route = owner(id), data = await clientFor(route.account).request('GET', `/servers/${route.id}`)
+      const view = mapServer(route.account, object(data.server))
+      if (view.providerServerId !== route.composite) throw new ProviderUnknownError('Hetzner lookup returned a different server')
+      return view
+    }),
     supports(capability) { return capabilities.includes(capability) },
     require(capability) { if (!capabilities.includes(capability)) throw new NotSupportedError(capability) },
     async syncCatalog() {

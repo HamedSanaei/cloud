@@ -29,6 +29,9 @@ import { applyWalletTransaction } from '../wallets/service.js'
 import type { CloudQueues } from '../../jobs/queue.js'
 import type { ProviderBillingOption, ProviderServerView, RecoveryResult } from '../providers/provider.interface.js'
 import { assertPowerOnFunding, loadFundingFleet, warnLowBalance } from '../billing/funding.js'
+import { handleCustomerOperation, reconcileCustomerOperations } from '../servers/management.js'
+import type { ManagementAction } from '../providers/customer.interface.js'
+import { purgeExpiredServerSecrets } from '../servers/secrets.js'
 
 export interface HandlerContext {
   db: DbClient
@@ -540,16 +543,22 @@ export async function completeOrderFromRecovery(db: DbClient, op: typeof provide
 export async function handleServerSync(ctx: HandlerContext, data: { serverId?: string }) {
   const { db, queues } = ctx
   if (!data.serverId) {
+    await purgeExpiredServerSecrets(db)
     const pending = await db.query.servers.findMany({ where: (t) => inArray(t.status, ['provisioning', 'active', 'suspended']) })
     for (const server of pending) await queues.addServerSync(server.id)
     return { status: 'queued' }
   }
   const server = await db.query.servers.findFirst({ where: (t) => eq(t.id, data.serverId!) })
   if (!server?.providerServerId) return { status: 'skipped' }
+  if (server.provider === 'hetzner') {
+    await reconcileCustomerOperations(db, server)
+    const current = await db.query.servers.findFirst({ where: t => eq(t.id, server.id) })
+    if (current?.terminatedAt) return { status: 'terminated' }
+  }
   const view = await getProvider(server.provider).getServer(server.providerServerId)
   if (view.state === 'active' && !server.subscriptionId) await finishServerActivation(db, server.id, view)
   await updateServerFromView(db, server.id, view)
-  await completeObservedPowerActions(db, server.id, view)
+  if (server.provider !== 'hetzner') await completeObservedPowerActions(db, server.id, view)
   return { status: 'synced' }
 }
 
@@ -574,15 +583,16 @@ async function finishServerActivation(db: DbClient, serverId: string, view: Prov
 
 export async function handleServerAction(
   ctx: HandlerContext,
-  data: { operationId: string; serverId: string; action: 'power_on' | 'power_off' | 'reboot' },
+  data: { operationId: string; serverId: string; action: ManagementAction },
 ) {
   const { db, queues } = ctx
   const op = await db.query.providerOperations.findFirst({ where: (t) => eq(t.id, data.operationId) })
-  if (!op || op.kind !== 'server_action' || op.referenceId !== data.serverId || op.action !== data.action) return { status: 'operation_not_found' }
+  if (!op || !['server_action', 'server_management'].includes(op.kind) || op.referenceId !== data.serverId || op.action !== data.action) return { status: 'operation_not_found' }
   if (op.status === 'succeeded' || op.completedAt) return { status: 'already_done' }
-  if (op.status === 'running' || op.status === 'unknown') return { status: 'in_progress' }
   const server = await db.query.servers.findFirst({ where: (t) => eq(t.id, data.serverId) })
   if (!server?.providerServerId) return { status: 'server_not_ready' }
+  if (server.provider === 'hetzner') { await handleCustomerOperation(db, op.id); await queues.addServerSync(server.id, 5000); return { status: 'tracking_provider_action' } }
+  if (op.status === 'running' || op.status === 'unknown') return { status: 'in_progress' }
   const latest = await db.query.providerOperations.findFirst({
     where: (t) => and(eq(t.kind, 'server_action'), eq(t.referenceId, server.id)),
     orderBy: (t, { desc }) => [desc(t.createdAt)],
@@ -651,6 +661,10 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
       const [current] = await tx.select().from(subscriptions).where(eq(subscriptions.id, sub.id)).for('update').limit(1)
       if (!current || current.nextInvoiceAt > new Date()) return 'skipped'
       if (current.status !== 'active' && current.status !== 'grace') return 'skipped'
+      if (current.serverId) {
+        const server = await tx.query.servers.findFirst({ where: t => eq(t.id, current.serverId!) })
+        if (!server || server.terminatedAt || server.status === 'terminated' || (server.terminationState && server.terminationState !== 'delete_failed')) return 'skipped'
+      }
       if (current.billingInterval === 'HOURLY' && current.serverId) {
         const server = await tx.query.servers.findFirst({ where: (t) => eq(t.id, current.serverId!) })
         if (!server || server.status !== 'active' || server.billingPowerBlocked) return 'skipped'
@@ -780,6 +794,7 @@ async function protectHourlyServers(ctx: HandlerContext): Promise<Set<string>> {
       for (const group of fleet.groups) {
         if (group.balanceRial >= group.runningCostRial) continue
         for (const member of group.members) {
+          if (member.server.terminationState && member.server.terminationState !== 'delete_failed') continue
           if (member.server.status !== 'active' || !['active', 'grace', 'suspended'].includes(member.subscription.status)) continue
           const inFlight = fleet.operations.find((operation) => operation.referenceId === member.server.id)
           let blockedAt = member.server.billingPowerBlockedAt ?? now

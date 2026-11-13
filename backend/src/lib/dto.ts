@@ -10,6 +10,7 @@
  */
 import { rialToToman } from './money.js'
 import type { ServerPowerPolicy } from '../modules/billing/funding.js'
+import type { ServerTracking } from '../contracts/server-lifecycle.js'
 
 export function serverToDto(server: {
   id: string
@@ -23,16 +24,30 @@ export function serverToDto(server: {
   ipv4?: string | null
   operatingSystem: string
   createdAt: Date
+  orderId?: string
+  provider?: string
+  providerProductId?: string
+  ipv6?: string | null
+  activatedAt?: Date | null
+  terminationState?: string | null
 }, power: ServerPowerPolicy) {
   return {
     id: server.id,
+    serverId: server.id,
+    orderId: server.orderId,
+    provider: server.provider,
+    serverType: server.providerProductId,
+    lifecycle: server.terminationState ?? (server.status === 'terminated' ? 'terminated' : server.status === 'failed' ? 'failed' : server.activatedAt ? 'ready' : 'provisioning'),
+    ...(server.orderId ? { tracking: { source: 'site', reference: server.orderId, orderId: server.orderId, serverId: server.id, operationId: null,
+      state: server.status === 'terminated' ? 'cancelled' : server.activatedAt ? 'ready' : server.status === 'failed' ? 'failed' : 'provisioning', createdAt: server.createdAt.toISOString(), updatedAt: server.createdAt.toISOString() } satisfies ServerTracking } : {}),
     name: server.name ?? server.hostname,
     status: mapServerStatus(server.status),
     datacenter: server.providerLocation,
-    cpu: `${server.vcpu} vCPU`,
-    ram: `${server.memoryMb} MB`,
-    disk: `${server.diskGb} GB`,
+    cpu: server.vcpu > 0 ? `${server.vcpu} vCPU` : '',
+    ram: server.memoryMb > 0 ? `${server.memoryMb} MB` : '',
+    disk: server.diskGb > 0 ? `${server.diskGb} GB` : '',
     ip: server.ipv4 ?? undefined,
+    ipv6: server.ipv6 ?? undefined,
     os: server.operatingSystem,
     createdAt: server.createdAt.toISOString(),
     power,

@@ -7,6 +7,7 @@ import rateLimit from '@fastify/rate-limit'
 import sensible from '@fastify/sensible'
 import swagger from '@fastify/swagger'
 import swaggerUi from '@fastify/swagger-ui'
+import websocket from '@fastify/websocket'
 import type { DbClient } from './db/index.js'
 import type { CloudQueues } from './jobs/queue.js'
 import type { Logger } from './logger.js'
@@ -69,6 +70,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
 
   await app.register(sensible)
   await app.register(cookie)
+  await app.register(websocket, { options: { maxPayload: 2 * 1024 * 1024, perMessageDeflate: false }, errorHandler(_error, socket) { socket.close(1011, 'Console unavailable') } })
 
   if (ctx.exposeDocs) {
     await app.register(swagger, {

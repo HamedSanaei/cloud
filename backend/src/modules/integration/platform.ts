@@ -140,7 +140,10 @@ async function linkedToken(ctx: AppContext, request: FastifyRequest): Promise<st
 interface PlatformServer { server_id: string; state: string; display_name?: string; provider_key?: string; location_label?: string; ip?: string; operating_system?: string; cpu?: number; ram_gb?: number; storage_gb?: number }
 export function serverProjection(s: PlatformServer) {
   if (!z.string().uuid().safeParse(s.server_id).success) throw new AppError(502, 'platform_server_identity_invalid', 'شناسه سرور در پاسخ پلتفرم معتبر نیست')
-  return { id: s.server_id, platformServerId: s.server_id, name: s.display_name ?? s.provider_key ?? s.server_id.slice(0, 8), status: s.state === 'running' ? 'active' : s.state === 'stopped' ? 'inactive' : 'building', datacenter: s.location_label ?? s.provider_key ?? '', ip: s.ip, os: s.operating_system, cpu: `${s.cpu ?? '—'} vCPU`, ram: `${s.ram_gb ?? '—'} GB`, disk: `${s.storage_gb ?? '—'} GB`, power: { canPowerOn: false, canPowerOff: false, canReboot: false, billingBlocked: false, requiredBalanceToman: null, pendingAction: null } }
+  const state = s.state === 'running' || s.state === 'stopped' ? 'ready' : s.state === 'failed' ? 'failed' : s.state === 'requires_review' ? 'requires_review' : s.state === 'outcome_unknown' || s.state === 'unknown' ? 'outcome_unknown' : s.state === 'cancelled' || s.state === 'terminated' ? 'cancelled' : s.state === 'queued' ? 'queued' : 'provisioning'
+  return { id: s.server_id, platformServerId: s.server_id, name: s.display_name ?? s.provider_key ?? s.server_id.slice(0, 8), status: s.state === 'running' ? 'active' : s.state === 'stopped' ? 'inactive' : 'building', lifecycle: state,
+    tracking: { source: 'platform', reference: s.server_id, serverId: s.server_id, orderId: null, operationId: null, state, createdAt: '', updatedAt: '' },
+    datacenter: s.location_label ?? s.provider_key ?? '', ip: s.ip, os: s.operating_system, cpu: s.cpu ? `${s.cpu} vCPU` : '', ram: s.ram_gb ? `${s.ram_gb} GB` : '', disk: s.storage_gb ? `${s.storage_gb} GB` : '', power: { canPowerOn: false, canPowerOff: false, canReboot: false, billingBlocked: false, requiredBalanceToman: null, pendingAction: null } }
 }
 
 // Reject currency reinterpretation rather than display USD cents as toman.
@@ -215,6 +218,14 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
     const economic = /^\/api\/(wallets|servers|catalog|quotes|orders|subscriptions|invoices|charge-requests|dashboard|notifications|admin)(\/|$)/.test(pathname)
     if (!economic) return
     const token = await linkedToken(ctx, request)
+    if (request.method === 'GET' && /^\/api\/servers\/provisioning\/platform\/[a-f0-9-]{36}$/.test(pathname)) {
+      const id = parse(z.string().uuid(), pathname.split('/').pop())
+      const result = await platformRequest<{ data: PlatformServer | { server: PlatformServer } }>(token, `/servers/${id}`)
+      const server = 'server' in result.data ? result.data.server : result.data
+      if (server.server_id !== id) throw new AppError(502, 'platform_server_identity_invalid', 'شناسهٔ پاسخ پیگیری با سرور درخواست‌شده مطابقت ندارد')
+      reply.header('Cache-Control', 'no-store')
+      return reply.send({ data: serverProjection(server) })
+    }
     if (request.method !== 'GET') throw new ConflictError('دفترکل قدیمی غیرفعال است؛ از جریان خرید، شارژ یا مدیریت سرور در همین پنل استفاده کنید')
     reply.header('Cache-Control', 'no-store')
     if (pathname === '/api/catalog/storefront') {

@@ -4,11 +4,10 @@ import {
   HardDrive,
   Network,
   Plus,
-  Power,
   RefreshCw,
   ServerCog,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Button, LinkButton } from '../components/ui/Button'
 import { Card, SectionHeading } from '../components/ui/Card'
 import { FilterPanel } from '../components/ui/FilterPanel'
@@ -26,16 +25,17 @@ import {
   listDomainOrders,
   listDomains,
   listIps,
-  listServers,
   listTrafficPackages,
-  changeServerPower,
   transferDomain,
 } from '../lib/endpoints'
-import { formatCount, formatToman } from '../lib/format'
+import { formatCount } from '../lib/format'
 import { ServerManagement } from '../components/ui/ServerManagement'
 import { useAuth } from '../auth/AuthContext'
 import { HetznerInventoryPanel } from '../admin/HetznerInventoryPanel'
 import { getIntegrationStatus } from '../lib/platformClient'
+import { useServerFleet } from '../hooks/useServerFleet'
+import { ServerTableRow } from '../components/servers/ServerPrimitives'
+import { serverRowKey } from '../lib/serverLifecycle'
 
 type ResourceKind = 'server' | 'ip'
 
@@ -46,35 +46,14 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
   const { showToast } = useToast()
   const server = kind === 'server'
   const [buying, setBuying] = useState(false)
-  const [powerBusy, setPowerBusy] = useState(false)
   const [managedId, setManagedId] = useState<string | null>(null)
   const integration = useApiQuery(getIntegrationStatus)
 
-  const servers = useApiQuery(listServers, [kind])
+  const servers = useServerFleet(server)
   const ips = useApiQuery(listIps, [kind])
   const active = server ? servers : ips
   const refreshServers = servers.refetch
 
-  useEffect(() => {
-    if (!server) return
-    const refresh = () => { if (document.visibilityState === 'visible') refreshServers() }
-    const timer = window.setInterval(refresh, 30000)
-    window.addEventListener('focus', refresh)
-    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh) }
-  }, [server, refreshServers])
-
-  const handlePower = async (id: string, action: 'power-on' | 'power-off') => {
-    setPowerBusy(true)
-    try {
-      await changeServerPower(id, action)
-      showToast(action === 'power-on' ? 'درخواست روشن کردن سرور ارسال شد.' : 'درخواست خاموش کردن سرور ارسال شد.')
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : 'عملیات برق سرور ناموفق بود.')
-    } finally {
-      refreshServers()
-      setPowerBusy(false)
-    }
-  }
 
   const filteredServers = useMemo(() => {
     if (!server) return []
@@ -117,7 +96,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
   }
 
   return (
-    <div className="page-stack resource-list-page">
+    <div className={`page-stack resource-list-page${server ? ' server-list-page' : ''}`}>
       <PageHeader
         title={server ? 'مدیریت سرورها' : 'مدیریت آی‌پی‌ها'}
         subtitle={server ? 'سرورهای خود را مدیریت کنید و سرورهای جدید ایجاد کنید.' : 'لیست تمام آی‌پی‌های شما و سرورهای متصل به آن‌ها'}
@@ -136,34 +115,19 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
           {server ? [...new Set((servers.data ?? []).map(item => item.datacenter))].map(name => <option key={name} value={name}>{name}</option>) : <><option value="IPv4">IPv4</option><option value="IPv6">IPv6</option></>}
         </Select>
       </FilterPanel>
+      {server && servers.error && servers.data.length > 0 && <p className="server-notice" role="status">{servers.error}</p>}
+      {server && servers.paused && <p className="server-notice" role="status">زمان بررسی خودکار به پایان رسید. وضعیت حل‌نشده حفظ شده است؛ برای ادامه «بروزرسانی» را بزنید.</p>}
       <Card className={!active.loading && !active.error && (server ? filteredServers : filteredIps).length === 0 ? 'resource-empty-card' : undefined}>
         <SectionHeading title={server ? 'لیست سرورها' : 'لیست آی‌پی‌ها'} />
-        {active.loading && !active.data ? (
+        {active.loading && !active.data?.length ? (
           <LoadingState label="در حال دریافت..." />
-        ) : active.error ? (
+        ) : active.error && !active.data?.length ? (
           <QueryError message={active.error} onRetry={active.refetch} />
         ) : server ? (
           filteredServers.length ? (
-            <Table headers={['نام', 'وضعیت', 'دیتاسنتر', 'منابع', 'کنترل برق']}>
+            <Table headers={['نام سرور', 'وضعیت', 'پلن و منابع', 'IPv4', 'مدیریت']}>
               {filteredServers.map((item) => (
-                <tr key={item.id}>
-                  <td>{item.name}</td>
-                  <td><Badge tone={item.status === 'active' ? 'success' : 'neutral'}>{item.status}</Badge></td>
-                  <td>{item.datacenter}</td>
-                  <td>{[item.cpu, item.ram, item.disk].filter(Boolean).join(' · ') || '—'}</td>
-                  <td>
-                    <div className="server-power-controls">
-                      {integration.data?.enabled && <Button size="sm" variant="secondary" disabled={!item.platformServerId} onClick={() => { if (item.platformServerId) setManagedId(item.platformServerId) }}>مدیریت و نتیجه عملیات</Button>}
-                      {item.power.canPowerOn ? <Button size="sm" variant="success" icon={<Power size={16} />} disabled={powerBusy || servers.loading} onClick={() => handlePower(item.id, 'power-on')} aria-label={`روشن کردن ${item.name}`}>روشن کردن</Button> : null}
-                      {item.power.canPowerOff ? <Button size="sm" variant="danger" icon={<Power size={16} />} disabled={powerBusy || servers.loading} onClick={() => handlePower(item.id, 'power-off')} aria-label={`خاموش کردن ${item.name}`}>خاموش کردن</Button> : null}
-                      {item.power.pendingAction ? <span>در انتظار نتیجه عملیات برق</span> : null}
-                      {item.power.billingBlocked ? <>
-                        <p>اعتبار یک ساعت آینده کافی نیست. موجودی لازم در کیف پول پرداخت: {formatToman(item.power.requiredBalanceToman ?? 0)}</p>
-                        <LinkButton to="/wallet" variant="secondary" size="sm">افزایش موجودی</LinkButton>
-                      </> : null}
-                    </div>
-                  </td>
-                </tr>
+                <ServerTableRow key={serverRowKey(item)} server={item} onPlatformManage={integration.data?.enabled && item.platformServerId ? () => setManagedId(item.platformServerId!) : undefined} />
               ))}
             </Table>
           ) : (

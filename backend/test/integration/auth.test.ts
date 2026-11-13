@@ -110,9 +110,11 @@ describe.skipIf(skip)('auth + permissions (integration)', () => {
       payload: { name: 'a-vps', offerId: offer!.id, os: 'ubuntu-24.04', walletId: wallet.id, billingPeriod: 'monthly' },
     })
     expect(create.statusCode).toBe(201)
-    const creation = create.json<{ data: { id: string } }>()
-    await handleProvision(ctx, { orderId: creation.data.id })
-    const server = await ctx.db.query.servers.findFirst({ where: (t) => eq(t.orderId, creation.data.id) })
+    const creation = create.json<{ data: { id: string; tracking: { orderId: string; serverId: null } } }>()
+    expect(creation.data.tracking.serverId).toBeNull()
+    expect(creation.data.id).toBe(`order:${creation.data.tracking.orderId}`)
+    await handleProvision(ctx, { orderId: creation.data.tracking.orderId })
+    const server = await ctx.db.query.servers.findFirst({ where: (t) => eq(t.orderId, creation.data.tracking.orderId) })
     const serverId = server!.id
 
     // B cannot see A's server.

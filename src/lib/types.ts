@@ -1,4 +1,6 @@
 export type ServerStatus = 'active' | 'inactive' | 'building'
+export type { ProvisioningState, ServerLifecycle, ServerTracking } from '../../backend/src/contracts/server-lifecycle'
+import type { ServerLifecycle, ServerTracking } from '../../backend/src/contracts/server-lifecycle'
 export type IpStatus = 'active' | 'inactive' | 'reserved'
 export type IpVersion = 'IPv4' | 'IPv6'
 
@@ -24,6 +26,14 @@ export interface Server {
   disk: string
   ip?: string
   createdAt?: string
+  serverId?: string
+  orderId?: string
+  provider?: string
+  serverType?: string
+  os?: string
+  ipv6?: string
+  lifecycle?: ServerLifecycle
+  tracking?: ServerTracking
   power: {
     canPowerOn: boolean
     canPowerOff: boolean

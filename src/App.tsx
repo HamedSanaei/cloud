@@ -8,6 +8,7 @@ import { NotFoundPage } from './pages/NotFoundPage'
 import { ProfileGuardPage, ProfilePage, SessionsPage, SettingsPage } from './pages/AccountPages'
 import { TicketsPage } from './pages/TicketsPage'
 import { CreateServerPage, RegisterDomainPage } from './pages/WizardPages'
+import { ServerDetailsPage } from './pages/ServerDetailsPage'
 import { ProtectedRoute } from './auth/AuthContext'
 import { AuthPage, GoogleCallbackPage } from './pages/AuthPages'
 import { LandingPage } from './pages/LandingPage'
@@ -55,6 +56,7 @@ export function App() {
           <Route path="charge-requests" element={<ChargeRequestsPage />} />
           <Route path="servers" element={<ServersPage />} />
           <Route path="servers/create" element={<CreateServerPage />} />
+          <Route path="servers/:id" element={<ServerDetailsPage />} />
           <Route path="ips" element={<IpsPage />} />
           <Route path="traffic-packages" element={<TrafficPackagesPage />} />
           <Route path="domains" element={<DomainsPage />} />

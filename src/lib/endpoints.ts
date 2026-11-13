@@ -23,6 +23,7 @@ import type {
   Transaction,
   Wallet,
   WalletSummary,
+  ServerTracking,
 } from './types'
 
 function unwrapList<T>(payload: unknown): T[] {
@@ -97,6 +98,11 @@ export async function listServers(): Promise<Server[]> {
   return unwrapList<Server>(payload)
 }
 
+export async function getServerTracking(tracking: ServerTracking, signal?: AbortSignal): Promise<Server> {
+  const path = tracking.source === 'platform' ? `platform/${tracking.serverId}` : tracking.orderId
+  return (await apiGet<{ data: Server }>(`/servers/provisioning/${encodeURIComponent(path ?? '').replace('%2F', '/')}`, { signal })).data
+}
+
 export async function changeServerPower(serverId: string, action: 'power-on' | 'power-off'): Promise<void> {
   if (noApi()) throw new Error('اتصال به کنترل سرور پیکربندی نشده است.')
   await apiPost(`/servers/${encodeURIComponent(serverId)}/actions/${action}`, {})
@@ -115,7 +121,10 @@ export async function createServer(payload: CreateServerPayload): Promise<Server
       offerId: payload.offerId, image: payload.os, ...payload.pricing,
     }, payload.idempotencyKey)
     if (!result.serverId) throw new Error('پاسخ ثبت سفارش معتبر نیست؛ پیش از تکرار، وضعیت سرورها را بررسی کنید.')
-    return { id: result.serverId } as Server
+    return { id: result.serverId, platformServerId: result.serverId, name: payload.name, status: 'building', datacenter: '', cpu: '', ram: '', disk: '', os: payload.os,
+      lifecycle: 'queued', tracking: { source: 'platform', reference: result.serverId, serverId: result.serverId, orderId: null, operationId: null,
+        state: 'queued', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      power: { canPowerOn: false, canPowerOff: false, canReboot: false, billingBlocked: false, requiredBalanceToman: null, pendingAction: null } }
   }
   const { idempotencyKey, pricing: _pricing, ...body } = payload
   const created = await apiPost<Server | { data: Server }>('/servers', body, {
