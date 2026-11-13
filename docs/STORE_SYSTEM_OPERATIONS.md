@@ -61,7 +61,19 @@ therefore explicitly distinguishes local UUID validity, network reachability,
 provider domain confirmation and browser Referer behavior; it never claims the
 provider approved the domain. Actual issuer codes -10/-11/-30 are categorized as
 credential errors and -27 as domain mismatch in sanitized payment failure audits.
-The payment link now uses `rel=noopener` and `referrerPolicy=origin` (related #7).
+For the first-party parserver.ir wallet flow, the payment action navigates in the
+same browser tab to /payment-continue.html#pay/<token>. This first-party HTML
+page explicitly sets a Referrer Policy of origin, checks the UUID and fixed
+TabaPay destination, and redirects to https://api.tabapay.ir/pay/<token>.
+It never accepts arbitrary redirect URLs and does not expose the token in
+HTTP request paths or CDN logs. For any platform-owned third-party recharge
+flow, the external link still uses rel=noopener and referrerPolicy=origin.
+
+Browsers or gateway-side redirects may suppress Referer despite this policy.
+If the provider still reports missing Referer, collect the initial request
+headers and gateway transaction ID and ask TabaPay support to verify what their
+payment endpoint receives. Do not disable privacy protections site-wide or
+forge a third-party browser Referer via a proxy.
 No real gateway form/payment was created to validate the merchant in this PR.
 
 ## Financial adjustments

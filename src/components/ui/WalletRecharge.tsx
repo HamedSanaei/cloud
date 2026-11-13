@@ -6,6 +6,7 @@ import { getIntegrationStatus, platformGet, platformPost } from '../../lib/platf
 import { useApiQuery } from '../../hooks/useApiQuery'
 import { apiGet, apiPost } from '../../lib/apiClient'
 import { Link } from 'react-router-dom'
+import { firstPartyTabapayHandoff } from '../../lib/paymentHandoff'
 import type { Wallet } from '../../lib/types'
 
 export function WalletRecharge() {
@@ -63,8 +64,7 @@ export function WalletRecharge() {
         if (!response.paymentUrl) throw new Error('لینک پرداخت آماده نشد؛ نتیجه همین درخواست را پیگیری کنید.')
         const url = new URL(response.paymentUrl)
         if (url.protocol !== 'https:') throw new Error('لینک امن پرداخت در دسترس نیست؛ وضعیت درخواست را بررسی کنید')
-        if (!shared && (url.origin !== 'https://api.tabapay.ir' || !/^\/(sandbox\/)?pay\/[a-f0-9-]{36}$/.test(url.pathname))) throw new Error('لینک پرداخت معتبر نیست.')
-        setPayment(url.toString())
+        setPayment(shared ? url.toString() : firstPartyTabapayHandoff(url.toString()))
       }) }}>
         <p>مبلغ به تومان است. موجودی پس از تأیید پرداخت توسط درگاه افزایش می‌یابد.</p>
         <div className="payment-vpn-notice" role="note"><strong>پیش از ورود به درگاه، VPN یا فیلترشکن را خاموش کنید.</strong><p>روشن بودن آن ممکن است باعث اختلال یا رد پرداخت شود.</p></div>
@@ -74,7 +74,7 @@ export function WalletRecharge() {
         {!busy && !gateways.length && <p role="status">درگاه سازگار با کیف پول در دسترس نیست.</p>}
         {error && <p role="alert" className="platform-error">{error}</p>}
         <Button type="submit" disabled={busy || !gateway || !amount || !!payment || !!attemptId}>دریافت لینک پرداخت امن</Button>
-        {payment && <a className="button button--primary button--md" href={payment} target="_blank" rel="noopener" referrerPolicy="origin">ادامه پرداخت در درگاه</a>}
+        {payment && <a className="button button--primary button--md" href={payment} target={shared ? "_blank" : undefined} rel={shared ? "noopener" : undefined} referrerPolicy="origin">ادامه پرداخت در درگاه</a>}
         {attemptId && <Link className="button button--secondary button--md" to={`/wallet?payment=${attemptId}`} onClick={() => setOpen(false)}>پیگیری نتیجه پرداخت</Link>}
         {attemptId && (payment || attemptStatus === 'failed') && <Button variant="secondary" onClick={() => { setAttemptId(''); setAttemptStatus(''); setPayment(''); setError(''); key.current = crypto.randomUUID() }}>درخواست شارژ جدید</Button>}
       </form>
