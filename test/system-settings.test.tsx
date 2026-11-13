@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { App } from '../src/App'
@@ -40,7 +40,7 @@ describe('store administration routes and explicit confirmations', () => {
     expect(await screen.findByText(/STORE_SECRET_KEY/)).toBeTruthy()
     expect(requests.some(r => r.path.startsWith('/admin/settings/logs'))).toBe(true)
   })
-  it('requires exact user/wallet selection and reauthentication before a ledger request', async () => {
+  it('updates the selected wallet without a second password or OTP', async () => {
     open('/admin/settings/finance'); const user = userEvent.setup()
     await user.type(await screen.findByRole('textbox', { name: 'شمارهٔ موبایل یا ایمیل کامل' }), 'customer@example.test')
     await user.click(screen.getByRole('button', { name: 'جست‌وجوی حساب' }))
@@ -49,16 +49,18 @@ describe('store administration routes and explicit confirmations', () => {
     await user.type(screen.getByRole('textbox', { name: 'علت و توضیح اجباری' }), 'اصلاح آزمایشی حساب کاربری')
     await user.type(screen.getByRole('textbox', { name: 'شناسهٔ پیگیری / تیکت' }), 'TEST-9')
     await user.click(screen.getByRole('button', { name: 'بازبینی و تأیید تعدیل' }))
-    expect(requests.filter(r => r.method === 'POST')).toHaveLength(0)
-    await user.type(screen.getByLabelText('رمز عبور فعلی مدیر'), 'Fixture-only-password!')
-    await user.type(screen.getByLabelText('کد برنامهٔ احراز هویت'), '123456')
-    await user.click(screen.getByRole('button', { name: 'تأیید و اجرا' }))
+    await waitFor(() => expect(requests.some(r => r.path === '/admin/settings/finance/adjustments' && r.method === 'POST')).toBe(true))
+    expect(screen.queryByLabelText('رمز عبور فعلی مدیر')).toBeNull()
+    expect(screen.queryByLabelText('کد تأییدکننده شش‌رقمی')).toBeNull()
+    const actionProof = requests.find(r => r.path === '/admin/settings/authorize')
+    expect(actionProof?.body).not.toHaveProperty('password')
+    expect(actionProof?.body).not.toHaveProperty('code')
     await screen.findByText(/عملیات fixture-operation ثبت شد/)
     const mutation = requests.filter(r => r.path === '/admin/settings/finance/adjustments' && r.method === 'POST')
     expect(mutation).toHaveLength(1); expect(mutation[0]!.body).toMatchObject({ amountRial: 500000, direction: 'credit', reason: 'اصلاح آزمایشی حساب کاربری', reference: 'TEST-9' })
     expect(mutation[0]!.key).toBeTruthy()
   })
-  it('shows the restore impact and requires a typed phrase before step-up, without nested dialogs', async () => {
+  it('requires a typed restore confirmation but no extra password or OTP', async () => {
     open('/admin/settings/backups'); const user = userEvent.setup()
     const row = (await screen.findByText(serverId)).closest('section')!
     await user.click(within(row).getByRole('button', { name: 'جزئیات / بازیابی' }))
@@ -68,7 +70,7 @@ describe('store administration routes and explicit confirmations', () => {
     await user.type(screen.getByLabelText('برای ادامه عبارت RESTORE DATABASE را وارد کنید'), 'RESTORE DATABASE')
     await user.click(button)
     expect(screen.queryByText('جزئیات و کنترل بازیابی')).toBeNull()
-    expect(screen.getByText('تأیید امن عملیات')).toBeTruthy()
-    expect(requests.filter(r => r.method === 'POST')).toHaveLength(0)
+    await waitFor(() => expect(requests.some(r => r.path === '/admin/settings/restores' && r.method === 'POST')).toBe(true))
+    expect(screen.queryByLabelText('رمز عبور فعلی مدیر')).toBeNull()
   })
 })

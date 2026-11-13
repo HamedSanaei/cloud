@@ -12,7 +12,7 @@ import { createTotpSecret, generateTotpCode as currentTotp, encryptTotpSecret } 
 import { ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/service.js'
 import { writeAudit } from '../../src/modules/audit/service.js'
 import { coordinationPool, exclusive, operationsLock, sharedWriter, writerLock } from '../../src/modules/system/writer-gate.js'
-import { requestAdjustment, approveAdjustment } from '../../src/modules/system/finance.js'
+import { requestAdjustment } from '../../src/modules/system/finance.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 
 const password = 'Fixture-system-only-123!', oldMerchant = '11111111-1111-4111-8111-111111111111', nextMerchant = '22222222-2222-4222-8222-222222222222', base = '/api/admin/settings'
@@ -48,10 +48,10 @@ describe.skipIf(!dbAvailable)('store system security and real ledger integration
     return app.inject({ method, url, payload: payload === undefined ? undefined : JSON.stringify(payload), remoteAddress: a.remoteAddress, headers: { 'content-type': 'application/json', ...a.headers, ...headers } })
   }
   async function proof(a: Account, action: string, payload: unknown) {
-    const response = await send(a, 'POST', base + '/authorize', { action, payload, password, code: currentTotp(a.secret) })
+    const response = await send(a, 'POST', base + '/authorize', { action, payload })
     expect(response.statusCode, response.body).toBe(200); return response.json().data.proof as string
   }
-  it('allows all active admins but denies users, missing MFA and unauthorized uploads', async () => {
+  it('allows active admins without extra MFA and denies regular users and unauthorized uploads', async () => {
     const user = await account('user'), other = await account('admin'), admin = await account()
     expect((await app.inject(base + '/logs')).statusCode).toBe(401)
     expect((await send(user, 'GET', base + '/logs')).statusCode).toBe(403)
@@ -59,16 +59,16 @@ describe.skipIf(!dbAvailable)('store system security and real ledger integration
     expect((await send(other, 'GET', base + '/capabilities')).json().data.allowed).toBe(true)
     expect((await app.inject({ method: 'POST', url: base + '/backups/upload', payload: Buffer.from('not a dump'), headers: { 'content-type': 'application/octet-stream' } })).statusCode).toBe(401)
     await ctx.db.update(users).set({ twoFactorEnabled: false }).where(eq(users.id, admin.user.id))
-    expect((await send(admin, 'POST', base + '/authorize', { action: 'gateway.diagnose', payload: { confirm: true }, password, code: currentTotp(admin.secret) })).statusCode).toBe(403)
+    expect((await send(admin, 'POST', base + '/authorize', { action: 'gateway.diagnose', payload: { confirm: true } })).statusCode).toBe(200)
   })
-  it('rejects a demoted admin even with a previously granted step-up proof', async () => {
+  it('rejects a demoted admin even with a previously granted action proof', async () => {
     const a = await account()
     const payload = { confirm: true }
     const grant = await proof(a, 'gateway.diagnose', payload)
     await ctx.db.update(users).set({ role: 'user' }).where(eq(users.id, a.user.id))
     expect((await send(a, 'POST', base + '/gateway/diagnose', { ...payload, proof: grant })).statusCode).toBe(403)
   })
-  it('binds step-up to exact payload, action, session and a single use', async () => {
+  it('binds automatic action proof to exact payload, action, session and a single use', async () => {
     const a = await account(), payload = { enabled: true, sandbox: true, merchant: nextMerchant, confirm: true }, grant = await proof(a, 'gateway.update', payload)
     expect((await send(a, 'POST', base + '/gateway', { ...payload, enabled: false, proof: grant })).statusCode).toBe(403)
     const session = await createSession(ctx.db, a.user.id, {})
@@ -77,17 +77,15 @@ describe.skipIf(!dbAvailable)('store system security and real ledger integration
     expect((await send(a, 'POST', base + '/gateway', { ...payload, proof: grant })).statusCode).toBe(403)
     await ctx.db.delete(settings).where(eq(settings.key, 'tabapay.active'))
   })
-  it('bootstraps management MFA with a password and does not allow replacing or disabling an enabled key without its code', async () => {
+  it('no longer requires a management MFA enrollment or exposes TOTP bootstrap routes', async () => {
     const a = await account()
     await ctx.db.update(users).set({ twoFactorEnabled: false, totpSecretEncrypted: null }).where(eq(users.id, a.user.id))
-    expect((await send(a, 'POST', base + '/mfa/setup', { password: 'wrong' })).statusCode).toBe(403)
-    const setup = await send(a, 'POST', base + '/mfa/setup', { password })
-    expect(setup.statusCode).toBe(200); expect(setup.json().data.recoveryCodes).toHaveLength(8)
-    const secret = setup.json().data.secret
-    expect((await send(a, 'GET', base + '/capabilities')).body).not.toContain(secret)
-    expect((await send(a, 'POST', base + '/mfa/enable', { password, code: currentTotp(secret) })).statusCode).toBe(200)
-    expect((await send(a, 'POST', base + '/mfa/setup', { password })).statusCode).toBe(403)
-    expect((await send(a, 'POST', '/api/auth/2fa/disable', { password })).statusCode).toBe(403)
+    const capabilities = await send(a, 'GET', base + '/capabilities')
+    expect(capabilities.statusCode).toBe(200)
+    expect(capabilities.json().data.allowed).toBe(true)
+    expect((await send(a, 'POST', base + '/mfa/setup', { password })).statusCode).toBe(404)
+    expect((await send(a, 'POST', base + '/authorize', { action: 'gateway.diagnose', payload: { confirm: true }, password })).statusCode).toBe(400)
+    expect((await send(a, 'POST', base + '/authorize', { action: 'gateway.diagnose', payload: { confirm: true } })).statusCode).toBe(200)
   })
   it('rejects expired grants and invalidates previously issued grants after password changes', async () => {
     const a = await account(), payload = { confirm: true }, expired = await proof(a, 'gateway.diagnose', payload)
@@ -134,29 +132,24 @@ describe.skipIf(!dbAvailable)('store system security and real ledger integration
     expect((await send(a, 'POST', base + '/finance/adjustments', { ...foreign, proof: await proof(a, 'wallet.adjust', foreign) }, { 'idempotency-key': randomUUID() })).statusCode).toBe(404)
     expect((await send(a, 'POST', `/api/admin/wallets/${customer.wallet.id}/credit`, { amountRial: 1000, note: 'old bypass' })).statusCode).toBe(422)
   })
-  it('blocks financial service mutations after an authority cutover even with previously valid grants', async () => {
-    const a = await account(), b = await account(), customer = await account('user')
+  it('blocks financial mutations after authority cutover even with an action proof', async () => {
+    const a = await account(), customer = await account('user')
     const input = { userId: customer.user.id, walletId: customer.wallet.id, direction: 'credit' as const, amountRial: 1000000, reason: 'Fixture authority correction', reference: 'FIXTURE-AUTHORITY', confirm: true as const }
     const grant = await proof(a, 'wallet.adjust', input)
-    const pending = await requestAdjustment(ctx.db, (await authenticateToken(ctx.db, a.session.token))!, input, randomUUID(), grant)
-    const freshGrant = await proof(a, 'wallet.adjust', input), approval = await proof(b, 'wallet.approve', { id: pending.id, confirm: true })
-    const actor = (await authenticateToken(ctx.db, a.session.token))!, approver = (await authenticateToken(ctx.db, b.session.token))!
+    const actor = (await authenticateToken(ctx.db, a.session.token))!
     c.DATA_AUTHORITY = 'platform'
     try {
-      await expect(requestAdjustment(ctx.db, actor, input, randomUUID(), freshGrant)).rejects.toMatchObject({ status: 403 })
-      await expect(approveAdjustment(ctx.db, approver, pending.id, approval)).rejects.toMatchObject({ status: 403 })
+      await expect(requestAdjustment(ctx.db, actor, input, randomUUID(), grant)).rejects.toMatchObject({ status: 403 })
       expect((await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, customer.wallet.id) }))!.balanceRial).toBe(0)
-      expect((await ctx.db.query.adminAdjustments.findFirst({ where: t => eq(t.id, pending.id) }))!.status).toBe('awaiting_approval')
     } finally { c.DATA_AUTHORITY = 'site' }
   })
-  it('requires a distinct authorized second admin for a large credit', async () => {
-    const a = await account(), b = await account(), customer = await account('user')
+  it('completes large ledger credits for one active admin without a second approval', async () => {
+    const a = await account(), customer = await account('user')
     const payload = { userId: customer.user.id, walletId: customer.wallet.id, direction: 'credit', amountRial: 1000000, reason: 'Fixture large correction', reference: 'FIXTURE-LARGE', confirm: true }
-    const pending = (await send(a, 'POST', base + '/finance/adjustments', { ...payload, proof: await proof(a, 'wallet.adjust', payload) }, { 'idempotency-key': randomUUID() })).json().data
-    expect(pending.status).toBe('awaiting_approval')
-    const approvePayload = { id: pending.id, confirm: true }
-    expect((await send(a, 'POST', `${base}/finance/adjustments/${pending.id}/approve`, { confirm: true, proof: await proof(a, 'wallet.approve', approvePayload) })).statusCode).toBe(403)
-    expect((await send(b, 'POST', `${base}/finance/adjustments/${pending.id}/approve`, { confirm: true, proof: await proof(b, 'wallet.approve', approvePayload) })).json().data.afterRial).toBe(1000000)
+    const result = await send(a, 'POST', base + '/finance/adjustments', { ...payload, proof: await proof(a, 'wallet.adjust', payload) }, { 'idempotency-key': randomUUID() })
+    expect(result.statusCode, result.body).toBe(200)
+    expect(result.json().data.status).toBe('completed')
+    expect(result.json().data.afterRial).toBe(1000000)
   })
   it('protects existing seven-day commitments and serializes distinct concurrent debits', async () => {
     const a = await account(), customer = await account('user')

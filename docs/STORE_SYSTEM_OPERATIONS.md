@@ -5,8 +5,8 @@
 UI: `/admin/settings/{gateway,logs,backups,finance}`. API: identical routes under
 `/api/admin/settings` and `/api/v1/admin/settings`. Requires site authority.
 All active admins can access store settings. The API verifies active admin status
-rather than a fixed UUID allowlist. Sensitive mutations still require password
-and TOTP reauthentication, and high-risk changes use a distinct second admin.
+rather than a fixed UUID allowlist. The current active admin session grants access
+with no second password or TOTP challenge.
 
 Set secrets through the protected host environment/secret manager, never Git or
 `VITE_*`. Migration **0009** adds four tables; no balances or existing data are
@@ -22,7 +22,6 @@ SYSTEM_BACKUP_MAX_MB=64
 SYSTEM_BACKUP_MAX_TOTAL_MB=1024
 SYSTEM_BACKUP_RETENTION_DAYS=30
 SYSTEM_LOG_RETENTION_DAYS=30
-SYSTEM_DUAL_APPROVAL_RIAL=100000000
 ```
 
 Keep both keys, AUTH_SECRET, the instance ID, provider configuration, merchant
@@ -30,17 +29,12 @@ environment fallback and a compatible release independently backed up off-host.
 Changing external keys/configuration can make old backups unusable. No real
 keys, host settings, customer data or Production runtime were changed for this PR.
 
-The admin can enroll a step-up authenticator with password confirmation in the
-new panel. This protects administrative operations even when customer-login MFA
-is globally disabled. Existing MFA cannot be overwritten during setup; disabling
-it for an active admin also requires its current TOTP code. Google-only
-admins must first establish a password through the normal verified recovery flow.
-Lost management MFA requires a separately authorized operator recovery; login
-recovery codes are not an administrative step-up bypass.
-
-Each sensitive action requires password + TOTP and an explicit review. A grant is
-bound to actor, active session, action, canonical payload and current password/MFA
-version; it expires after five minutes and is consumed transactionally once.
+Store settings require an authenticated active admin session but no additional
+password prompt or TOTP enrollment. Sensitive action proofs are issued automatically
+per requested action and remain bound to the current session and exact payload.
+Each sensitive action uses a short-lived single-use grant bound to actor, current
+admin session, action, canonical payload and current account credential version;
+it expires after five minutes and is consumed transactionally once.
 Download grants expire after **60 seconds**. No proof/credential is put in URLs
 or browser storage. Backend role/MFA/payload checks are independent of the UI.
 
@@ -86,10 +80,9 @@ The legacy `/admin/wallets/:walletId/{credit,debit}` endpoints now require the s
 proof, exact user, reason/reference, confirmation and stable key; old weak payloads
 are intentionally rejected. There is no alternate timestamp-keyed credit path.
 
-Amounts at/above `SYSTEM_DUAL_APPROVAL_RIAL` remain unposted until a **different**
-authorized admin approves with their own step-up. Pending requests expire after
-24 hours. Approval rechecks ownership, funds and commitments; concurrent replay
-posts once. History shows target identity/wallet, request/reference, actor,
+All manual wallet adjustments complete directly for an authenticated active admin.
+Ownership, wallet commitments, input validation and idempotency still prevent
+invalid balances and repeated posting. History shows target identity/wallet, request/reference, actor,
 approver and actual before/after balances; these are transactionally audited.
 
 ## Logs
@@ -103,7 +96,7 @@ strings/headers are omitted from Pino request serialization. Timezone is display
 
 Filters cover time, severity, service, actor and action; search covers event/
 request IDs, with pagination/details. JSON exports are limited to 1,000 sanitized
-records, require step-up, and are audited; viewing logs/financial history is audited.
+records, use session-bound action proofs, and are audited; viewing logs and financial history is audited.
 Operational rows expire by the configured retention, cleaned in bounded batches.
 The mirror has a 100-write in-flight limit and skips maintenance; bursts/database
 outages can drop mirror events. Transactional financial/security audits are awaited
@@ -147,8 +140,8 @@ Rehearsal restores into a generated, isolated temporary DB, validates schema,
 financial/security fingerprints and wallet/ledger consistency, and drops that DB.
 The UI shows current/backup counts and the data-loss warning. A plan lasts 15 minutes;
 changed counts invalidate it. Restore requires `SYSTEM_RESTORE_ENABLED`, typed
-`RESTORE DATABASE`, fresh step-up and a separate admin's final confirmation within
-ten minutes; both approvers' active admin roles are rechecked before execution.
+`RESTORE DATABASE` and successful rehearsal. The initiating admin's active role
+is rechecked before execution; no second approval is needed.
 
 Restore automatically refuses financial/security/configuration drift or unresolved
 orders/payments/provider operations. It does **not** rewind a newer ledger and

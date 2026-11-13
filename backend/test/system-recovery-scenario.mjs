@@ -12,10 +12,10 @@ import { users, tickets } from './dist/db/schema.js'
 import { buildApp } from './dist/app.js'
 import { createLogger } from './dist/logger.js'
 import { hashPassword, createSession } from './dist/modules/auth/service.js'
-import { createTotpSecret, encryptTotpSecret, generateTotpCode } from './dist/modules/auth/totp.js'
+import { createTotpSecret, encryptTotpSecret } from './dist/modules/auth/totp.js'
 import { ensureDefaultWallet, creditWallet } from './dist/modules/wallets/service.js'
 import { issueAuthorization, digest } from './dist/modules/system/security.js'
-import { requestBackupJob, waitBackupJobs, getBackupJob, importBackup, requestRestore, approveRestore, recoverBackupJob, initializeBackupJobs } from './dist/modules/system/backups.js'
+import { requestBackupJob, waitBackupJobs, getBackupJob, importBackup, requestRestore, recoverBackupJob, initializeBackupJobs } from './dist/modules/system/backups.js'
 import { coordinationPool, sharedWriter } from './dist/modules/system/writer-gate.js'
 import { createCloudQueues, JOB_NAMES } from './dist/jobs/queue.js'
 import { createWorkers } from './dist/jobs/workers.js'
@@ -33,7 +33,7 @@ for (let index = 0; index < 3; index++) {
 let [a, b, customer] = accounts
 const wallet = await ensureDefaultWallet(db, customer.id)
 await creditWallet(db, customer.id, wallet.id, 100000, { idempotencyKey: 'fixture-opening-credit' })
-const authorize = async (actor, action, payload) => (await issueAuthorization(db, actor, action, payload, password, generateTotpCode(actor.secret))).proof
+const authorize = async (actor, action, payload) => (await issueAuthorization(db, actor, action, payload)).proof
 async function refreshSessions() { for (const actor of [a, b]) { const session = await createSession(db, actor.id, {}); actor.sessionId = session.sessionId; actor.token = session.token } }
 async function jobDone(id) {
   const deadline = Date.now() + 120000
@@ -75,8 +75,6 @@ try {
   assert.equal((await jobDone(rehearsal.id)).status, 'completed', JSON.stringify(await getBackupJob(rehearsal.id)))
   async function restoreAttempt() {
     const job = await requestRestore(db, a, rehearsal.id, await authorize(a, 'backup.restore', { rehearsalId: rehearsal.id, confirm: 'RESTORE DATABASE' }))
-    await assert.rejects(approveRestore(db, a, job.id, await authorize(a, 'backup.approve', { id: job.id, confirm: 'RESTORE DATABASE' })), /مدیر دوم/)
-    await approveRestore(db, b, job.id, await authorize(b, 'backup.approve', { id: job.id, confirm: 'RESTORE DATABASE' }))
     return jobDone(job.id)
   }
   // Simulate a lost success acknowledgement AFTER the primary restore commits.
