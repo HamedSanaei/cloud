@@ -288,10 +288,14 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
 
   app.post('/auth/2fa/disable', async (request) => {
     const auth = requireUser(request)
-    const input = parse(loginSchema.pick({ password: true }), request.body)
+    const input = parse(loginSchema.pick({ password: true }).extend({ code: otpCode.optional() }), request.body)
     const user = await db.query.users.findFirst({ where: (t) => eq(t.id, auth.id) })
     if (!user) throw new BadRequestError('کاربر یافت نشد')
     await verifyPrimaryCredentials(db, { email: user.email, password: input.password })
+    if (getConfig().SYSTEM_ADMIN_IDS.split(',').map(v => v.trim()).includes(user.id) && user.twoFactorEnabled &&
+        (!input.code || !user.totpSecretEncrypted || !verifyTotp(decryptTotpSecret(user.totpSecretEncrypted), input.code))) {
+      throw new ForbiddenError('برای غیرفعال کردن تأیید امنیتی مدیر سیستم، کد فعلی برنامه نیز الزامی است.')
+    }
     await db.update(users).set({ twoFactorEnabled: false, totpSecretEncrypted: null, recoveryCodesHash: null, updatedAt: new Date() }).where(eq(users.id, user.id))
     await writeAudit(db, { actorId: user.id, action: 'user.2fa_disabled' })
     return { data: { ok: true } }

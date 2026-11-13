@@ -829,6 +829,54 @@ export const settings = pgTable('settings', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
 
+// Immutable versions: pending payments keep their original fingerprint.
+export const gatewayCredentials = pgTable('gateway_credentials', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  fingerprint: varchar('fingerprint', { length: 64 }).notNull(),
+  encrypted: text('encrypted').notNull(),
+  suffix: varchar('suffix', { length: 4 }).notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('gateway_credentials_fingerprint_idx').on(t.fingerprint)])
+
+export const adminAuthorizations = pgTable('admin_authorizations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  actorId: uuid('actor_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  sessionId: uuid('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  action: varchar('action', { length: 60 }).notNull(),
+  payloadHash: varchar('payload_hash', { length: 64 }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+})
+
+export const adminAdjustments = pgTable('admin_adjustments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  actorId: uuid('actor_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  approvedBy: uuid('approved_by').references(() => users.id, { onDelete: 'restrict' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  walletId: uuid('wallet_id').notNull().references(() => wallets.id, { onDelete: 'restrict' }),
+  key: varchar('key', { length: 200 }).notNull(),
+  direction: varchar('direction', { length: 6 }).notNull(),
+  amountRial: bigint('amount_rial', { mode: 'number' }).notNull(),
+  reason: text('reason').notNull(),
+  reference: varchar('reference', { length: 120 }).notNull(),
+  status: varchar('status', { length: 20 }).notNull().default('awaiting_approval'),
+  beforeRial: bigint('before_rial', { mode: 'number' }),
+  afterRial: bigint('after_rial', { mode: 'number' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+}, t => [uniqueIndex('admin_adjustments_actor_key_idx').on(t.actorId, t.key), index('admin_adjustments_wallet_idx').on(t.walletId, t.createdAt)])
+
+export const systemEvents = pgTable('system_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  level: varchar('level', { length: 10 }).notNull(),
+  service: varchar('service', { length: 40 }).notNull(),
+  event: varchar('event', { length: 100 }).notNull(),
+  requestId: varchar('request_id', { length: 100 }),
+  metadata: jsonb('metadata'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [index('system_events_created_idx').on(t.createdAt)])
+
 // Referenced type used by subscriptions before servers is declared — TypeScript
 // ordering: servers is declared after subscriptions but the reference uses a
 // string callback, which is fine at runtime.

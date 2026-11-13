@@ -7,19 +7,14 @@ import { getNotifications, getWalletSummary } from '../../lib/endpoints'
 import { formatToman } from '../../lib/format'
 import { useAuth } from '../../auth/AuthContext'
 import { BRAND_NAME } from '../Brand'
+import { useTheme } from '../../hooks/useTheme'
 
 export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
-  const [dark, setDark] = useState(() => {
-    try {
-      return localStorage.getItem('cloud-server-theme') === 'dark'
-    } catch {
-      return false
-    }
-  })
+  const [dark, setDark] = useTheme()
   const searchRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
   const wallet = useApiQuery(getWalletSummary)
@@ -39,15 +34,6 @@ export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
     window.addEventListener('integration-changed', refresh)
     return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh); window.removeEventListener('integration-changed', refresh) }
   }, [refreshNotifications, refreshWallet])
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = dark ? 'dark' : 'light'
-    try {
-      localStorage.setItem('cloud-server-theme', dark ? 'dark' : 'light')
-    } catch {
-      // ignore storage errors
-    }
-  }, [dark])
 
   useEffect(() => {
     const closeMenus = (event: MouseEvent) => {

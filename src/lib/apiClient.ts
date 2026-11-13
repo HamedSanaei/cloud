@@ -18,6 +18,16 @@ function getAuthToken(): string {
   }
 }
 
+/** Binary uploads/downloads keep one-time proofs out of URLs and browser storage. */
+export async function systemBinary(path: string, options: RequestInit): Promise<Response> {
+  const token = getAuthToken()
+  const response = await fetch(getApiBaseUrl() + path, { ...options, credentials: 'include', signal: AbortSignal.timeout(120000), headers: {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}), 'Content-Type': 'application/octet-stream', ...options.headers,
+  } })
+  if (!response.ok) { const error = await response.json().catch(() => null); throw new ApiError(error?.message || 'انتقال فایل تکمیل نشد.', response.status) }
+  return response
+}
+
 export function setAuthToken(token: string): void {
   try {
     if (token) localStorage.setItem('cloud-api-token', token)

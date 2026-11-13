@@ -257,6 +257,9 @@ jobs:
           cache-from: type=gha,scope=cloud-api
           cache-to: type=gha,scope=cloud-api,mode=max
 
+      - name: Verify real encrypted backup, restore and recovery in isolation
+        run: node backend/test/system-recovery-smoke.mjs
+
       - name: Smoke-test backend image (health endpoints)
         run: |
           set -euo pipefail

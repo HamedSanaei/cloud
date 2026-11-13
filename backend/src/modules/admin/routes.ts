@@ -5,7 +5,8 @@ import type { AppContext } from '../../app.js'
 import { parse } from '../../http/validate.js'
 import { requireAdmin } from '../../http/auth.js'
 import { listAudit, writeAudit } from '../audit/service.js'
-import { creditWallet, debitWallet, listWallets } from '../wallets/service.js'
+import { listWallets } from '../wallets/service.js'
+import { adjustmentSchema, requestAdjustment } from '../system/finance.js'
 import { listFxRateHistory, setFxRate, getPricingRules, updatePricingRules } from '../pricing/service.js'
 import { listOffers, listSyncRuns, setLocationAvailability, setOfferEnabled, syncProviderCatalog } from '../catalog/service.js'
 import { getProvider } from '../providers/registry.js'
@@ -13,8 +14,6 @@ import { orders, providerProducts, providerOperations } from '../../db/schema.js
 import { ConflictError, NotFoundError } from '../../lib/errors.js'
 import { rialToToman } from '../../lib/money.js'
 import { resolveOperationByAdmin } from '../provisioning/handlers.js'
-
-const amountSchema = z.object({ amountRial: z.number().int().positive(), note: z.string().max(300).optional() })
 
 export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
   const { db, queues } = ctx
@@ -38,34 +37,13 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
     return { data: withWallets }
   })
 
-  app.post('/admin/wallets/:walletId/credit', async (request) => {
-    const admin = requireAdmin(request)
-    const { walletId } = parse(z.object({ walletId: z.string().uuid() }), request.params)
-    const input = parse(amountSchema, request.body)
-    const wallet = await db.query.wallets.findFirst({ where: (t) => eq(t.id, walletId) })
-    if (!wallet) throw new NotFoundError('کیف پول یافت نشد')
-    await creditWallet(db, wallet.userId, walletId, input.amountRial, {
-      type: 'manual_credit',
-      idempotencyKey: `admin-credit:${admin.sessionId}:${Date.now()}`,
-      description: input.note ?? 'اعتبار دستی توسط مدیر',
-      metadata: { adminId: admin.id },
-    })
-    return { data: { ok: true } }
-  })
-
-  app.post('/admin/wallets/:walletId/debit', async (request) => {
-    const admin = requireAdmin(request)
-    const { walletId } = parse(z.object({ walletId: z.string().uuid() }), request.params)
-    const input = parse(amountSchema, request.body)
-    const wallet = await db.query.wallets.findFirst({ where: (t) => eq(t.id, walletId) })
-    if (!wallet) throw new NotFoundError('کیف پول یافت نشد')
-    await debitWallet(db, wallet.userId, walletId, input.amountRial, {
-      type: 'manual_debit',
-      idempotencyKey: `admin-debit:${admin.sessionId}:${Date.now()}`,
-      description: input.note ?? 'برداشت دستی توسط مدیر',
-      metadata: { adminId: admin.id },
-    })
-    return { data: { ok: true } }
+  // Legacy URLs use the exact same authorization, ledger and approval controls;
+  // no timestamp-based key or weaker alternate financial mutation remains.
+  for (const direction of ['credit', 'debit'] as const) app.post(`/admin/wallets/:walletId/${direction}`, async request => {
+    const admin = requireAdmin(request), { walletId } = parse(z.object({ walletId: z.string().uuid() }), request.params)
+    const { proof, ...body } = parse(adjustmentSchema.omit({ direction: true, walletId: true }).extend({ proof: z.string().uuid() }), request.body)
+    const key = parse(z.string().min(8).max(200), request.headers['idempotency-key'])
+    return { data: await requestAdjustment(db, admin, { ...body, direction, walletId }, key, proof) }
   })
 
   app.get('/admin/fx-rates', async (request) => {

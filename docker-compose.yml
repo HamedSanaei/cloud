@@ -56,6 +56,7 @@ services:
       - SETGID
 
   cloud-api:
+    shm_size: 1gb
     image: ${API_IMAGE_SHA:?API_IMAGE_SHA must be set to a full GHCR image tag}
     container_name: tofan-cloud-api
     restart: unless-stopped
@@ -98,6 +99,17 @@ services:
       TABAPAY_ENABLED: ${TABAPAY_ENABLED:-false}
       TABAPAY_MERCHANT: ${TABAPAY_MERCHANT:-}
       TABAPAY_SANDBOX: ${TABAPAY_SANDBOX:-false}
+      SYSTEM_ADMIN_IDS: ${SYSTEM_ADMIN_IDS:-}
+      STORE_SECRET_KEY: ${STORE_SECRET_KEY:-}
+      SYSTEM_BACKUP_KEY: ${SYSTEM_BACKUP_KEY:-}
+      SYSTEM_INSTANCE_ID: ${SYSTEM_INSTANCE_ID:-}
+      SYSTEM_BACKUP_ENABLED: ${SYSTEM_BACKUP_ENABLED:-false}
+      SYSTEM_RESTORE_ENABLED: ${SYSTEM_RESTORE_ENABLED:-false}
+      SYSTEM_BACKUP_MAX_MB: ${SYSTEM_BACKUP_MAX_MB:-64}
+      SYSTEM_BACKUP_MAX_TOTAL_MB: ${SYSTEM_BACKUP_MAX_TOTAL_MB:-1024}
+      SYSTEM_BACKUP_RETENTION_DAYS: ${SYSTEM_BACKUP_RETENTION_DAYS:-30}
+      SYSTEM_LOG_RETENTION_DAYS: ${SYSTEM_LOG_RETENTION_DAYS:-30}
+      SYSTEM_DUAL_APPROVAL_RIAL: ${SYSTEM_DUAL_APPROVAL_RIAL:-100000000}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?GOOGLE_CLIENT_ID must be set}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?GOOGLE_CLIENT_SECRET must be set}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:?GOOGLE_REDIRECT_URI must be set}
@@ -109,6 +121,7 @@ services:
       RENEWAL_GRACE_DAYS: ${RENEWAL_GRACE_DAYS:-3}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
+      - system-data:/var/lib/parserver/system
       - type: bind
         source: ${CLOUD_CONFIG_FILE:-./configuration.toml}
         target: /etc/tofan-cloud/configuration.toml
@@ -160,6 +173,7 @@ services:
       RENEWAL_GRACE_DAYS: ${RENEWAL_GRACE_DAYS:-3}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
+      - system-data:/var/lib/parserver/system
       - type: bind
         source: ${CLOUD_CONFIG_FILE:-./configuration.toml}
         target: /etc/tofan-cloud/configuration.toml
@@ -241,6 +255,7 @@ services:
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
 
 volumes:
+  system-data:
   cloud-postgres-data:
   cloud-redis-data:
 

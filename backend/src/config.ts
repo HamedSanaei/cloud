@@ -4,6 +4,7 @@
  * Credentials must never be logged or exposed through API endpoints.
  */
 import { z } from 'zod'
+import { isAbsolute } from 'node:path'
 import { loadLocalEnvFiles } from './lib/env-loader.js'
 import { loadProviderConfig, type ProviderRuntimeConfig } from './lib/provider-config.js'
 export type { ProviderAccount, HetznerConfig, LeasewebConfig, AsiatechConfig } from './lib/provider-config.js'
@@ -100,6 +101,18 @@ const envSchema = z.object({
   TABAPAY_ENABLED: z.string().default('false').transform(v => v === 'true' || v === '1'),
   TABAPAY_MERCHANT: z.string().default(''),
   TABAPAY_SANDBOX: z.string().default('false').transform(v => v === 'true' || v === '1'),
+  SYSTEM_ADMIN_IDS: z.string().default(''),
+  STORE_SECRET_KEY: z.string().default(''),
+  SYSTEM_BACKUP_KEY: z.string().default(''),
+  SYSTEM_INSTANCE_ID: z.string().default(''),
+  SYSTEM_BACKUP_DIR: z.string().default('/var/lib/parserver/system'),
+  SYSTEM_BACKUP_ENABLED: z.string().default('false').transform(v => v === 'true'),
+  SYSTEM_RESTORE_ENABLED: z.string().default('false').transform(v => v === 'true'),
+  SYSTEM_BACKUP_MAX_MB: z.coerce.number().int().min(1).max(512).default(64),
+  SYSTEM_BACKUP_MAX_TOTAL_MB: z.coerce.number().int().min(64).max(102400).default(1024),
+  SYSTEM_BACKUP_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  SYSTEM_LOG_RETENTION_DAYS: z.coerce.number().int().min(7).max(365).default(30),
+  SYSTEM_DUAL_APPROVAL_RIAL: z.coerce.number().int().min(1000000).max(1000000000).default(100000000),
 })
 
 export type AppConfig = z.infer<typeof envSchema> & ProviderRuntimeConfig
@@ -121,6 +134,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (parsed.data.DATA_AUTHORITY === 'platform' && !parsed.data.PLATFORM_API_URL) {
     throw new Error('DATA_AUTHORITY=platform requires PLATFORM_API_URL')
   }
+  const system = parsed.data
+  if (system.SYSTEM_ADMIN_IDS.split(',').map(v => v.trim()).filter(Boolean).some(v => !z.uuid().safeParse(v).success)) throw new Error('SYSTEM_ADMIN_IDS must contain UUIDs only')
+  if (system.SYSTEM_RESTORE_ENABLED && !system.SYSTEM_BACKUP_ENABLED) throw new Error('Restore requires configured system backups')
+  if (system.SYSTEM_BACKUP_ENABLED && (!/^[a-f0-9]{64}$/i.test(system.STORE_SECRET_KEY) || !/^[a-f0-9]{64}$/i.test(system.SYSTEM_BACKUP_KEY) || !z.uuid().safeParse(system.SYSTEM_INSTANCE_ID).success || !isAbsolute(system.SYSTEM_BACKUP_DIR))) throw new Error('System backup encryption keys, instance UUID and absolute private directory must be configured')
   if (parsed.data.TABAPAY_ENABLED && (!z.string().uuid().safeParse(parsed.data.TABAPAY_MERCHANT).success ||
       ((parsed.data.NODE_ENV === 'production' || parsed.data.APP_ENV === 'staging') && (parsed.data.TABAPAY_SANDBOX || !parsed.data.FRONTEND_URL.startsWith('https://'))))) {
     throw new Error('Invalid TabaPay configuration: valid merchant and production HTTPS callback required; sandbox is forbidden in production/staging')
@@ -164,7 +181,7 @@ export function redactSecrets(input: string): string {
     c.PROVIDERS.asiatech.apiKey,
     c.SMTP_PASSWORD,
     c.PARSGREEN_SIGNATURE,
-    c.GOOGLE_CLIENT_SECRET, c.TABAPAY_MERCHANT,
+    c.GOOGLE_CLIENT_SECRET, c.TABAPAY_MERCHANT, c.STORE_SECRET_KEY, c.SYSTEM_BACKUP_KEY,
     ...Object.values(c.PROVIDERS).flatMap((provider) =>
       'accounts' in provider ? provider.accounts.flatMap((account) => [account.apiKey ?? '', account.apiToken ?? '']) : []),
   ].filter((secret) => secret.length > 0).sort((a, b) => b.length - a.length)

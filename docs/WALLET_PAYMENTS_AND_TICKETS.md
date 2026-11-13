@@ -66,8 +66,9 @@ with the issuer. POST acknowledges success only after the ledger commit.
 Payment row locking, ledger idempotency and a unique issuer reference prevent
 duplicate credit across callback replay, concurrent verification and distinct
 attempts. Audits cover intent creation and successful credit, in the same DB
-transactions. A changed merchant fingerprint blocks verification rather than
-silently attributing an old payment to new credentials.
+transactions. Encrypted credential versions are selected using the payment's
+frozen fingerprint; missing versions block verification instead of attributing
+an old payment to new credentials. See [store system operations](STORE_SYSTEM_OPERATIONS.md).
 
 ### Recovery
 

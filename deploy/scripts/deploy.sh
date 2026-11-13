@@ -93,6 +93,10 @@ API_HEALTH="http://127.0.0.1:${CLOUD_PORT}/api/health/ready"
 ENV_FILE="${COMPOSE_DIR}/.env"
 
 cleanup() {
+  [[ -z "${SYSTEM_GUARD_OVERRIDE:-}" || ! -f "$SYSTEM_GUARD_OVERRIDE" ]] || rm -f -- "$SYSTEM_GUARD_OVERRIDE"
+  if [[ -n "${SYSTEM_GUARD_CONTAINER:-}" ]]; then
+    docker rm -f "$SYSTEM_GUARD_CONTAINER" >/dev/null 2>&1 || true
+  fi
   [[ -z "$CANDIDATE" || ! -f "$CANDIDATE" ]] || rm -f -- "$CANDIDATE"
   [[ -z "$PREFLIGHT_LOG" || ! -f "$PREFLIGHT_LOG" ]] || rm -f -- "$PREFLIGHT_LOG"
   if [[ -n "$GPG_HOME" ]]; then
@@ -191,6 +195,13 @@ write_compose() {
     name: cloud-platform-production-bridge'
   fi
   tmp="$(mktemp "${COMPOSE_DIR}/.compose.XXXXXX")"
+  if [[ -z "$provider_mount_api" ]]; then
+    provider_mount_api=$'    volumes:\n      - system-data:/var/lib/parserver/system'
+    provider_mount_worker="$provider_mount_api"
+  else
+    provider_mount_api+=$'\n      - system-data:/var/lib/parserver/system'
+    provider_mount_worker+=$'\n      - system-data:/var/lib/parserver/system'
+  fi
   cat >"$tmp" <<YAML
 name: ${PROJECT}
 services:
@@ -226,6 +237,7 @@ services:
       - SETGID
 
   cloud-api:
+    shm_size: 1gb
     image: "${api_img}"
     container_name: ${API_CONTAINER}
     restart: unless-stopped
@@ -263,6 +275,17 @@ ${platform_net_api}
       TABAPAY_ENABLED: \${TABAPAY_ENABLED:-false}
       TABAPAY_MERCHANT: \${TABAPAY_MERCHANT:-}
       TABAPAY_SANDBOX: \${TABAPAY_SANDBOX:-false}
+      SYSTEM_ADMIN_IDS: \${SYSTEM_ADMIN_IDS:-}
+      STORE_SECRET_KEY: \${STORE_SECRET_KEY:-}
+      SYSTEM_BACKUP_KEY: \${SYSTEM_BACKUP_KEY:-}
+      SYSTEM_INSTANCE_ID: \${SYSTEM_INSTANCE_ID:-}
+      SYSTEM_BACKUP_ENABLED: \${SYSTEM_BACKUP_ENABLED:-false}
+      SYSTEM_RESTORE_ENABLED: \${SYSTEM_RESTORE_ENABLED:-false}
+      SYSTEM_BACKUP_MAX_MB: \${SYSTEM_BACKUP_MAX_MB:-64}
+      SYSTEM_BACKUP_MAX_TOTAL_MB: \${SYSTEM_BACKUP_MAX_TOTAL_MB:-1024}
+      SYSTEM_BACKUP_RETENTION_DAYS: \${SYSTEM_BACKUP_RETENTION_DAYS:-30}
+      SYSTEM_LOG_RETENTION_DAYS: \${SYSTEM_LOG_RETENTION_DAYS:-30}
+      SYSTEM_DUAL_APPROVAL_RIAL: \${SYSTEM_DUAL_APPROVAL_RIAL:-100000000}
       GOOGLE_CLIENT_ID: \${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: \${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: \${GOOGLE_REDIRECT_URI:-${PUBLIC_URL%/}/api/v1/auth/google/callback}
@@ -381,6 +404,7 @@ ${provider_mount_worker}
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
 
 volumes:
+  system-data:
   cloud-postgres-data:
   cloud-redis-data:
 
@@ -630,6 +654,25 @@ if [[ "$DEPLOY_SITE" != 1 ]]; then
   }
 fi
 # Source-specific preflight is deliberately read-only.
+SYSTEM_GUARD_CONTAINER="${PROJECT}-system-guard-${RELEASE_SHA:0:12}-$$"
+SYSTEM_GUARD_OVERRIDE="$(mktemp "${COMPOSE_DIR}/.guard.XXXXXX.yml")"
+# This one-off command only holds a database lock; it exposes no HTTP API.
+# Disable the API-only probe for this command, never for deployed API services.
+cat >"$SYSTEM_GUARD_OVERRIDE" <<'YAML'
+services:
+  cloud-api:
+    healthcheck:
+      disable: true
+YAML
+compose "$CANDIDATE" -f "$SYSTEM_GUARD_OVERRIDE" run -d --no-deps --name "$SYSTEM_GUARD_CONTAINER" cloud-api \
+  node dist/modules/system/deploy-guard.js >/dev/null
+guard_ready=0
+for ((attempt=0; attempt<30; attempt++)); do
+  if docker logs "$SYSTEM_GUARD_CONTAINER" 2>/dev/null | grep -q '^SYSTEM_DEPLOY_GUARD_READY$'; then guard_ready=1; break; fi
+  [[ "$(docker inspect --format '{{.State.Status}}' "$SYSTEM_GUARD_CONTAINER" 2>/dev/null)" == running ]] || break
+  sleep 1
+done
+[[ "$guard_ready" == 1 ]] || { die "System operation or unresolved Recovery blocks deployment; no services stopped"; exit 1; }
 if [[ "$DEPLOY_SITE" == 1 ]]; then
   compose "$CANDIDATE" run --rm --no-deps cloud-api node --input-type=module -e '
     import {loadConfig} from "./dist/config.js";
@@ -673,6 +716,7 @@ DB_HEAD_BEFORE="$(database_head "$CANDIDATE")"
 if [[ "$DB_HEAD_BEFORE" != base && ( ! "$DB_HEAD_BEFORE" =~ ^[0-9]+$ || "$DB_HEAD_BEFORE" -gt "$EXPECTED_DB_HEAD" ) ]]; then
   die "Database is newer than the candidate; refusing an application/schema downgrade"; exit 1
 fi
+[[ "$(docker inspect --format '{{.State.Running}}' "$SYSTEM_GUARD_CONTAINER" 2>/dev/null)" == true ]] || { die "Deployment system lock was lost; no services stopped"; exit 1; }
 UPDATING=1
 if [[ -f "$FINAL" ]]; then compose "$FINAL" stop -t 30 cloud-api cloud-worker; fi
 backup_database
