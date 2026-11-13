@@ -64,11 +64,12 @@ export function SystemSettingsLayout() {
       { to: 'gateway', label: 'درگاه‌ها', icon: CreditCard }, { to: 'logs', label: 'لاگ‌ها', icon: FileClock },
       { to: 'backups', label: 'پشتیبان‌گیری و بازیابی', icon: Database }, { to: 'finance', label: 'عملیات مالی کاربران', icon: WalletCards },
     ].map(({ to, label, icon: Icon }) => <NavLink key={to} to={to}><Icon size={19} />{label}</NavLink>)}</nav>
-    {capabilities.loading ? <p role="status">در حال بررسی دسترسی…</p> : capabilities.error ? <p role="alert">{capabilities.error}</p> : !capabilities.data?.allowed ? <Card><h2>دسترسی مدیریت مجاز نیست</h2><p>این بخش فقط برای حساب‌های مدیر فعال فروشگاه قابل استفاده است.</p></Card> : !capabilities.data.encryptionReady ? <Card><h2>کلید رمزگذاری آماده نیست</h2><p>اپراتور باید STORE_SECRET_KEY مستقل و پایدار را طبق راهنمای راهبری تنظیم کند. این کلید از پنل دریافت یا ساخته نمی‌شود.</p></Card> : !capabilities.data.mfaEnabled ? <MfaEnrollment onEnabled={capabilities.refetch} /> : <SecureActions><Outlet context={capabilities.data} /></SecureActions>}
+    {capabilities.loading ? <p role="status">در حال بررسی دسترسی…</p> : capabilities.error ? <p role="alert">{capabilities.error}</p> : !capabilities.data?.allowed ? <Card><h2>دسترسی مدیریت مجاز نیست</h2><p>این بخش فقط برای حساب‌های مدیر فعال فروشگاه قابل استفاده است.</p></Card> : !capabilities.data.mfaEnabled ? <MfaEnrollment onEnabled={capabilities.refetch} /> : <SecureActions>{!capabilities.data.encryptionReady ? <Card><h2>کلید رمزگذاری آماده نیست</h2><p>برای تغییر مرچنت TabaPay باید STORE_SECRET_KEY مستقل و پایدار در تنظیمات محافظت‌شده سرور ثبت شود. سایر بخش‌های مدیریتی قابل مشاهده و استفاده هستند و عملیات Backup نیز به تنظیمات مستقل خود نیاز دارد.</p></Card> : null}<Outlet context={capabilities.data} /></SecureActions>}
   </div>
 }
 interface Gateway { enabled: boolean; sandbox: boolean; configured: boolean; source: string; maskedMerchant: string; domain: string; callbackUrl: string; returnUrl: string; versions: Array<{ fingerprint: string; suffix: string; createdAt: string }> }
 export function SystemGateway() {
+  const capabilities = useOutletContext<Capabilities>()
   const query = useApiQuery(() => get<Gateway>('/gateway')), sensitive = useSensitive()
   const [merchant, setMerchant] = useState(''), [version, setVersion] = useState(''), [enabled, setEnabled] = useState<boolean | null>(null), [sandbox, setSandbox] = useState<boolean | null>(null)
   const [notice, setNotice] = useState('')
@@ -81,7 +82,7 @@ export function SystemGateway() {
       <Toggle label="فعال بودن درگاه برای پرداخت‌های جدید" checked={enabled ?? data.enabled} onChange={setEnabled} /><Toggle label="محیط آزمایشی (فقط توسعه)" checked={sandbox ?? data.sandbox} onChange={setSandbox} />
       <Input label="مرچنت جدید (اختیاری)" type="password" autoComplete="off" placeholder="UUID" value={merchant} onChange={e => { setMerchant(e.target.value.trim()); setVersion('') }} hint="خالی بماند تا اعتبارنامهٔ فعلی حفظ شود؛ مقدار کامل در GET برگردانده نمی‌شود." />
       <Select label="بازگشت به نسخهٔ قبلی" value={version} onChange={e => { setVersion(e.target.value); setMerchant('') }}><option value="">حفظ نسخهٔ فعلی</option>{data.versions.map(v => <option key={v.fingerprint} value={v.fingerprint}>••••{v.suffix} — {date(v.createdAt)}</option>)}</Select>
-      <Button type="submit">بازبینی و ثبت امن</Button>
+      <Button type="submit" disabled={!capabilities.encryptionReady}>بازبینی و ثبت امن</Button>
     </form></Card><Card><h2>بررسی اتصال و دامنه</h2><p>تعویض مرچنت، دامنهٔ تأییدشده نزد تاباپی را تغییر نمی‌دهد. پیام خطای مرچنت و عدم تطابق دامنه جداگانه ثبت می‌شود. نبود Referer در مرورگر نیز می‌تواند مانع نمایش فرم درگاه شود.</p>
       <Button variant="secondary" onClick={() => sensitive('gateway.diagnose', { confirm: true }, 'فقط بررسی دسترسی شبکه و تنظیمات؛ هیچ تراکنش مالی ساخته نمی‌شود.', async proof => { const result = await post<{ reachable: boolean; credential: string; message: string }>('/gateway/diagnose', { confirm: true, proof }); setNotice(`دسترسی شبکه: ${result.reachable ? 'برقرار' : 'ناموفق'}؛ قالب مرچنت: ${result.credential === 'invalid_format' ? 'نامعتبر' : 'معتبر، تأیید ارائه‌دهنده انجام نشده'}. ${result.message}`) })}>بررسی بدون تراکنش</Button>
       <p role="status">{notice}</p></Card></div>
