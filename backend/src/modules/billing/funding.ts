@@ -47,7 +47,7 @@ export async function loadFundingFleet(db: DbOrTx, userId: string, lockWallets =
   const ownedWallets = await (lockWallets ? walletQuery.for('update') : walletQuery)
   const ownedServers = await db.query.servers.findMany({ where: (t) => eq(t.userId, userId) })
   const operations = ownedServers.length ? await db.query.providerOperations.findMany({
-    where: (t) => and(eq(t.kind, 'server_action'), inArray(t.referenceId, ownedServers.map((server) => server.id)), inArray(t.status, ['pending', 'running', 'unknown'])),
+      where: (t) => and(inArray(t.kind, ['server_action', 'server_management']), inArray(t.referenceId, ownedServers.map((server) => server.id)), inArray(t.status, ['pending', 'running', 'unknown', 'needs_reconciliation'])),
   }) : []
   const billable = await db.select({ server: servers, subscription: subscriptions, walletId: orders.walletId })
     .from(servers)
@@ -58,6 +58,7 @@ export async function loadFundingFleet(db: DbOrTx, userId: string, lockWallets =
   const groups = new Map<string, FundingGroup>()
   const prepaid: FundingFleet['prepaid'] = []
   for (const row of billable) {
+    if (row.server.terminationState && row.server.terminationState !== 'delete_failed') continue
     const walletId = row.walletId ?? fallback?.id ?? null
     const wallet = ownedWallets.find((item) => item.id === walletId)
     if (row.subscription.billingInterval !== 'HOURLY') {
@@ -95,7 +96,7 @@ export function serverPowerPolicy(server: ServerRecord, fleet: FundingFleet): Se
   const pendingAction = operation?.action === 'power_on' || operation?.action === 'power_off' || operation?.action === 'reboot' ? operation.action : null
   const funding = fundingFor(fleet, server.id)
   const sufficient = !funding || funding.sufficient
-  const ready = !!server.providerServerId && !pendingAction
+  const ready = !!server.providerServerId && !operation && !server.terminatedAt && (!server.terminationState || server.terminationState === 'delete_failed')
   return {
     canPowerOn: ready && server.status === 'suspended' && sufficient,
     canPowerOff: ready && server.status === 'active',

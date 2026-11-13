@@ -3,6 +3,7 @@ import { Redis } from 'ioredis'
 import { getConfig } from '../config.js'
 import { createLogger } from '../logger.js'
 import { startupFailure } from '../lib/startup.js'
+import type { ManagementAction } from '../modules/providers/customer.interface.js'
 
 export const JOB_NAMES = {
   CATALOG_SYNC: 'catalog.sync',
@@ -27,7 +28,7 @@ export interface CatalogSyncJobData {
 export interface ServerActionJobData {
   operationId: string
   serverId: string
-  action: 'power_on' | 'power_off' | 'reboot'
+  action: ManagementAction
 }
 
 export interface ServerSyncJobData {

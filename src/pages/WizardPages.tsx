@@ -19,6 +19,7 @@ import { Stepper } from '../components/ui/Stepper'
 import { useToast } from '../components/ui/Toast'
 import { isApiConfigured } from '../lib/apiClient'
 import { checkDomainAvailability, createServer, getOfferImages, getStorefrontCatalog, listWallets, registerDomain } from '../lib/endpoints'
+import { claimLifecycleNotice, rememberAcceptedServer } from '../lib/serverLifecycle'
 import { formatFaNumber } from '../lib/format'
 import { useApiQuery } from '../hooks/useApiQuery'
 import type { BillingPeriod } from '../lib/types'
@@ -104,8 +105,11 @@ export function CreateServerPage() {
     submitLock.current = true
     setSubmitError(null)
     try {
-      await createServer({ name: name.trim(), offerId: offer.id, os: selectedOs.id, walletId: wallet.id, billingPeriod, pricing: offer.canonicalPricing, idempotencyKey: purchaseKey.current })
-      showToast('سرور با موفقیت به صف ساخت اضافه شد.')
+      const result = await createServer({ name: name.trim(), offerId: offer.id, os: selectedOs.id, walletId: wallet.id, billingPeriod, pricing: offer.canonicalPricing, idempotencyKey: purchaseKey.current })
+      const accepted = { ...result, name: result.name || name.trim(), datacenter: result.datacenter || location, os: result.os || selectedOs.label || selectedOs.id, serverType: result.serverType || offer.name }
+      rememberAcceptedServer(user?.id ?? '', accepted)
+      await claimLifecycleNotice(user?.id ?? '', accepted.tracking ? { ...accepted, tracking: { ...accepted.tracking, state: 'queued' } } : accepted)
+      showToast('درخواست ساخت سرور ثبت شد؛ سرور در حال آماده‌سازی است.', 'info', `accepted:${result.tracking?.reference ?? result.id}`)
       clearCheckoutDraft(user?.id)
       navigate('/servers')
     } catch (error) {

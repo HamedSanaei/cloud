@@ -26,6 +26,7 @@
  * requires an operator decision.
  */
 
+import type { CustomerProvider } from './customer.interface.js'
 export type ProviderCapability =
   | 'catalog'
   | 'provision'
@@ -195,6 +196,7 @@ export class NotSupportedError extends Error {
 }
 
 export interface CloudProvider {
+  readonly customer?: CustomerProvider
   readonly id: string
   readonly name: string
   readonly capabilities: ProviderCapability[]

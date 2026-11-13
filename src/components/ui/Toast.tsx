@@ -1,46 +1,25 @@
-import { CheckCircle2, X } from 'lucide-react'
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
-
-interface ToastItem {
-  id: number
-  message: string
-}
+import { createContext, useCallback, useContext, useMemo, type ReactNode } from 'react'
+import { toast, ToastContainer, type TypeOptions } from 'react-toastify'
+import 'react-toastify/dist/ReactToastify.css'
 
 interface ToastContextValue {
-  showToast: (message: string) => void
+  showToast: (message: string, type?: TypeOptions, id?: string) => void
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null)
 
 export function ToastProvider({ children }: { children: ReactNode }) {
-  const [toasts, setToasts] = useState<ToastItem[]>([])
-
-  const dismiss = useCallback((id: number) => {
-    setToasts((items) => items.filter((item) => item.id !== id))
+  const showToast = useCallback((message: string, type: TypeOptions = 'info', id?: string) => {
+    const emit = type === 'success' ? toast.success : type === 'error' ? toast.error : type === 'warning' ? toast.warn : toast.info
+    emit(message, { toastId: id, role: type === 'error' ? 'alert' : 'status' })
   }, [])
-
-  const showToast = useCallback((message: string) => {
-    const id = Date.now()
-    setToasts((items) => [...items, { id, message }])
-    window.setTimeout(() => dismiss(id), 3500)
-  }, [dismiss])
 
   const value = useMemo(() => ({ showToast }), [showToast])
 
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="toast-region" aria-live="polite">
-        {toasts.map((toast) => (
-          <div className="toast" key={toast.id}>
-            <CheckCircle2 size={20} />
-            <span>{toast.message}</span>
-            <button type="button" onClick={() => dismiss(toast.id)} aria-label="بستن پیام">
-              <X size={17} />
-            </button>
-          </div>
-        ))}
-      </div>
+      <ToastContainer rtl position="top-center" autoClose={5000} limit={4} pauseOnFocusLoss closeOnClick={false} />
     </ToastContext.Provider>
   )
 }

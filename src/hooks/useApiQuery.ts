@@ -23,6 +23,11 @@ export function useApiQuery<T>(fetcher: () => Promise<T>, deps: unknown[] = []):
   }, [])
 
   const refetch = useCallback(() => setNonce((value) => value + 1), [])
+  useEffect(() => {
+    window.addEventListener('server-lifecycle-changed', refetch)
+    window.addEventListener('server-order-accepted', refetch)
+    return () => { window.removeEventListener('server-lifecycle-changed', refetch); window.removeEventListener('server-order-accepted', refetch) }
+  }, [refetch])
 
   useEffect(() => {
     let cancelled = false

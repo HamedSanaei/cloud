@@ -681,6 +681,8 @@ export const servers = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     activatedAt: timestamp('activated_at', { withTimezone: true }),
     terminatedAt: timestamp('terminated_at', { withTimezone: true }),
+    terminationState: varchar('termination_state', { length: 30 }),
+    terminationRequestedAt: timestamp('termination_requested_at', { withTimezone: true }),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
   },
   (t) => [
@@ -724,6 +726,21 @@ export const providerOperations = pgTable(
   },
   (t) => [uniqueIndex('provider_ops_business_key_idx').on(t.businessKey), index('provider_ops_ref_idx').on(t.referenceType, t.referenceId)],
 )
+
+/** Temporary encrypted provider output, bound to the requesting login session. */
+export const serverSecrets = pgTable('server_secrets', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  serverId: uuid('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  sessionId: uuid('session_id').notNull(),
+  operationId: uuid('operation_id').references(() => providerOperations.id, { onDelete: 'cascade' }),
+  kind: varchar('kind', { length: 20 }).notNull(),
+  encrypted: text('encrypted'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  claimedAt: timestamp('claimed_at', { withTimezone: true }),
+  acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('server_secrets_operation_idx').on(t.operationId).where(sql`${t.operationId} IS NOT NULL`), index('server_secrets_expiry_idx').on(t.expiresAt)])
 
 // ---------------------------------------------------------------------------
 // Idempotency keys (generic HTTP idempotency, e.g. Idempotency-Key header)

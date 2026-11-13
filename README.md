@@ -86,6 +86,8 @@ npm run dev:worker   # worker (ترمینال دوم)
 - [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) — ورود گوگل، OTP ایمیل و ParsGreen، بازیابی رمز و 2FA
 - [docs/LEASEWEB.md](docs/LEASEWEB.md) — یکپارچه‌سازی Leaseweb، حالت mock/live و امنیت خرید واقعی
 - [docs/BILLING.md](docs/BILLING.md) — کیف پول، دفتر کل، فاکتور، دوره‌های اشتراک و قیمت‌گذاری
+- [docs/CUSTOMER_SERVER_MANAGEMENT.md](docs/CUSTOMER_SERVER_MANAGEMENT.md) — نگاشت Penpot، ساخت و مدیریت سرور، قرارداد API و سیاست حذف/صورتحساب
+- [docs/SERVER_MANAGEMENT_VERIFICATION.md](docs/SERVER_MANAGEMENT_VERIFICATION.md) — نتایج آزمون‌های محلی و بررسی نمای دسکتاپ/موبایل
 
 ## استقرار Production (Deployment)
 
