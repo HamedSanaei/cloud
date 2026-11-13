@@ -11,8 +11,7 @@ import { ForbiddenError, UnauthorizedError } from '../../lib/errors.js'
 import { isSiteAuthority } from '../integration/authority.js'
 import { writeAudit } from '../audit/service.js'
 import { issueAuthorization, consumeAuthorization, systemAdmin } from './security.js'
-import { verifyPassword, authenticateToken } from '../auth/service.js'
-import { createTotpSecret, createRecoveryCodes, hashRecoveryCode, encryptTotpSecret, decryptTotpSecret, verifyTotp } from '../auth/totp.js'
+import { authenticateToken } from '../auth/service.js'
 import { safeMetadata } from './events.js'
 import { diagnoseGateway, gatewayStatus, updateGateway } from './gateway.js'
 import { adjustmentSchema, approveAdjustment, findFinancialUser, requestAdjustment } from './finance.js'
@@ -63,37 +62,13 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     const c = getConfig(), user = requireAdmin(request)
     let allowed = true
     try { systemAdmin(user) } catch { allowed = false }
-    const account = allowed ? await db.query.users.findFirst({ where: t => eq(t.id, user.id) }) : null
-    return { data: { allowed, mfaEnabled: !!account?.twoFactorEnabled, encryptionReady: /^[a-f0-9]{64}$/i.test(c.STORE_SECRET_KEY), backupsEnabled: c.SYSTEM_BACKUP_ENABLED,
+    return { data: { allowed, encryptionReady: /^[a-f0-9]{64}$/i.test(c.STORE_SECRET_KEY), backupsEnabled: c.SYSTEM_BACKUP_ENABLED,
       restoreEnabled: c.SYSTEM_RESTORE_ENABLED, maxUploadBytes: max, dualApprovalRial: c.SYSTEM_DUAL_APPROVAL_RIAL,
-      requirements: ['STORE_SECRET_KEY', 'SYSTEM_BACKUP_KEY', 'SYSTEM_INSTANCE_ID', 'SYSTEM_BACKUP_ENABLED', 'TOTP'] } }
-  })
-  // Admin step-up MFA is independent of the optional customer-login toggle.
-  // Password is mandatory for bootstrap; an already enabled key cannot be replaced.
-  app.post('/mfa/setup', { config: { rateLimit: { max: 3, timeWindow: '10 minutes' } } }, async request => {
-    const { password } = parse(z.object({ password: z.string().min(1).max(1024) }).strict(), request.body), admin = requireAdmin(request)
-    return { data: await db.transaction(async tx => {
-      const [row] = await tx.select().from(users).where(eq(users.id, admin.id)).for('update')
-      if (!row || row.twoFactorEnabled || !await verifyPassword(row.passwordHash, password)) throw new ForbiddenError('رمز عبور نامعتبر است یا کلید امنیتی قبلاً فعال شده است.')
-      const secret = createTotpSecret(), recoveryCodes = createRecoveryCodes()
-      await tx.update(users).set({ totpSecretEncrypted: encryptTotpSecret(secret), recoveryCodesHash: recoveryCodes.map(hashRecoveryCode), updatedAt: new Date() }).where(eq(users.id, admin.id))
-      await writeAudit(tx, { actorId: admin.id, action: 'system.mfa_setup_started' })
-      return { secret, recoveryCodes }
-    }) }
-  })
-  app.post('/mfa/enable', { config: { rateLimit: { max: 5, timeWindow: '10 minutes' } } }, async request => {
-    const { password, code } = parse(z.object({ password: z.string().min(1).max(1024), code: z.string().regex(/^\d{6}$/) }).strict(), request.body), admin = requireAdmin(request)
-    await db.transaction(async tx => {
-      const [row] = await tx.select().from(users).where(eq(users.id, admin.id)).for('update')
-      if (!row || row.twoFactorEnabled || !row.totpSecretEncrypted || !await verifyPassword(row.passwordHash, password) || !verifyTotp(decryptTotpSecret(row.totpSecretEncrypted), code)) throw new ForbiddenError('رمز عبور یا کد برنامهٔ احراز هویت معتبر نیست.')
-      await tx.update(users).set({ twoFactorEnabled: true, updatedAt: new Date() }).where(eq(users.id, admin.id))
-      await writeAudit(tx, { actorId: admin.id, action: 'system.mfa_enabled' })
-    })
-    return { data: { enabled: true } }
+      requirements: ['STORE_SECRET_KEY', 'SYSTEM_BACKUP_KEY', 'SYSTEM_INSTANCE_ID', 'SYSTEM_BACKUP_ENABLED'] } }
   })
   app.post('/authorize', { config: { rateLimit: { max: 5, timeWindow: '10 minutes' } } }, async request => {
-    const input = parse(z.object({ action: actions, payload: z.unknown(), password: z.string().min(1).max(1024), code: z.string().regex(/^\d{6}$/) }).strict(), request.body)
-    return { data: await issueAuthorization(db, requireAdmin(request), input.action, input.payload, input.password, input.code) }
+    const input = parse(z.object({ action: actions, payload: z.unknown() }).strict(), request.body)
+    return { data: await issueAuthorization(db, requireAdmin(request), input.action, input.payload) }
   })
   app.get('/gateway', async () => ({ data: await gatewayStatus(db) }))
   app.post('/gateway', { config: { rateLimit: { max: 10, timeWindow: '10 minutes' } } }, async request => {

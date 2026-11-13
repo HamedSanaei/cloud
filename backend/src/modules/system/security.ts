@@ -4,8 +4,6 @@ import type { DbClient, DbOrTx } from '../../db/index.js'
 import { adminAuthorizations, users } from '../../db/schema.js'
 import { getConfig } from '../../config.js'
 import type { SessionUser } from '../auth/service.js'
-import { verifyPassword } from '../auth/service.js'
-import { decryptTotpSecret, verifyTotp } from '../auth/totp.js'
 import { ForbiddenError, ValidationError } from '../../lib/errors.js'
 import { writeAudit } from '../audit/service.js'
 
@@ -35,22 +33,19 @@ export function unseal(value: Buffer, aad: string, key = secretKey()): Buffer {
   decipher.setAAD(Buffer.from(aad)); decipher.setAuthTag(value.subarray(-16))
   return Buffer.concat([decipher.update(value.subarray(12, -16)), decipher.final()])
 }
-export async function issueAuthorization(db: DbClient, user: SessionUser, action: string, payload: unknown, password: string, code: string) {
+export async function issueAuthorization(db: DbClient, user: SessionUser, action: string, payload: unknown) {
   systemAdmin(user)
   const row = await db.query.users.findFirst({ where: t => eq(t.id, user.id) })
-  if (!row?.twoFactorEnabled || !row.totpSecretEncrypted || !await verifyPassword(row.passwordHash, password) || !verifyTotp(decryptTotpSecret(row.totpSecretEncrypted), code)) {
-    await writeAudit(db, { actorId: user.id, action: 'system.step_up_denied' })
-    throw new ForbiddenError('رمز عبور و کد برنامهٔ احراز هویت معتبر لازم است. ابتدا احراز هویت دومرحله‌ای را فعال کنید.')
-  }
+  if (!row || row.role !== 'admin' || row.status !== 'active') throw new ForbiddenError('دسترسی مدیر فعال لازم است.')
   const [grant] = await db.insert(adminAuthorizations).values({ actorId: user.id, sessionId: user.sessionId, action,
     payloadHash: authorizationDigest(payload, row), expiresAt: new Date(Date.now() + (action === 'backup.download' ? 60000 : 5 * 60000)) }).returning()
-  await writeAudit(db, { actorId: user.id, action: 'system.step_up_granted', targetType: 'authorization', targetId: grant!.id, metadata: { operation: action } })
+  await writeAudit(db, { actorId: user.id, action: 'system.action_granted', targetType: 'authorization', targetId: grant!.id, metadata: { operation: action } })
   return { proof: grant!.id, expiresAt: grant!.expiresAt }
 }
 export async function consumeAuthorization(tx: DbOrTx, user: SessionUser, proof: string, action: string, payload: unknown) {
   systemAdmin(user)
   const [account] = await tx.select().from(users).where(eq(users.id, user.id)).for('share')
-  if (!account || account.role !== 'admin' || account.status !== 'active' || !account.twoFactorEnabled) throw new ForbiddenError('دسترسی یا تأیید امنیتی مدیر تغییر کرده است.')
+  if (!account || account.role !== 'admin' || account.status !== 'active') throw new ForbiddenError('دسترسی یا تأیید امنیتی مدیر تغییر کرده است.')
   const [grant] = await tx.select().from(adminAuthorizations).where(eq(adminAuthorizations.id, proof)).for('update')
   if (!grant || grant.actorId !== user.id || grant.sessionId !== user.sessionId || grant.action !== action || grant.payloadHash !== authorizationDigest(payload, account) || grant.consumedAt || grant.expiresAt.getTime() < Date.now()) {
     throw new ForbiddenError('تأیید امنیتی منقضی شده، مصرف شده یا با این عملیات مطابقت ندارد.')

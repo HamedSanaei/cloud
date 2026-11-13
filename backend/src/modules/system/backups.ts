@@ -188,8 +188,8 @@ async function run(db: DbClient, job: BackupJob) {
       const live = await currentSnapshot(client), original = await decodeArtifact(candidate.sourceId!)
       if (live.financialHash !== original.header.financialHash || live.schemaHead !== original.header.schemaHead || live.pgMajor !== original.header.pgMajor) throw new ConflictError('دفتر مالی، سفارش‌ها، schema یا اعتبارنامه‌ها از زمان Backup تغییر کرده‌اند؛ تطبیق و بازیابی آفلاین لازم است.')
       if (JSON.stringify(live.counts) !== JSON.stringify(candidate.snapshot?.counts)) throw new ConflictError('خلاصهٔ تغییرات از زمان آزمایش بازیابی عوض شده است؛ آزمایش تازه و تأیید دوباره لازم است.')
-      const administrators = await client.query("select id from users where id=any($1::uuid[]) and role='admin' and status='active'", [[job.actorId, job.approvedBy]])
-      if (administrators.rowCount !== 2 || job.actorId === job.approvedBy) throw new ForbiddenError('دسترسی یکی از مدیران تأییدکننده لغو شده است.')
+      const administrator = await client.query("select id from users where id=$1::uuid and role='admin' and status='active'", [job.actorId])
+      if (administrator.rowCount !== 1) throw new ForbiddenError('مدیر درخواست‌کننده باید فعال باشد.')
       const active = await client.query("select 1 from wallet_payments where status in ('creating','pending','unknown') union all select 1 from provider_operations where status in ('pending','running','unknown','needs_reconciliation') union all select 1 from orders where status::text in ('pending_payment','paid','queued','provisioning','requires_review') limit 1")
       if (active.rowCount) throw new ConflictError('پرداخت یا عملیات سرویس‌دهندهٔ تعیین‌تکلیف‌نشده مانع Restore است.')
       const auditDelta = (await client.query('select * from audit_logs where id > $1 order by id limit 50001', [original.header.auditHead])).rows
@@ -262,9 +262,11 @@ export async function requestRestore(db: DbClient, user: SessionUser, rehearsalI
   if (!configured().SYSTEM_RESTORE_ENABLED) throw new ForbiddenError('Restore روی این میزبان توسط اپراتور فعال نشده است.')
   const candidate = await getBackupJob(rehearsalId)
   if (candidate.kind !== 'rehearsal' || candidate.status !== 'completed') throw new ConflictError('ابتدا بازیابی آزمایشی موفق انجام دهید.')
-  const job = pending(randomUUID(), 'restore', user.id, rehearsalId); job.status = 'awaiting_approval'; job.expiresAt = new Date(Date.now() + 10 * 60000).toISOString()
+  const job = pending(randomUUID(), 'restore', user.id, rehearsalId)
   await db.transaction(async tx => { await consumeAuthorization(tx, user, proof, 'backup.restore', { rehearsalId, confirm: 'RESTORE DATABASE' }); await writeAudit(tx, { actorId: user.id, action: 'system.restore_requested', targetType: 'system_operation', targetId: job.id }) })
-  await save(job); return job
+  await save(job)
+  setImmediate(() => schedule(db, job))
+  return job
 }
 export async function approveRestore(db: DbClient, user: SessionUser, id: string, proof: string) {
   configured()
@@ -272,7 +274,7 @@ export async function approveRestore(db: DbClient, user: SessionUser, id: string
   try {
     await exclusive(client, operationsLock)
     const job = await getBackupJob(id)
-    if (!getConfig().SYSTEM_RESTORE_ENABLED || job.kind !== 'restore' || job.status !== 'awaiting_approval' || !job.expiresAt || Date.parse(job.expiresAt) < Date.now() || job.actorId === user.id) throw new ForbiddenError('درخواست معتبر، فعال و تأیید مدیر دوم لازم است.')
+    if (!getConfig().SYSTEM_RESTORE_ENABLED || job.kind !== 'restore' || job.status !== 'awaiting_approval' || !job.expiresAt || Date.parse(job.expiresAt) < Date.now()) throw new ForbiddenError('درخواست بازیابی معتبر یا فعال نیست.')
     await db.transaction(async tx => { await consumeAuthorization(tx, user, proof, 'backup.approve', { id, confirm: 'RESTORE DATABASE' }); await writeAudit(tx, { actorId: user.id, action: 'system.restore_approved', targetType: 'system_operation', targetId: id }) })
     job.approvedBy = user.id; job.status = 'queued'; await save(job)
     // Start after this HTTP request releases its shared writer gate.

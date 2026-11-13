@@ -9,7 +9,6 @@ import { walletCommitments } from '../billing/creation-funding.js'
 import { writeAudit } from '../audit/service.js'
 import { consumeAuthorization, canonical, systemAdmin } from './security.js'
 import { ConflictError, ForbiddenError, InsufficientFundsError, NotFoundError, ValidationError } from '../../lib/errors.js'
-import { getConfig } from '../../config.js'
 import { isSiteAuthority } from '../integration/authority.js'
 
 export const adjustmentSchema = z.object({ userId: z.string().uuid(), walletId: z.string().uuid(), direction: z.enum(['credit', 'debit']),
@@ -58,7 +57,7 @@ export async function requestAdjustment(db: DbClient, user: SessionUser, input: 
     if (!wallet) throw new NotFoundError('هویت کاربر و کیف پول مطابقت ندارد.')
     const [row] = await tx.insert(adminAdjustments).values({ ...input, actorId: user.id, key }).returning()
     await writeAudit(tx, { actorId: user.id, action: 'system.adjustment_requested', targetType: 'adjustment', targetId: row!.id, metadata: { amountRial: input.amountRial, walletId: input.walletId, direction: input.direction } })
-    return input.amountRial >= getConfig().SYSTEM_DUAL_APPROVAL_RIAL ? row! : execute(tx, row!, user.id)
+    return execute(tx, row!, user.id)
   })
 }
 export async function approveAdjustment(db: DbClient, user: SessionUser, id: string, proof: string) {
@@ -67,7 +66,6 @@ export async function approveAdjustment(db: DbClient, user: SessionUser, id: str
     await consumeAuthorization(tx, user, proof, 'wallet.approve', { id, confirm: true })
     const [row] = await tx.select().from(adminAdjustments).where(eq(adminAdjustments.id, id)).for('update')
     if (!row) throw new NotFoundError()
-    if (row.actorId === user.id) throw new ForbiddenError('تأیید تعدیل بزرگ باید توسط مدیر دیگری انجام شود.')
     if (row.status === 'completed') return row
     if (row.createdAt.getTime() < Date.now() - 86400000) throw new ConflictError('درخواست تعدیل منقضی شده است؛ درخواست جدید ثبت کنید.')
     return execute(tx, row, user.id)
