@@ -7,7 +7,7 @@ import {
   RefreshCw,
   ServerCog,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { Button, LinkButton } from '../components/ui/Button'
 import { Card, SectionHeading } from '../components/ui/Card'
 import { FilterPanel } from '../components/ui/FilterPanel'
@@ -22,6 +22,7 @@ import { isApiConfigured } from '../lib/apiClient'
 import {
   buyIp,
   buyTrafficPackage,
+  getInfrastructureCapabilities,
   listDomainOrders,
   listDomains,
   listIps,
@@ -40,12 +41,32 @@ import { serverRowKey } from '../lib/serverLifecycle'
 
 type ResourceKind = 'server' | 'ip'
 
+function useInfrastructurePurchase(service: 'ips' | 'trafficPackages' | null) {
+  const query = useApiQuery(() => service ? getInfrastructureCapabilities() : Promise.resolve(null), [service])
+  const messageId = useId()
+  const capability = service ? query.data?.[service] : undefined
+  const enabled = !query.loading && !query.error && capability?.enabled === true
+  const name = service === 'ips' ? 'آی‌پی اختصاصی' : 'بسته ترافیک'
+  const message = query.loading ? `در حال بررسی امکان خرید ${name}…`
+    : query.error ? `بررسی امکان خرید ${name} ناموفق بود؛ تا تأیید وضعیت، خرید در دسترس نیست.`
+      : enabled ? '' : capability?.reason || `خرید ${name} فعلاً در دسترس نیست.`
+  return { enabled, message, messageId, loading: query.loading, refetch: query.refetch }
+}
+
+function PurchaseAvailability({ purchase }: { purchase: ReturnType<typeof useInfrastructurePurchase> }) {
+  if (!purchase.message) return null
+  return <div className="info-box infrastructure-purchase-availability"><span id={purchase.messageId} role="status">{purchase.message}</span>
+    {!purchase.loading && <Button variant="secondary" size="sm" onClick={purchase.refetch}>بررسی دوبارهٔ امکان خرید</Button>}
+  </div>
+}
+
 function ResourceList({ kind }: { kind: ResourceKind }) {
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
   const [secondary, setSecondary] = useState('all')
   const { showToast } = useToast()
   const server = kind === 'server'
+  const purchase = useInfrastructurePurchase(server ? null : 'ips')
   const [buying, setBuying] = useState(false)
   const [managedId, setManagedId] = useState<string | null>(null)
   const integration = useApiQuery(getIntegrationStatus)
@@ -80,10 +101,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
   }, [server, ips.data, query, status, secondary])
 
   const handleBuyIp = async () => {
-    if (!isApiConfigured()) {
-      showToast('درخواست خرید آی‌پی ثبت آزمایشی شد.')
-      return
-    }
+    if (!purchase.enabled || buying) return
     setBuying(true)
     try {
       await buyIp()
@@ -104,11 +122,12 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
         icon={server ? <HardDrive /> : <Globe2 />}
         actions={
           <>
-            {server ? <LinkButton to="/servers/create" icon={<Plus size={18} />}>ایجاد سرور جدید</LinkButton> : <Button icon={<Plus size={18} />} disabled={buying} onClick={handleBuyIp}>{buying ? 'در حال ثبت...' : 'خرید آی‌پی'}</Button>}
-            <Button variant="secondary" icon={<RefreshCw size={17} />} onClick={() => active.refetch()}>بروزرسانی</Button>
+            {server ? <LinkButton to="/servers/create" icon={<Plus size={18} />}>ایجاد سرور جدید</LinkButton> : <Button icon={<Plus size={18} />} disabled={buying || !purchase.enabled} aria-describedby={purchase.message ? purchase.messageId : undefined} onClick={handleBuyIp}>{buying ? 'در حال ثبت...' : 'خرید آی‌پی'}</Button>}
+            <Button variant="secondary" icon={<RefreshCw size={17} />} onClick={() => { active.refetch(); if (!server) purchase.refetch() }}>بروزرسانی</Button>
           </>
         }
       />
+      {!server && <PurchaseAvailability purchase={purchase} />}
       <FilterPanel query={query} onQueryChange={setQuery} placeholder={server ? 'جستجو در سرورها...' : 'جستجو در آی‌پی، سرور یا دیتاسنتر...'} onReset={() => { setQuery(''); setStatus('all'); setSecondary('all') }}>
         <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="وضعیت"><option value="all">همه وضعیت‌ها</option><option value="inactive">غیرفعال</option><option value="active">فعال</option>{!server ? <option value="reserved">رزرو شده</option> : null}</Select>
         <Select value={secondary} onChange={(event) => setSecondary(event.target.value)} aria-label={server ? 'دیتاسنتر' : 'نوع آی‌پی'}>
@@ -155,7 +174,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
             icon={Globe2}
             title="آی‌پی‌ای یافت نشد"
             description={query ? 'عبارت جستجو یا فیلترها را تغییر دهید.' : 'آی‌پی‌های خریداری‌شده و وضعیت اتصال آن‌ها اینجا نمایش داده می‌شود.'}
-            action={<Button icon={<Plus size={17} />} disabled={buying} onClick={handleBuyIp}>{buying ? 'در حال ثبت...' : 'خرید آی‌پی'}</Button>}
+            action={<Button icon={<Plus size={17} />} disabled={buying || !purchase.enabled} aria-describedby={purchase.message ? purchase.messageId : undefined} onClick={handleBuyIp}>{buying ? 'در حال ثبت...' : 'خرید آی‌پی'}</Button>}
           />
         )}
       </Card>
@@ -178,14 +197,12 @@ export function IpsPage() {
 
 export function TrafficPackagesPage() {
   const { showToast } = useToast()
+  const purchase = useInfrastructurePurchase('trafficPackages')
   const packages = useApiQuery(listTrafficPackages)
   const [buying, setBuying] = useState(false)
 
   const handleBuy = async () => {
-    if (!isApiConfigured()) {
-      showToast('فرآیند خرید بسته ترافیک در حالت نمایشی است.')
-      return
-    }
+    if (!purchase.enabled || buying) return
     setBuying(true)
     try {
       await buyTrafficPackage()
@@ -204,7 +221,8 @@ export function TrafficPackagesPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader title="بسته ترافیک 📦" subtitle="مدیریت بسته‌های ترافیک و سرورهای متصل" icon={<Box />} actions={<Button icon={<Plus size={18} />} disabled={buying} onClick={handleBuy}>{buying ? 'در حال خرید...' : 'خرید بسته ترافیک'}</Button>} />
+      <PageHeader title="بسته ترافیک 📦" subtitle="مدیریت بسته‌های ترافیک و سرورهای متصل" icon={<Box />} actions={<Button icon={<Plus size={18} />} disabled={buying || !purchase.enabled} aria-describedby={purchase.message ? purchase.messageId : undefined} onClick={handleBuy}>{buying ? 'در حال خرید...' : 'خرید بسته ترافیک'}</Button>} />
+      <PurchaseAvailability purchase={purchase} />
       <div className="metrics-grid metrics-grid--four">
         <MetricCard label="بسته ترافیک فعال" value={formatCount(activeCount)} icon={Box} />
         <MetricCard label="سرور متصل‌شده" value={formatCount(connectedServers)} icon={HardDrive} accent="cyan" />
@@ -218,7 +236,7 @@ export function TrafficPackagesPage() {
         ) : packages.error ? (
           <QueryError message={packages.error} onRetry={packages.refetch} />
         ) : !items.length ? (
-          <EmptyState icon={Box} title="هیچ بسته ترافیکی یافت نشد" description="بسته‌های ترافیک خریداری‌شده در اینجا نمایش داده می‌شوند." action={<Button icon={<Plus size={17} />} disabled={buying} onClick={handleBuy}>{buying ? 'در حال خرید...' : 'خرید بسته ترافیک'}</Button>} />
+          <EmptyState icon={Box} title="هیچ بسته ترافیکی یافت نشد" description="بسته‌های ترافیک خریداری‌شده در اینجا نمایش داده می‌شوند." action={<Button icon={<Plus size={17} />} disabled={buying || !purchase.enabled} aria-describedby={purchase.message ? purchase.messageId : undefined} onClick={handleBuy}>{buying ? 'در حال خرید...' : 'خرید بسته ترافیک'}</Button>} />
         ) : (
           <Table headers={['نام', 'سرورهای متصل', 'وضعیت']}>
             {items.map((item) => (

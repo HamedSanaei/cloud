@@ -5,7 +5,7 @@
  * surface.
  *
  * Products not yet offered by the platform (IPs, traffic packages, domains)
- * return empty lists; purchase actions return 501 with a clear message —
+ * return empty lists; purchase actions are rejected with a clear message —
  * never fake data, never dead-end silently.
  */
 import type { FastifyPluginAsync } from 'fastify'
@@ -178,9 +178,21 @@ export const registerFrontendCompatRoutes: FastifyPluginAsync<{ ctx: AppContext 
   })
 
   // ---- Products not offered yet ---------------------------------------------------------
+  const unavailableReason = (product: string) => `سرویس «${product}» هنوز در پلتفرم فعال نشده است`
   const notOffered = (product: string) => () => {
-    throw new BadRequestError(`سرویس «${product}» هنوز در پلتفرم فعال نشده است`)
+    throw new BadRequestError(unavailableReason(product))
   }
+
+  app.get('/infrastructure/capabilities', async (request, reply) => {
+    requireUser(request)
+    reply.header('Cache-Control', 'no-store')
+    // These independent purchase handlers are not implemented in either
+    // authority mode. Enable a capability only alongside its real service.
+    return { data: {
+      ips: { enabled: false, reason: unavailableReason('آی‌پی اختصاصی') },
+      trafficPackages: { enabled: false, reason: unavailableReason('بسته ترافیک') },
+    } }
+  })
 
   app.get('/ips', async () => ({ data: [] }))
   app.post('/ips', notOffered('آی‌پی اختصاصی'))

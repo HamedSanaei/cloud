@@ -143,6 +143,16 @@ export async function getOfferImages(offerId: string): Promise<Array<{ id: strin
   return images.map(image => ({ id: image.id, label: image.name }))
 }
 
+export interface InfrastructureCapabilities {
+  ips: { enabled: boolean; reason?: string }
+  trafficPackages: { enabled: boolean; reason?: string }
+}
+
+export async function getInfrastructureCapabilities(): Promise<InfrastructureCapabilities> {
+  if (noApi()) throw new Error('اتصال سرویس خرید پیکربندی نشده است.')
+  return (await apiGet<{ data: InfrastructureCapabilities }>('/infrastructure/capabilities')).data
+}
+
 export async function listIps(): Promise<IpAddress[]> {
   if (noApi()) return []
   const payload = await apiGet<Paginated<IpAddress> | IpAddress[]>('/ips')
