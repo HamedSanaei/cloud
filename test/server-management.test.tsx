@@ -27,6 +27,31 @@ function open(tab = 'overview') {
   return render(<MemoryRouter initialEntries={[`/servers/${detailServer.id}?tab=${tab}`]}><ToastProvider><Routes><Route path="/servers/:id" element={<ServerDetailsPage />} /></Routes></ToastProvider></MemoryRouter>)
 }
 describe('customer server management UI', () => {
+  it.each(['overview', 'network', 'operations'])('does not present historical addresses as active in a deleted server %s view', async tab => {
+    detail.lifecycle = 'terminated'; detail.status = 'inactive'; detail.providerState = 'terminated'; detail.providerAvailable = false
+    detail.ipv6 = '2001:db8::/64'
+    detail.billing.state = 'cancelled'; detail.billing.futureDebits = 'stopped'
+    detail.primaryIpv4 = { currentIp: detail.ip!, feeRial: 1000, balanceRial: 0, version: 'fixture', reason: 'سرور حذف شده', needsTopUp: false }
+    detail.operations = [{ id: 'delete-op-51', action: 'delete', status: 'confirmed', actionId: 51,
+      createdAt: '2026-11-14T00:00:00Z', updatedAt: '2026-11-14T00:01:00Z', completedAt: '2026-11-14T00:01:00Z', message: null }]
+    if (tab === 'overview') detail.facts = null // Real deleted response: cached top-level IP remains.
+    open(tab)
+    expect((await screen.findAllByText('سرور حذف شده؛ آدرس فعال ندارد')).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: /کپی آی‌پی/ })).toBeNull()
+    for (const address of ['192.0.2.19', '2001:db8::/64', '10.0.1.2']) expect(screen.queryByText(address)).toBeNull()
+    expect(screen.getByText('وضعیت پایان اشتراک')).toBeTruthy()
+    if (tab === 'overview') expect(screen.getByText('صورت‌حساب و کیف پول')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'عملیات', exact: true }))
+    expect(await screen.findByText('تاریخچه عملیات')).toBeTruthy()
+    expect(screen.getByText('delete-op-51')).toBeTruthy()
+    expect(requests.every(request => request.method === 'GET')).toBe(true)
+  })
+  it('honors confirmed provider deletion even if a cached lifecycle is still ready', async () => {
+    detail.providerState = 'terminated'
+    open()
+    expect((await screen.findAllByText('سرور حذف شده؛ آدرس فعال ندارد')).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: /کپی آی‌پی/ })).toBeNull()
+  })
   it('shows the IPv4 quote and downtime before submitting the confirmed fee once', async () => {
     const user = userEvent.setup()
     detail.primaryIpv4 = { currentIp: '192.0.2.10', feeRial: 1500000, version: 'default', balanceRial: 5000000, reason: null, needsTopUp: false }

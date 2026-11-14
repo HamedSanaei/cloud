@@ -17,8 +17,8 @@ function isIp(value: string) {
   } catch { return false }
 }
 
-export function CopyableIp({ value }: { value?: string | null }) {
-  return value && isIp(value) ? <IpCopyButton key={value} value={value} /> : <span className="copyable-ip__missing">در دسترس نیست</span>
+export function CopyableIp({ value, unavailableReason }: { value?: string | null; unavailableReason?: string }) {
+  return !unavailableReason && value && isIp(value) ? <IpCopyButton key={value} value={value} /> : <span className="copyable-ip__missing">{unavailableReason || 'در دسترس نیست'}</span>
 }
 
 function IpCopyButton({ value }: { value: string }) {
