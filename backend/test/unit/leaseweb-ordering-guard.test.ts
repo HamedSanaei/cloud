@@ -5,11 +5,15 @@
  * place a paid VPS order must fail LOCALLY with a permanent safety error and
  * must never send an HTTP request to the provider.
  */
-import { describe, expect, it, afterEach } from 'vitest'
+import { describe, expect, it, afterEach, vi } from 'vitest'
 import { createServer as createHttpServer, type Server } from 'node:http'
 import { pino } from 'pino'
 import { createLiveLeasewebProvider } from '../../src/modules/providers/leaseweb/live.js'
 import { ProviderPermanentError } from '../../src/lib/errors.js'
+
+// The ordering guard uses a counting loopback provider, not a real API.
+// Transport destination security is covered by the outbound suites.
+vi.mock('../../src/modules/outbound/client.js', () => ({ outboundFetch: (_integration: string, url: string | URL, init?: RequestInit) => fetch(url, init) }))
 
 const silentLogger = pino({ level: 'silent' })
 

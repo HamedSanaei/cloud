@@ -1,5 +1,5 @@
 import { createContext, useContext, useRef, useState, type ReactNode } from 'react'
-import { NavLink, Outlet, useOutletContext } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useOutletContext } from 'react-router-dom'
 import { CreditCard, Database, FileClock, Settings2, WalletCards } from 'lucide-react'
 import { apiGet, apiPost, systemBinary } from '../lib/apiClient'
 import { useApiQuery } from '../hooks/useApiQuery'
@@ -14,7 +14,7 @@ import './system-settings.css'
 const base = '/admin/settings'
 type RunSensitive = (action: string, payload: unknown, summary: string, execute: (proof: string) => Promise<void>) => void
 const ActionContext = createContext<RunSensitive>(() => undefined)
-const useSensitive = () => useContext(ActionContext)
+export const useSensitive = () => useContext(ActionContext)
 const post = async <T,>(url: string, data: unknown, key?: string) => (await apiPost<{ data: T }>(base + url, data, key ? { headers: { 'idempotency-key': key } } : undefined)).data
 const get = async <T,>(url: string) => (await apiGet<{ data: T }>(base + url)).data
 const errorText = (e: unknown) => e instanceof Error ? e.message : 'عملیات تکمیل نشد.'
@@ -48,14 +48,16 @@ function SimpleAdminActions({ children }: { children: ReactNode }) {
 }
 export function SystemSettingsLayout() {
   const capabilities = useApiQuery(() => get<Capabilities>('/capabilities'))
+  const isOutbound = useLocation().pathname.replace(/\/$/, '').endsWith('/outbound')
   return <div className="page-stack system-settings"><header><h1><Settings2 /> تنظیمات فروشگاه</h1><p>درگاه، رویدادها، پشتیبان‌گیری و عملیات مالی امن</p></header>
     <nav className="system-tabs" aria-label="بخش‌های تنظیمات فروشگاه">{[
       { to: 'gateway', label: 'درگاه‌ها', icon: CreditCard }, { to: 'logs', label: 'لاگ‌ها', icon: FileClock },
       { to: 'backups', label: 'پشتیبان‌گیری و بازیابی', icon: Database }, { to: 'finance', label: 'عملیات مالی کاربران', icon: WalletCards },
       { to: 'iran-tariffs', label: 'تعرفهٔ سرور ایران', icon: Settings2 },
       ...(capabilities.data?.primaryIpv4Pricing ? [{ to: 'primary-ipv4', label: 'تعرفهٔ تعویض IPv4', icon: Settings2 }] : []),
+      { to: 'outbound', label: 'شبکه و پراکسی خروجی', icon: Settings2 },
     ].map(({ to, label, icon: Icon }) => <NavLink key={to} to={to}><Icon size={19} />{label}</NavLink>)}</nav>
-    {capabilities.loading ? <p role="status">در حال بررسی دسترسی…</p> : capabilities.error ? <p role="alert">{capabilities.error}</p> : !capabilities.data?.allowed ? <Card><h2>دسترسی مدیریت مجاز نیست</h2><p>این بخش فقط برای حساب‌های مدیر فعال فروشگاه قابل استفاده است.</p></Card> : <SimpleAdminActions>{!capabilities.data.encryptionReady ? <Card><h2>کلید رمزگذاری آماده نیست</h2><p>برای تغییر مرچنت TabaPay باید STORE_SECRET_KEY مستقل و پایدار در تنظیمات محافظت‌شده سرور ثبت شود. سایر بخش‌های مدیریتی قابل مشاهده و استفاده هستند و عملیات Backup نیز به تنظیمات مستقل خود نیاز دارد.</p></Card> : null}<Outlet context={capabilities.data} /></SimpleAdminActions>}
+    {capabilities.loading ? <p role="status">در حال بررسی دسترسی…</p> : capabilities.error ? <p role="alert">{capabilities.error}</p> : !capabilities.data?.allowed ? <Card><h2>دسترسی مدیریت مجاز نیست</h2><p>این بخش فقط برای حساب‌های مدیر فعال فروشگاه قابل استفاده است.</p></Card> : <SimpleAdminActions>{!capabilities.data.encryptionReady && !isOutbound ? <Card><h2>کلید رمزگذاری آماده نیست</h2><p>برای تغییر مرچنت TabaPay باید STORE_SECRET_KEY مستقل و پایدار در تنظیمات محافظت‌شده سرور ثبت شود. سایر بخش‌های مدیریتی قابل مشاهده و استفاده هستند و عملیات Backup نیز به تنظیمات مستقل خود نیاز دارد.</p></Card> : null}<Outlet context={capabilities.data} /></SimpleAdminActions>}
   </div>
 }
 type IranTariffSettings = IranTariffs & { published: boolean }

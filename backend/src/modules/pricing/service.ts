@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm'
 import type { DbClient } from '../../db/index.js'
 import { fxRates, pricingRules } from '../../db/schema.js'
 import { AppError, NotFoundError, ValidationError } from '../../lib/errors.js'
+import { outboundFetch } from '../outbound/client.js'
 import { percentOf, roundTo } from '../../lib/money.js'
 import { writeAudit } from '../audit/service.js'
 import type { ProviderBillingOption } from '../providers/provider.interface.js'
@@ -79,7 +80,7 @@ async function refreshUsdtRate(db: DbClient): Promise<FxRate> {
   try {
     const url = new URL('/api/v1/manager/otc/ticker', getConfig().USDT_RATE_API_BASE_URL)
     url.searchParams.set('coin', 'USDT')
-    const response = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
+    const response = await outboundFetch('abantether', url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
     if (!response.ok) throw new Error(`USDT ticker HTTP ${response.status}`)
     const ticker = usdtTicker.parse(await response.json())
     const [whole, fraction = ''] = ticker.data.markets.USDTIRT.buy_price.split('.')

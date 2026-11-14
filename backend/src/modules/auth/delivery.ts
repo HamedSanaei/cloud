@@ -2,6 +2,7 @@ import nodemailer from 'nodemailer'
 import { getConfig, isProduction } from '../../config.js'
 import { ProviderPermanentError, ProviderRetryableError } from '../../lib/errors.js'
 import { createLogger } from '../../logger.js'
+import { outboundFetch } from '../outbound/client.js'
 
 // SOAP 1.1 contract published by /Api/SendSMS.asmx?op=SendGroupSMS.
 const PARSGREEN_SOAP_NAMESPACE = 'http://ParsGreen.com/'
@@ -100,7 +101,7 @@ export async function sendParsGreenSms(to: string, message: string): Promise<{ d
 </soap:Envelope>`
   let diagnostics: { reason: string; httpStatus?: number; providerResult?: number | null; acceptedCount?: number | null } = { reason: 'transport_failure' }
   try {
-    const response = await fetch(config.PARSGREEN_ENDPOINT, {
+    const response = await outboundFetch('parsgreen', config.PARSGREEN_ENDPOINT, {
       method: 'POST',
       headers: { 'content-type': 'text/xml; charset=utf-8', soapaction: `"${PARSGREEN_SOAP_NAMESPACE}SendGroupSMS"` },
       body: envelope,

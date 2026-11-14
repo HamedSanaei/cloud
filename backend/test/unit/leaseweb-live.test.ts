@@ -7,7 +7,7 @@ import { ProviderPermanentError, ProviderRetryableError, ProviderUnknownError } 
 
 const logger = pino({ level: 'silent' })
 const options: LiveLeasewebOptions = {
-  enabled: true, displayName: 'Leaseweb', baseUrl: 'https://api.leaseweb.test', orderingEnabled: true, logger,
+  enabled: true, displayName: 'Leaseweb', baseUrl: 'https://api.leaseweb.com', orderingEnabled: true, logger,
   accounts: [
     { id: 'primary', enabled: true, state: 'active', priority: 200, label: 'Primary', apiKey: 'primary-test-key' },
     { id: 'second', enabled: true, state: 'active', priority: 100, label: 'Second', apiKey: 'second-test-key' },

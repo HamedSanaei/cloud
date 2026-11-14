@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServer } from 'node:http'
 import type { Server as HttpServer } from 'node:http'
 import { and, eq } from 'drizzle-orm'
@@ -13,6 +13,10 @@ import { registerUser } from '../../src/modules/auth/service.js'
 import { ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/service.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
 import { createOrderFromQuote } from '../../src/modules/orders/service.js'
+
+// This pricing suite deliberately serves a loopback ticker; network policy is
+// exercised separately by outbound-routing/transport and outbound-settings tests.
+vi.mock('../../src/modules/outbound/client.js', () => ({ outboundFetch: (_integration: string, url: string | URL, init?: RequestInit) => fetch(url, init) }))
 
 describe.skipIf(!dbAvailable)('USD = USDT pricing with a local-currency ledger', () => {
   let ctx: TestContext

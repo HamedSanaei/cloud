@@ -16,6 +16,8 @@ import { randomUUID } from 'node:crypto'
 import { ProviderPermanentError, ProviderRetryableError } from '../../../lib/errors.js'
 import type { Logger } from '../../../logger.js'
 import { sanitizeLeasewebPayload } from './safety.js'
+import { outboundFetch } from '../../outbound/client.js'
+import { errorCategory } from '../../outbound/policy.js'
 
 /** Leaseweb's server-side correlation header (case-insensitive lookup). */
 export const LSW_CORRELATION_HEADER = 'apigw-correlation-id'
@@ -98,7 +100,7 @@ export class LeasewebClient {
     this.logger.debug({ method: 'POST', path, correlationId }, 'leaseweb mutating request')
 
     try {
-      const res = await fetch(url, {
+      const res = await outboundFetch('leaseweb', url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
@@ -135,7 +137,7 @@ export class LeasewebClient {
         requestId: correlationId,
       }
     } catch (err) {
-      const aborted = err instanceof Error && err.name === 'AbortError'
+      const aborted = errorCategory(err) === 'timeout'
       // Network failure / timeout after transmission: the POST may have been
       // processed. Never retryable by the caller.
       this.logger.warn({ method: 'POST', path, correlationId, aborted }, 'leaseweb mutating request failed (outcome unknown)')
@@ -177,7 +179,7 @@ export class LeasewebClient {
     this.logger.debug({ method, path, correlationId }, 'leaseweb request')
 
     try {
-      const res = await fetch(url, {
+      const res = await outboundFetch('leaseweb', url, {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -206,7 +208,7 @@ export class LeasewebClient {
       })
     } catch (err) {
       if (err instanceof ProviderPermanentError || err instanceof ProviderRetryableError) throw err
-      const aborted = err instanceof Error && err.name === 'AbortError'
+      const aborted = errorCategory(err) === 'timeout'
       this.logger.warn({ method, path, correlationId, aborted }, 'leaseweb request failed')
       throw new ProviderRetryableError(
         aborted ? 'Leaseweb request timed out' : 'Leaseweb request failed',
