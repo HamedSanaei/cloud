@@ -5,7 +5,7 @@ import type { AppContext } from '../../app.js'
 import { idempotencyKeys, serverSecrets } from '../../db/schema.js'
 import { parse } from '../../http/validate.js'
 import { requireUser } from '../../http/auth.js'
-import { ConflictError, NotFoundError, ProviderPermanentError, ValidationError } from '../../lib/errors.js'
+import { ConflictError, NotFoundError, ProviderPermanentError, ProviderRetryableError, ProviderUnknownError, ValidationError } from '../../lib/errors.js'
 import { serverToDto } from '../../lib/dto.js'
 import { loadFundingFleet, serverPowerPolicy } from '../billing/funding.js'
 import { createQuote } from '../quotes/service.js'
@@ -13,7 +13,7 @@ import { retailBilling, type RetailPeriod } from '../pricing/periods.js'
 import type { ProviderBillingOption, ProviderServerView } from '../providers/provider.interface.js'
 import type { CustomerProvider, ServerAccessBlock, ServerAccessEligibility } from '../providers/customer.interface.js'
 import { HetznerApiError } from '../providers/hetzner/client.js'
-import { customerProvider, findBlockingManagementOperation, managementBlock, managementDto, requestManagement } from './management.js'
+import { customerProvider, findBlockingManagementOperation, managementBlock, managementConflict, managementDto, reconcileCustomerOperation, requestManagement } from './management.js'
 import { getServerForUser } from './service.js'
 import { claimServerPassword } from './secrets.js'
 
@@ -88,8 +88,25 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
       capabilities: { power: !!manager, resize: !!manager, rebuild: !!manager, resetPassword: !!manager, console: !!manager?.console, rescue: !!manager, protection: !!manager,
         iso: false, snapshots: false, backups: false, volumes: false, networkMutations: false,
         unavailableReason: 'مالکیت و تعرفهٔ مستقل منابع جانبی باید پیش از فعال‌سازی عملیات در فروشگاه ثبت شود؛ فهرست منابع متصل صرفاً جهت اطلاع است.' },
-      accessEligibility, operations: operations.map(managementDto), credentials,
+      accessEligibility, resizeBlock: commonBlock, operations: operations.map(managementDto), credentials,
     } }
+  })
+  app.post('/servers/:id/management/operations/:operationId/recheck', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async request => {
+    const user = requireUser(request)
+    const { id, operationId } = parse(params.extend({ operationId: z.string().uuid() }), request.params)
+    const server = await getServerForUser(db, user.id, id)
+    const findOperation = () => db.query.providerOperations.findFirst({ where: t => and(eq(t.id, operationId),
+      eq(t.referenceId, server.id), eq(t.referenceType, 'server'), inArray(t.kind, ['server_management', 'server_action'])) })
+    const operation = await findOperation()
+    if (!operation) throw new NotFoundError('عملیات سرور یافت نشد')
+    let checkFailed = false
+    try { await reconcileCustomerOperation(db, server, operation) } catch (error) {
+      if (!(error instanceof ProviderPermanentError || error instanceof ProviderRetryableError || error instanceof ProviderUnknownError)) throw error
+      checkFailed = true
+    }
+    const current = await findOperation()
+    if (!current) throw new NotFoundError('عملیات سرور یافت نشد')
+    return { data: { operation: managementDto(current), checkFailed } }
   })
   app.get('/servers/:id/images', async request => {
     const user = requireUser(request), { id } = parse(params, request.params), server = await getServerForUser(db, user.id, id)
@@ -97,7 +114,10 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
   })
   app.get('/servers/:id/resize-options', async request => {
     const user = requireUser(request), { id } = parse(params, request.params), server = await getServerForUser(db, user.id, id)
-    const options = await customerProvider(server).resizeOptions(server.providerServerId!)
+    const manager = customerProvider(server)
+    const view = await liveView(server, manager, false)
+    const options = (await manager.resizeOptions(server.providerServerId!)).filter(option => option.available &&
+      option.type !== view.metadata?.serverType && option.diskGb >= (view.diskGb ?? Infinity) && option.storageType === view.metadata?.storageType)
     const offers = await db.query.providerProducts.findMany({ where: t => and(eq(t.provider, server.provider), eq(t.enabled, true), eq(t.available, true)) })
     const locations = await db.query.providerLocations.findMany()
     return { data: options.flatMap(option => {
@@ -108,11 +128,15 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
   app.post('/servers/:id/resize-preview', async request => {
     const user = requireUser(request), { id } = parse(params, request.params), server = await getServerForUser(db, user.id, id)
     const input = parse(z.object({ offerId: z.string().uuid(), upgradeDisk: z.boolean() }).strict(), request.body)
-    const view = await customerProvider(server).inspect(server.providerServerId!), options = await customerProvider(server).resizeOptions(server.providerServerId!)
+    const block = managementBlock(server, !!await findBlockingManagementOperation(db, server.id))
+    if (block) throw new ConflictError(managementConflict[block])
+    const manager = customerProvider(server), view = await manager.inspect(server.providerServerId!)
+    if (view.state !== 'suspended') throw new ValidationError('ارائه‌دهنده هنوز خاموش بودن سرور را تأیید نکرده است')
+    const options = await manager.resizeOptions(server.providerServerId!)
     const offer = await db.query.providerProducts.findFirst({ where: t => eq(t.id, input.offerId) })
     const location = offer?.locationId ? await db.query.providerLocations.findFirst({ where: t => eq(t.id, offer.locationId!) }) : null
     const target = options.find(option => option.type === offer?.providerProductId.split(':')[0])
-    if (view.state !== 'suspended' || !offer || offer.provider !== 'hetzner' || location?.code !== server.providerLocation || !target || target.diskGb < (view.diskGb ?? Infinity) || target.storageType !== view.metadata?.storageType) throw new ValidationError('پلن مقصد یا وضعیت سرور برای تغییر مجاز نیست')
+    if (!offer || !offer.enabled || !offer.available || offer.provider !== 'hetzner' || location?.code !== server.providerLocation || !target?.available || target.type === view.metadata?.serverType || target.diskGb < (view.diskGb ?? Infinity) || target.storageType !== view.metadata?.storageType) throw new ValidationError('پلن مقصد یا وضعیت سرور برای تغییر مجاز نیست')
     const sub = server.subscriptionId ? await db.query.subscriptions.findFirst({ where: t => eq(t.id, server.subscriptionId!) }) : null
     const period = sub?.billingInterval.toLowerCase() as RetailPeriod | undefined
     if (!period || !['hourly', 'daily', 'monthly'].includes(period)) throw new ValidationError('دورهٔ صورتحساب برای تغییر پلن پشتیبانی نمی‌شود')
@@ -139,6 +163,8 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
       } else {
         const preview = await db.query.idempotencyKeys.findFirst({ where: t => and(eq(t.scope, `resize:${user.id}:${id}`), eq(t.key, input.quoteId), gt(t.expiresAt, new Date())) })
         if (!preview || (preview.responseBody as { upgradeDisk?: boolean })?.upgradeDisk !== input.upgradeDisk) throw new ConflictError('پیش‌نمایش قیمت منقضی شده یا تغییر کرده است؛ دوباره بررسی کنید')
+        const view = await customerProvider(server).inspect(server.providerServerId!)
+        if (view.state !== 'suspended') throw new ValidationError('ارائه‌دهنده هنوز خاموش بودن سرور را تأیید نکرده است')
         payload = preview.responseBody as Record<string, unknown>
       }
     }

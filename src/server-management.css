@@ -16,6 +16,8 @@
 .server-access-notice p { margin: 0; }
 .server-access-notice .server-inline-actions { justify-content: flex-start; gap: 8px; }
 .server-access-notice .server-inline-actions:not(:empty) { margin-block-start: 8px; }
+.server-operation-recovery p { margin: 0 0 8px; }
+.server-operation-recovery .server-inline-actions { justify-content: flex-start; gap: 8px; }
 .server-resource-metric { padding: 20px; border: 1px solid #d9e2ec; border-radius: 14px; background: var(--surface, #fff); }
 .server-resource-metric > span { display: block; color: #64748b; font-size: 14px; }
 .server-resource-metric > strong { display: block; font-size: 23px; font-weight: 700; margin-top: 16px; }
