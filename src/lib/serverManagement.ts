@@ -1,7 +1,8 @@
 import { apiGet, apiPost } from './apiClient'
 import type { Server, ServerLifecycle } from './types'
 export type { ManagementAction } from '../../backend/src/modules/providers/customer.interface'
-import type { ManagementAction, ServerMetrics } from '../../backend/src/modules/providers/customer.interface'
+import type { ManagementAction, ServerAccessEligibility, ServerMetrics } from '../../backend/src/modules/providers/customer.interface'
+export type { ServerAccessBlock } from '../../backend/src/modules/providers/customer.interface'
 export type { ServerMetrics }
 export interface ServerOperation {
   id: string; action: ManagementAction; status: 'queued' | 'dispatching' | 'provider_accepted' | 'confirmed' | 'outcome_unknown' | 'failed'
@@ -19,11 +20,13 @@ export interface ServerDetail extends Server {
     providerQuotedRate: { currency: string; amountCents: number; period: string; observedAt: string } | null }
   capabilities: { power: boolean; resize: boolean; rebuild: boolean; resetPassword: boolean; console: boolean; rescue: boolean; protection: boolean;
     iso: boolean; snapshots: boolean; backups: boolean; volumes: boolean; networkMutations: boolean; unavailableReason: string }
+  accessEligibility?: ServerAccessEligibility
   operations: ServerOperation[]; credentials: Array<{ operationId: string | null; claimedAt: string | null; acknowledgedAt: string | null }>
 }
 export interface ResizeOption { type: string; architecture: string; storageType: string; vcpu: number; memoryMb: number; diskGb: number; available: boolean; offerId: string }
 export interface ResizePreview { quoteId: string; serverType: string; upgradeDisk: boolean; priceRial: number; currentPriceRial: number; period: string; effectiveAt: string; expiresAt: string; immediateChargeRial: number }
-export const getServerDetail = async (id: string) => (await apiGet<{ data: ServerDetail }>(`/servers/${encodeURIComponent(id)}/management`)).data
+export const getServerDetail = async (id: string, refresh = false) =>
+  (await apiGet<{ data: ServerDetail }>(`/servers/${encodeURIComponent(id)}/management${refresh ? '?refresh=1' : ''}`)).data
 export const getServerMetrics = async (id: string, window: string) => (await apiGet<{ data: ServerMetrics }>(`/servers/${encodeURIComponent(id)}/metrics?window=${encodeURIComponent(window)}`)).data
 export const getResizeOptions = async (id: string) => (await apiGet<{ data: ResizeOption[] }>(`/servers/${encodeURIComponent(id)}/resize-options`)).data
 export const getServerImages = async (id: string) => (await apiGet<{ data: Array<{ id: string; name: string }> }>(`/servers/${encodeURIComponent(id)}/images`)).data

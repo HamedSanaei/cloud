@@ -8,14 +8,18 @@ import { ToastProvider } from '../src/components/ui/Toast'
 import { OneTimePassword } from '../src/components/servers/ServerManagementControls'
 // @ts-expect-error Synthetic JS fixtures shared with the loopback design preview.
 import { detailServer, serverUxFixture } from './server-management-fixtures.mjs'
+import type { ServerDetail } from '../src/lib/serverManagement'
 
 let requests: Array<{ path: string; method: string; body: unknown; key?: string }>
+let detail: ServerDetail
 beforeEach(() => {
   requests = []
+  detail = structuredClone(detailServer)
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
-    const path = url.replace('/api', '').split('?')[0]
+    const path = url.replace('/api', '')
     requests.push({ path, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined, key: new Headers(init?.headers).get('idempotency-key') ?? undefined })
-    return Response.json(serverUxFixture(path))
+    return Response.json(path.includes('/management') && (!init?.method || init.method === 'GET')
+      ? { data: detail } : serverUxFixture(path.split('?')[0]))
   }))
 })
 afterEach(() => toast.dismiss())
@@ -54,6 +58,61 @@ describe('customer server management UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'سیستم‌عامل و دسترسی' }))
     expect(await screen.findByText(/رمز فعلی قابل بازیابی نیست/)).toBeTruthy()
     expect(screen.queryByText('نمایش رمز فعلی')).toBeNull()
+  })
+  it('explains an unresolved shutdown beside both controls and rechecks eligibility without submitting an action', async () => {
+    detail.accessEligibility = { rebuild: 'operation_pending', resetPassword: 'operation_pending' }
+    detail.operations = [{ id: 'pending-shutdown', action: 'power_off', status: 'outcome_unknown', actionId: null,
+      createdAt: '2026-11-14T00:00:00.000Z', updatedAt: '2026-11-14T00:00:00.000Z', completedAt: null, message: null }]
+    open('access')
+    const password = await screen.findByRole<HTMLButtonElement>('button', { name: 'بازنشانی رمز عبور' })
+    const images = screen.getByRole<HTMLSelectElement>('combobox', { name: 'تصویر سیستم‌عامل مجاز' })
+    expect(password.disabled).toBe(true)
+    expect(images.disabled).toBe(true)
+    expect(document.getElementById(password.getAttribute('aria-describedby')!)?.textContent).toContain('خاموشی اجباری')
+    expect(document.getElementById(images.getAttribute('aria-describedby')!)?.textContent).toContain('خاموشی اجباری')
+    expect(requests.some(request => request.path.endsWith('/images'))).toBe(false)
+    fireEvent.click(screen.getAllByRole('button', { name: 'مشاهدهٔ عملیات' })[0])
+    expect(screen.getByText('تاریخچه عملیات')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'سیستم‌عامل و دسترسی' }))
+    detail = { ...detail, accessEligibility: { rebuild: null, resetPassword: null }, operations: [] }
+    fireEvent.click(screen.getAllByRole('button', { name: 'بررسی دوبارهٔ وضعیت' })[0])
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'بازنشانی رمز عبور' }).disabled).toBe(false))
+    await waitFor(() => expect(screen.getByRole<HTMLSelectElement>('combobox').disabled).toBe(false))
+    expect(requests.some(request => request.path.endsWith('/management?refresh=1'))).toBe(true)
+    expect(requests.every(request => request.method === 'GET')).toBe(true)
+  })
+  it('blocks only rebuild when protection is on and retains the data-loss confirmation when it is off', async () => {
+    detail.accessEligibility = { rebuild: 'rebuild_protected', resetPassword: null }
+    open('access')
+    expect(await screen.findByText(/حفاظت نصب مجدد .* فعال است/)).toBeTruthy()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'بازنشانی رمز عبور' }).disabled).toBe(false)
+    expect(screen.getByRole<HTMLSelectElement>('combobox').disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'مشاهدهٔ حفاظت سرور' }))
+    expect(screen.getByRole('button', { name: 'تغییر حفاظت Rebuild' })).toBeTruthy()
+    detail = { ...detail, accessEligibility: { rebuild: null, resetPassword: null } }
+    fireEvent.click(screen.getByRole('button', { name: 'بروزرسانی' }))
+    fireEvent.click(screen.getByRole('button', { name: 'سیستم‌عامل و دسترسی' }))
+    await screen.findByRole('option', { name: 'Ubuntu 24.04' })
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '11' } })
+    fireEvent.click(screen.getByRole('button', { name: 'نصب مجدد و حذف داده‌ها' }))
+    expect(screen.getByText(/این عملیات داده‌های دیسک سرور را از بین می‌برد/)).toBeTruthy()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'تأیید نصب مجدد سیستم‌عامل' }).disabled).toBe(true)
+  })
+  it('offers support for provider access denial and does not promise a password reset', async () => {
+    detail.accessEligibility = { rebuild: 'provider_access_denied', resetPassword: 'provider_access_denied' }
+    detail.providerAvailable = false
+    open('access')
+    expect(await screen.findAllByText(/دسترسی به سرور در پروژهٔ ارائه‌دهنده تأیید نشد/)).toHaveLength(2)
+    expect(screen.getAllByRole('link', { name: 'پشتیبانی' })[0].getAttribute('href')).toBe('/tickets')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'بازنشانی رمز عبور' }).disabled).toBe(true)
+    expect(screen.queryByText(/می‌توانید رمز را بازنشانی کنید/)).toBeNull()
+  })
+  it('honors individual capabilities when the response predates the eligibility fields', async () => {
+    detail.capabilities.resetPassword = false
+    open('access')
+    expect(await screen.findByText(/از این عملیات پشتیبانی نمی‌کند/)).toBeTruthy()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'بازنشانی رمز عبور' }).disabled).toBe(true)
+    await waitFor(() => expect(screen.getByRole<HTMLSelectElement>('combobox').disabled).toBe(false))
   })
   it('uses actual metric series and keeps unsupported shared-project mutations out of the UI', async () => {
     open('monitoring')

@@ -10,9 +10,10 @@ import { useToast } from '../components/ui/Toast'
 import { LifecycleBadge, ServerResourceMetricCard } from '../components/servers/ServerPrimitives'
 import { DestructiveConfirmation, OneTimePassword, ServerBillingTerminationState, ServerOperationStatus, ServerPowerActionButton } from '../components/servers/ServerManagementControls'
 import { ServerConsole } from '../components/servers/ServerConsole'
+import { ServerAccess } from '../components/servers/ServerAccess'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { formatFaDateTime, formatFaNumber, formatToman } from '../lib/format'
-import { getResizeOptions, getServerDetail, getServerImages, getServerMetrics, previewResize, submitServerAction,
+import { getResizeOptions, getServerDetail, getServerMetrics, previewResize, submitServerAction,
   type ManagementAction, type ResizePreview, type ServerDetail, type ServerMetrics } from '../lib/serverManagement'
 
 const missing = 'در دسترس نیست'
@@ -23,10 +24,16 @@ const tabs = [['overview', 'نمای کلی'], ['monitoring', 'مانیتوری�
 type ActionRequest = { action: ManagementAction; input: Record<string, unknown> }
 export function ServerDetailsPage() {
   const { id = '' } = useParams(), [search, setSearch] = useSearchParams(), tab = search.get('tab') || 'overview'
-  const detail = useApiQuery(() => getServerDetail(id), [id]), { showToast } = useToast()
+  const fresh = useRef(false)
+  const detail = useApiQuery(() => {
+    const refresh = fresh.current
+    fresh.current = false
+    return getServerDetail(id, refresh)
+  }, [id]), { showToast } = useToast()
   const [request, setRequest] = useState<ActionRequest | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('')
   const [secretOperation, setSecretOperation] = useState<string | null>(null), rounds = useRef(0), key = useRef('')
-  const server = detail.data, refresh = detail.refetch
+  const server = detail.data?.id === id ? detail.data : null, refresh = detail.refetch
+  const recheck = () => { rounds.current = 0; fresh.current = true; refresh() }
   const pending = server?.operations.some(op => !['confirmed', 'failed'].includes(op.status)) ?? false
   const awaiting = server?.operations.some(op => ['queued', 'dispatching', 'provider_accepted'].includes(op.status)) ?? false
   useEffect(() => {
@@ -54,7 +61,7 @@ export function ServerDetailsPage() {
   const disabled = busy || pending || !['ready', 'delete_failed'].includes(server.lifecycle) || !server.providerAvailable
   return <div className="page-stack server-detail-page" dir="rtl">
     <PageHeader title="مشخصات و مدیریت سرور" subtitle={`${server.name} · ${server.provider ?? 'ارائه‌دهنده'}`} icon={<HardDrive />}
-      actions={<><LinkButton to="/servers" variant="secondary" icon={<ArrowRight size={17} />}>بازگشت به سرورها</LinkButton><Button variant="secondary" disabled={detail.loading} icon={<RefreshCw size={16} />} onClick={() => { rounds.current = 0; refresh() }}>بروزرسانی</Button></>} />
+      actions={<><LinkButton to="/servers" variant="secondary" icon={<ArrowRight size={17} />}>بازگشت به سرورها</LinkButton><Button variant="secondary" disabled={detail.loading} icon={<RefreshCw size={16} />} onClick={recheck}>بروزرسانی</Button></>} />
     <Card className="server-identity"><div><h2>{server.name}</h2><p>{[server.facts?.location || server.datacenter, server.facts?.image || server.os, server.facts?.serverType || server.serverType].filter(Boolean).join(' · ')}</p></div>
       <LifecycleBadge state={server.lifecycle} /><div><p>IPv4: <bdi>{server.facts?.ipv4 ?? missing}</bdi></p><p>IPv6: <bdi>{server.facts?.ipv6 ?? missing}</bdi></p></div>
     </Card>
@@ -69,7 +76,8 @@ export function ServerDetailsPage() {
       {server.power.billingBlocked && <p>اعتبار کیف پول برای روشن کردن کافی نیست. <LinkButton to="/wallet" variant="secondary">افزایش موجودی</LinkButton></p>}</Card>
       <Card><h2>تاریخچه عملیات</h2>{server.operations.length ? server.operations.map(operation => <ServerOperationStatus key={operation.id} operation={operation} />) : <p>هنوز عملیاتی ثبت نشده است.</p>}</Card></>}
     {tab === 'resize' && <ServerResize server={server} disabled={disabled} ask={ask} />}
-    {tab === 'access' && <ServerAccess server={server} disabled={disabled} ask={ask} reveal={setSecretOperation} />}
+    {tab === 'access' && <ServerAccess key={server.id} server={server} busy={busy} loading={detail.loading} stale={!!detail.error}
+      ask={ask} reveal={setSecretOperation} recheck={recheck} openTab={tab => setSearch({ tab })} />}
     {tab === 'console' && <div className="server-detail-columns"><ServerConsole serverId={server.id} disabled={disabled || !server.capabilities.console} /><Card><h2>امکانات پیشرفته</h2><div className="server-advanced-links"><Button variant="secondary" onClick={() => setSearch({ tab: 'storage' })}>Snapshot، Backup و Volume</Button><Button variant="secondary" onClick={() => setSearch({ tab: 'network' })}>شبکه، حفاظت و Rescue</Button></div><p>{server.capabilities.unavailableReason}</p></Card></div>}
     {tab === 'storage' && <ServerStorage server={server} />}
     {tab === 'network' && <ServerNetwork server={server} disabled={disabled} ask={ask} />}
@@ -118,14 +126,6 @@ function ServerResize({ server, disabled, ask }: { server: ServerDetail; disable
       {preview && <div className="server-price-preview"><p>قیمت قبل: {amount(preview.currentPriceRial)} · قیمت جدید: {amount(preview.priceRial)} / {periodLabels[preview.period]}</p><p>برداشت فوری: {amount(preview.immediateChargeRial)} · اعمال در تمدیدهای آتی پس از تأیید تغییر</p><p>اعتبار قیمت: {formatFaDateTime(preview.expiresAt)}</p><Button disabled={disabled || Date.now() >= new Date(preview.expiresAt).getTime()} onClick={() => ask('resize', { quoteId: preview.quoteId, upgradeDisk: preview.upgradeDisk })}>تأیید تغییر پلن</Button></div>}
       {server.providerState !== 'suspended' && <p>ابتدا از تب عملیات، سرور را خاموش کنید.</p>}{error && <p role="alert">{error}</p>}
     </Card></>
-}
-function ServerAccess({ server, disabled, ask, reveal }: { server: ServerDetail; disabled: boolean; ask: (action: ManagementAction, input?: Record<string, unknown>) => void; reveal: (id: string) => void }) {
-  const images = useApiQuery(() => getServerImages(server.id), [server.id]), [image, setImage] = useState('')
-  return <div className="server-detail-columns"><Card><h2>نصب مجدد سیستم‌عامل</h2>{images.error ? <QueryError message={images.error} onRetry={images.refetch} /> : <Select label="تصویر سیستم‌عامل مجاز" value={image} onChange={event => setImage(event.target.value)} disabled={disabled || images.loading}><option value="">انتخاب سیستم‌عامل</option>{images.data?.map(image => <option key={image.id} value={image.id}>{image.name}</option>)}</Select>}
-    <p className="server-danger-note">تمام داده‌های دیسک سرور حذف می‌شود. حفاظت Rebuild باید با تأیید جداگانه بررسی شود.</p><Button variant="danger" disabled={disabled || !image || server.facts?.protection?.rebuild === true} onClick={() => ask('rebuild', { image })}>نصب مجدد و حذف داده‌ها</Button></Card>
-    <Card><h2>رمز عبور root</h2><p>رمز فعلی قابل بازیابی نیست — می‌توانید رمز را بازنشانی کنید.</p><Button disabled={disabled} onClick={() => ask('reset_password')}>بازنشانی رمز عبور</Button><p className="server-notice">رمز جدید پس از تأیید عملیات، تنها در نشست درخواست‌کننده و فقط یک‌بار قابل دریافت است.</p>
-      {server.credentials.filter(secret => !secret.claimedAt && secret.operationId && server.operations.some(op => op.id === secret.operationId && op.status === 'confirmed')).map(secret => <Button key={secret.operationId} variant="secondary" onClick={() => reveal(secret.operationId!)}>دریافت امن رمز جدید</Button>)}
-    </Card></div>
 }
 function ServerStorage({ server }: { server: ServerDetail }) {
   return <><p className="server-notice">{server.capabilities.unavailableReason}</p><div className="server-detail-columns"><Card><h2>اسنپ‌شات‌ها و بکاپ‌ها</h2><p>ساخت و بازیابی Snapshot با تعرفه و مالکیت مستقل هنوز در این فروشگاه فعال نیست.</p><p>بکاپ ارائه‌دهنده: {server.facts?.backupWindow || 'وضعیت فعال اعلام نشده است'}</p></Card><Card><h2>Volumeهای متصل</h2>{server.facts ? server.facts.volumes.length ? server.facts.volumes.map(id => <p key={id}>Volume ID: <bdi>{id}</bdi></p>) : <p>Volume متصلی گزارش نشده است.</p> : <p>{missing}</p>}<p>منابع مستقل ممکن است پس از حذف VM باقی بمانند.</p></Card></div></>
