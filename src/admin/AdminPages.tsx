@@ -6,6 +6,8 @@ import { formatCount, formatFaNumber, formatToman } from '../lib/format'
 import { adminApi, userName, type AdminUser, type ListFilters, type Paged } from './api'
 import { HetznerInventoryPanel } from './HetznerInventoryPanel'
 import { LegacyPowerReview } from './LegacyPowerReview'
+import { WalletLedgerAmountCells, WalletLedgerDescription } from '../components/ui/WalletLedgerCells'
+import { emptyAmount, movementAmounts, movementHeaders, transactionStatus } from '../lib/walletHistory'
 
 const dateLabel = (value?: string | null) => {
   if (!value) return '—'
@@ -221,6 +223,7 @@ export function AdminUserPage() {
   const { id = '' } = useParams()
   const result = useApiQuery(() => adminApi.user(id), [id])
   const info = result.data
+  const walletNames = new Map(info?.wallets.map(wallet => [wallet.id, wallet.name]))
   return <div className="admin-page">
     <Heading title="پروفایل کاربر" subtitle="مشاهده اطلاعات حساب، کیف پول و سرورهای متعلق به کاربر"
       actions={<ReturnLink to="/admin/users">بازگشت به کاربران</ReturnLink>} />
@@ -234,11 +237,14 @@ export function AdminUserPage() {
             </div>)}</div> : <p className="admin-muted">کیف پولی ثبت نشده است.</p>}
           </Panel>
           <Panel title="تراکنش‌های اخیر">
-            {info.transactions.length ? adminTableWrap(<table className="admin-table"><thead><tr><th>شرح</th><th>مبلغ</th><th>تاریخ</th></tr></thead>
+            {info.transactions.length ? adminTableWrap(<table className="admin-table admin-ledger"><thead><tr><th scope="col">شرح</th><th scope="col">کیف پول</th>
+              {movementHeaders.map(header => <th scope="col" key={header}>{header}</th>)}<th scope="col">تاریخ</th><th scope="col">وضعیت</th></tr></thead>
               <tbody>{info.transactions.map(tx => <tr key={tx.id}>
-                <td>{tx.description || tx.type}</td>
-                <td className={tx.amountRial > 0 ? 'admin-positive' : tx.amountRial < 0 ? 'admin-negative' : ''}>{formatToman(tx.amountToman)}</td>
-                <td>{dateLabel(tx.createdAt)}</td></tr>)}</tbody></table>) : <p className="admin-muted">تراکنشی ثبت نشده است.</p>}
+                <td><WalletLedgerDescription admin transaction={{ ...tx, description: tx.description ?? '' }} /></td>
+                <td>{walletNames.get(tx.walletId) ?? emptyAmount}</td>
+                <WalletLedgerAmountCells amounts={movementAmounts({ ...tx, amount: tx.amountToman, status: tx.status ?? 'success' })} />
+                <td><time dateTime={tx.createdAt}>{timeLabel(tx.createdAt)}</time></td><td>{transactionStatus(tx.status ?? 'success')}</td>
+              </tr>)}</tbody></table>) : <p className="admin-muted">تراکنشی ثبت نشده است.</p>}
           </Panel>
           <Panel title="سرورهای کاربر" action={<Link className="admin-text-link" to={`/admin/users/${id}/servers`}>مشاهده همه</Link>}>
             {info.servers.length ? <div className="admin-server-mini">{info.servers.slice(0, 4).map(s => <Link key={s.id} to={`/admin/servers/${s.id}`}>

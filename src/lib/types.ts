@@ -146,6 +146,13 @@ export interface Transaction {
   description: string
   wallet: string
   amount: number
+  amountRial?: number
+  direction?: 'credit' | 'debit' | null
+  currency?: string
+  type?: string
+  walletId?: string
+  referenceType?: string | null
+  referenceId?: string | null
   date: string
   status: string
   formattedAmount?: string

@@ -275,7 +275,7 @@ describe('Penpot routes with canonical integration ENABLED', () => {
       : original(url, init)))
     const user = userEvent.setup()
     open('/wallet')
-    expect(await screen.findByText('+5.00 USD')).toBeTruthy()
+    expect(await screen.findByText('5.00 USD')).toBeTruthy()
     expect(screen.queryByText('older entry')).toBeNull()
     await user.click(screen.getByRole('button', { name: '۷ روز اخیر' }))
     expect(await screen.findByText('older entry')).toBeTruthy()
