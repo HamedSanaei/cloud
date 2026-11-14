@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { hkdfSync, randomUUID } from 'node:crypto'
 import { eq, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import type { DbClient, DbOrTx } from '../../db/index.js'
@@ -27,16 +27,19 @@ export const routeInput = z.object({ revision, integration: integrationSchema, e
 }).strict().refine(v => !v.enabled || !!v.profileId, 'An enabled route requires a proxy')
 export const deleteInput = z.object({ revision, id: z.uuid(), confirm: z.literal(true) }).strict()
 export const testInput = z.object({ revision, integration: integrationSchema, profileId: z.uuid().optional(), confirm: z.literal(true) }).strict()
-export const canManageOutbound = (user: SessionUser) => user.role === 'admin' && user.status === 'active' && getConfig().OUTBOUND_PROXY_SUPER_ADMIN_IDS.includes(user.id)
+export const canManageOutbound = (user: SessionUser) => user.role === 'admin' && user.status === 'active'
 export function requireOutboundAdmin(user: SessionUser) {
-  if (!canManageOutbound(user)) throw new ForbiddenError('تنظیمات شبکه فقط برای سوپرادمین مجاز در دسترس است.')
+  if (!canManageOutbound(user)) throw new ForbiddenError('تنظیمات شبکه فقط برای مدیر فعال پنل در دسترس است.')
 }
+// Reuse the application's existing secret with a separate purpose-specific key.
+// No proxy-specific key or extra deployment configuration is required.
+const encryptionKey = () => Buffer.from(hkdfSync('sha256', getConfig().AUTH_SECRET, 'parserver-outbound-v1', 'proxy-settings', 32))
 export async function readOutbound(db: DbOrTx): Promise<OutboundState> {
   const row = await db.query.settings.findFirst({ where: t => eq(t.key, outboundKey) })
   if (!row) return emptyOutboundState()
   try {
     const stored = row.value as { revision: string; encrypted: string }
-    const value = JSON.parse(unseal(Buffer.from(stored.encrypted, 'base64'), `${outboundKey}:${stored.revision}`).toString()) as OutboundState
+    const value = JSON.parse(unseal(Buffer.from(stored.encrypted, 'base64'), `${outboundKey}:${stored.revision}`, encryptionKey()).toString()) as OutboundState
     if (value.revision !== stored.revision || !Array.isArray(value.profiles) || !value.routes) throw new Error()
     return value
   } catch { throw new OutboundError('configuration') }
@@ -45,7 +48,7 @@ const lock = (tx: DbOrTx) => tx.execute(sql`select pg_advisory_xact_lock(hashtex
 const assertRevision = (state: OutboundState, expected: string) => { if (state.revision !== expected) throw new ConflictError('تنظیمات شبکه تغییر کرده است؛ صفحه را تازه کنید.') }
 async function store(tx: DbOrTx, state: OutboundState) {
   state.revision = randomUUID()
-  const value = { revision: state.revision, encrypted: seal(Buffer.from(JSON.stringify(state)), `${outboundKey}:${state.revision}`).toString('base64') }
+  const value = { revision: state.revision, encrypted: seal(Buffer.from(JSON.stringify(state)), `${outboundKey}:${state.revision}`, encryptionKey()).toString('base64') }
   await tx.insert(settings).values({ key: outboundKey, value }).onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: new Date() } })
   return { revision: state.revision }
 }

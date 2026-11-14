@@ -287,7 +287,6 @@ ${platform_net_api}
       SYSTEM_INSTANCE_ID: \${SYSTEM_INSTANCE_ID:-}
       SYSTEM_BACKUP_ENABLED: \${SYSTEM_BACKUP_ENABLED:-false}
       PRIMARY_IPV4_SUPER_ADMIN_IDS: \${PRIMARY_IPV4_SUPER_ADMIN_IDS:-}
-      OUTBOUND_PROXY_SUPER_ADMIN_IDS: \${OUTBOUND_PROXY_SUPER_ADMIN_IDS:-}
       SYSTEM_RESTORE_ENABLED: \${SYSTEM_RESTORE_ENABLED:-false}
       SYSTEM_BACKUP_MAX_MB: \${SYSTEM_BACKUP_MAX_MB:-64}
       SYSTEM_BACKUP_MAX_TOTAL_MB: \${SYSTEM_BACKUP_MAX_TOTAL_MB:-1024}
@@ -340,7 +339,6 @@ ${platform_net_worker}
       PLATFORM_API_URL: \${PLATFORM_API_URL:-}
       DATA_AUTHORITY: \${DATA_AUTHORITY:-auto}
       LOG_LEVEL: \${LOG_LEVEL:-info}
-      STORE_SECRET_KEY: \${STORE_SECRET_KEY:-}
 ${provider_env_worker}
 ${provider_mount_worker}
     command: ["npm", "run", "start:worker"]

@@ -19,7 +19,7 @@ import { adjustmentSchema, approveAdjustment, findFinancialUser, requestAdjustme
 import { approveRestore, backupFile, getBackupJob, importBackup, listBackupJobs, removeBackup, requestBackupJob, requestRestore, waitBackupJobs, initializeBackupJobs } from './backups.js'
 import { maxPrimaryIpv4FeeRial, primaryIpv4Pricing, setPrimaryIpv4Fee } from '../servers/primary-ip-pricing.js'
 import { confirmPrimaryIpv4Rollback } from '../servers/primary-ip-operation.js'
-import { canManageOutbound, requireOutboundAdmin, outboundStatus, profileInput, routeInput, deleteInput, testInput, saveProfile, saveRoute, deleteProfile, testConnection } from '../outbound/settings.js'
+import { requireOutboundAdmin, outboundStatus, profileInput, routeInput, deleteInput, testInput, saveProfile, saveRoute, deleteProfile, testConnection } from '../outbound/settings.js'
 
 const canManagePrimaryIpv4Pricing = (user: ReturnType<typeof requireAdmin>) =>
   user.status === 'active' && getConfig().PRIMARY_IPV4_SUPER_ADMIN_IDS.includes(user.id)
@@ -69,7 +69,7 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     const c = getConfig(), user = requireAdmin(request)
     let allowed = true
     try { systemAdmin(user) } catch { allowed = false }
-    return { data: { allowed, outboundProxies: canManageOutbound(user), primaryIpv4Pricing: canManagePrimaryIpv4Pricing(user), encryptionReady: /^[a-f0-9]{64}$/i.test(c.STORE_SECRET_KEY), backupsEnabled: c.SYSTEM_BACKUP_ENABLED,
+    return { data: { allowed, primaryIpv4Pricing: canManagePrimaryIpv4Pricing(user), encryptionReady: /^[a-f0-9]{64}$/i.test(c.STORE_SECRET_KEY), backupsEnabled: c.SYSTEM_BACKUP_ENABLED,
       restoreEnabled: c.SYSTEM_RESTORE_ENABLED, maxUploadBytes: max, dualApprovalRial: c.SYSTEM_DUAL_APPROVAL_RIAL,
       requirements: ['STORE_SECRET_KEY', 'SYSTEM_BACKUP_KEY', 'SYSTEM_INSTANCE_ID', 'SYSTEM_BACKUP_ENABLED'] } }
   })

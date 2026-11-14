@@ -12,12 +12,12 @@ import { OutboundHttp } from '../../src/modules/outbound/client.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 
 const base = '/api/admin/settings', healthKey = 'network.outbound.health.v1'
-describe.skipIf(!dbAvailable)('super-admin outbound settings and shared runtime policy', () => {
+describe.skipIf(!dbAvailable)('admin outbound settings and shared runtime policy', () => {
   let ctx: Awaited<ReturnType<typeof getTestContext>>, app: FastifyInstance, c: ReturnType<typeof config.getConfig>, n = 0
   beforeAll(async () => {
     ctx = await getTestContext(); await truncateAll(ctx.db)
     await ctx.db.delete(settings).where(eq(settings.key, outboundKey)); await ctx.db.delete(settings).where(eq(settings.key, healthKey))
-    c = { ...config.getConfig(), DATA_AUTHORITY: 'site', STORE_SECRET_KEY: 'a'.repeat(64), OUTBOUND_PROXY_SUPER_ADMIN_IDS: [], SYSTEM_BACKUP_ENABLED: false }
+    c = { ...config.getConfig(), DATA_AUTHORITY: 'site', STORE_SECRET_KEY: '', SYSTEM_BACKUP_ENABLED: false }
     vi.spyOn(config, 'getConfig').mockImplementation(() => c)
     app = await buildApp({ db: ctx.db, queues: ctx.queues, logger: testLogger }); await app.ready()
   })
@@ -27,10 +27,9 @@ describe.skipIf(!dbAvailable)('super-admin outbound settings and shared runtime 
     if (ctx) { await ctx.db.delete(settings).where(eq(settings.key, outboundKey)); await ctx.db.delete(settings).where(eq(settings.key, healthKey)); await ctx.close() }
     vi.restoreAllMocks()
   })
-  async function account(allowed = true, role: 'admin' | 'user' = 'admin') {
+  async function account(role: 'admin' | 'user' = 'admin') {
     const user = await registerUser(ctx.db, { email: `outbound-${++n}@fixture.test`, password: 'Fixture-network-123!' })
     await ctx.db.update(users).set({ role }).where(eq(users.id, user.id))
-    if (allowed) c.OUTBOUND_PROXY_SUPER_ADMIN_IDS.push(user.id)
     const session = await createSession(ctx.db, user.id, {})
     return { id: user.id, headers: { authorization: `Bearer ${session.token}`, 'content-type': 'application/json' }, remoteAddress: `192.0.2.${n}` }
   }
@@ -52,15 +51,16 @@ describe.skipIf(!dbAvailable)('super-admin outbound settings and shared runtime 
     const r = await perform(actor, 'outbound.profile', '/outbound/profiles', input)
     expect(r.statusCode, r.body).toBe(200); return { ...r.json().data, input }
   }
-  it('denies anonymous users, regular users and ordinary admins including proof issuance', async () => {
+  it('uses existing admin access and denies anonymous/regular users including proof issuance', async () => {
     expect((await app.inject(base + '/outbound')).statusCode).toBe(401)
-    for (const actor of [await account(false), await account(true, 'user')]) {
+    expect((await send(await account(), 'GET', '/outbound')).statusCode).toBe(200)
+    for (const actor of [await account('user')]) {
       expect((await send(actor, 'GET', '/outbound')).statusCode).toBe(403)
       expect((await send(actor, 'POST', '/authorize', { action: 'outbound.test', payload: { revision: 'initial', integration: 'hetzner', confirm: true } })).statusCode).toBe(403)
       expect((await send(actor, 'POST', '/outbound/test', { revision: 'initial', integration: 'hetzner', confirm: true, proof: randomUUID() })).statusCode).toBe(403)
     }
   })
-  it('starts direct, encrypts credentials at rest and returns only masked credential state', async () => {
+  it('starts direct and encrypts/masks credentials without a separate store key', async () => {
     const actor = await account()
     const initial = await status(actor)
     expect(initial.profiles).toEqual([])
@@ -84,12 +84,9 @@ describe.skipIf(!dbAvailable)('super-admin outbound settings and shared runtime 
     expect((await perform(actor, 'outbound.profile', '/outbound/profiles', input)).statusCode).toBe(409)
     expect((await readOutbound(ctx.db)).profiles.find(p => p.id === saved.id)?.password).toBe('fixture-secret')
   })
-  it('rechecks explicit super-admin eligibility and database role after proof issuance', async () => {
+  it('rechecks the existing database role after proof issuance', async () => {
     const actor = await account(), input = { revision: (await status(actor)).revision, integration: 'hetzner', confirm: true }
     const proof = await authorize(actor, 'outbound.test', input)
-    c.OUTBOUND_PROXY_SUPER_ADMIN_IDS = c.OUTBOUND_PROXY_SUPER_ADMIN_IDS.filter(id => id !== actor.id)
-    expect((await send(actor, 'POST', '/outbound/test', { ...input, proof })).statusCode).toBe(403)
-    c.OUTBOUND_PROXY_SUPER_ADMIN_IDS.push(actor.id)
     await ctx.db.update(users).set({ role: 'user' }).where(eq(users.id, actor.id))
     expect((await send(actor, 'POST', '/outbound/test', { ...input, proof })).statusCode).toBe(403)
   })

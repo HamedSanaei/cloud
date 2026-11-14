@@ -1,10 +1,11 @@
-import { randomUUID } from 'node:crypto'
+import { hkdfSync, randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as config from '../../src/config.js'
 import * as policy from '../../src/modules/outbound/policy.js'
 import { emptyOutboundState, OutboundHttp, selectedRoute, OutboundFailure } from '../../src/modules/outbound/client.js'
-import { canManageOutbound, profileInput, routeInput, testInput } from '../../src/modules/outbound/settings.js'
-import { seal, unseal } from '../../src/modules/system/security.js'
+import { canManageOutbound, profileInput, routeInput, testInput, readOutbound, outboundKey } from '../../src/modules/outbound/settings.js'
+import { seal } from '../../src/modules/system/security.js'
+import type { DbClient } from '../../src/db/index.js'
 import { safeMetadata } from '../../src/modules/system/events.js'
 import type { OutboundState, OutboundIntegration } from '../../src/contracts/outbound.js'
 import type { SessionUser } from '../../src/modules/auth/service.js'
@@ -109,19 +110,24 @@ describe('outbound security boundary', () => {
     expect(profileInput.safeParse({ revision: 'initial', name: 'x', type: 'http', host: 'user:pass@example.test', port: 80, timeoutMs: 1000, confirm: true }).success).toBe(false)
     expect(routeInput.safeParse({ revision: 'initial', integration: 'internal', enabled: true, profileId: id, failurePolicy: 'closed', confirm: true }).success).toBe(false)
   })
-  it('requires the explicit super-admin UUID allowlist and encrypts credentials with authenticated context', () => {
-    const cfg = config.loadConfig({ NODE_ENV: 'test', OUTBOUND_PROXY_SUPER_ADMIN_IDS: adminId, STORE_SECRET_KEY: 'a'.repeat(64) })
-    vi.spyOn(config, 'getConfig').mockReturnValue(cfg)
+  it('uses existing active admin roles without a separate ID list and keeps logs sanitized', () => {
     const user = { id: adminId, role: 'admin', status: 'active' } as SessionUser
     expect(canManageOutbound(user)).toBe(true)
-    expect(canManageOutbound({ ...user, id: randomUUID() })).toBe(false)
+    expect(canManageOutbound({ ...user, id: randomUUID() })).toBe(true)
     expect(canManageOutbound({ ...user, role: 'user' })).toBe(false)
     expect(canManageOutbound({ ...user, status: 'disabled' })).toBe(false)
-    const encrypted = seal(Buffer.from('fixture-user:fixture-password'), 'outbound:test')
-    expect(encrypted.toString()).not.toContain('fixture-password')
-    expect(unseal(encrypted, 'outbound:test').toString()).toBe('fixture-user:fixture-password')
-    expect(() => unseal(encrypted, 'outbound:other')).toThrow()
     expect(safeMetadata({ integration: 'hetzner', route: 'proxy', profileId: id, password: 'fixture-password', username: 'fixture-user', url: 'https://secret@example.test' }))
       .toEqual({ integration: 'hetzner', route: 'proxy', profileId: id })
+  })
+  it('decrypts with the existing app secret without a separate store key and rejects a wrong key', async () => {
+    const cfg = config.loadConfig({ NODE_ENV: 'test', AUTH_SECRET: 'fixture-existing-app-secret', STORE_SECRET_KEY: '' })
+    vi.spyOn(config, 'getConfig').mockReturnValue(cfg)
+    const key = Buffer.from(hkdfSync('sha256', cfg.AUTH_SECRET, 'parserver-outbound-v1', 'proxy-settings', 32))
+    const encrypted = seal(Buffer.from(JSON.stringify(state)), `${outboundKey}:${state.revision}`, key).toString('base64')
+    const db = { query: { settings: { findFirst: async () => ({ value: { revision: state.revision, encrypted } }) } } } as unknown as DbClient
+    expect(encrypted).not.toContain('fixture-password')
+    expect(await readOutbound(db)).toEqual(state)
+    cfg.AUTH_SECRET = 'fixture-wrong-app-secret'
+    await expect(readOutbound(db)).rejects.toMatchObject({ category: 'configuration' })
   })
 })

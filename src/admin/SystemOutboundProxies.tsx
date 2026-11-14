@@ -1,11 +1,10 @@
 import { useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Input, Select, Toggle } from '../components/ui/FormControls'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { apiGet, apiPost } from '../lib/apiClient'
-import { useSensitive, type Capabilities } from './SystemSettings'
+import { useSensitive } from './SystemSettings'
 import type { OutboundIntegration, OutboundStatus, OutboundTestResult, PublicProxyProfile, ProxyType, OutboundRoute } from '../../backend/src/contracts/outbound'
 import './outbound-proxies.css'
 
@@ -14,11 +13,6 @@ const names: Record<OutboundIntegration, string> = { hetzner: 'هتزنر', leas
 const categories = { none: 'موفق', policy: 'مقصد غیرمجاز', configuration: 'تنظیمات ناقص یا پراکسی غیرفعال', timeout: 'پایان مهلت اتصال', authentication: 'نیازمند بررسی اعتبارنامهٔ سرویس', tls: 'خطای اعتبار گواهی TLS', unreachable: 'اتصال برقرار نشد', upstream: 'پاسخ ناموفق سرویس' }
 const routeNames = { direct: 'مستقیم', proxy: 'پراکسی', 'direct-fallback': 'بازگشت مجاز به مسیر مستقیم', blocked: 'مسدود؛ پراکسی در دسترس نیست' }
 const blank = { id: '', name: '', type: 'socks5' as ProxyType, host: '', port: '1080', timeoutMs: '10000', enabled: false, username: '', password: '', clearCredentials: false }
-
-export function SystemOutboundProxies() {
-  const capabilities = useOutletContext<Capabilities>()
-  return capabilities.outboundProxies ? <OutboundPanel encryptionReady={capabilities.encryptionReady} /> : <Card><p role="alert">تنظیمات شبکه فقط برای سوپرادمین مجاز در دسترس است.</p></Card>
-}
 
 function TestResult({ result, revision }: { result: OutboundTestResult | null; revision: string }) {
   if (!result) return <p className="outbound-muted">هنوز آزمایش نشده است.</p>
@@ -31,7 +25,7 @@ function TestResult({ result, revision }: { result: OutboundTestResult | null; r
   </div>
 }
 
-function OutboundPanel({ encryptionReady }: { encryptionReady: boolean }) {
+export function SystemOutboundProxies() {
   const query = useApiQuery(async () => (await apiGet<{ data: OutboundStatus }>(base)).data)
   const sensitive = useSensitive()
   const [draft, setDraft] = useState(blank), [busy, setBusy] = useState(false), [notice, setNotice] = useState('')
@@ -55,7 +49,6 @@ function OutboundPanel({ encryptionReady }: { encryptionReady: boolean }) {
   return <div className="page-stack outbound-panel">
     <Card><h2>شبکه و پراکسی خروجی</h2><p>پیش‌فرض تمام سرویس‌ها اتصال مستقیم است. فعال‌کردن پروفایل به‌تنهایی مسیر را تغییر نمی‌دهد؛ آن را جداگانه به سرویس اختصاص دهید.</p>
       <p>این قابلیت فقط اتصال سرور به APIهای مشخص را تغییر می‌دهد. آزمون‌ها سفارش، پیامک یا تراکنش نمی‌سازند. اعتبار گواهی‌های TLS همیشه بررسی می‌شود.</p>
-      {!encryptionReady ? <p role="alert">برای ذخیرهٔ پروفایل، کلید پایدار STORE_SECRET_KEY باید روی API و Worker یکسان تنظیم شود.</p> : null}
       <p role="status">{notice}</p>
     </Card>
     <Card><h2>{draft.id ? 'ویرایش پراکسی' : 'پراکسی جدید'}</h2>
@@ -79,7 +72,7 @@ function OutboundPanel({ encryptionReady }: { encryptionReady: boolean }) {
         {draft.id ? <Toggle label="حذف اعتبارنامهٔ ذخیره‌شده" checked={draft.clearCredentials} onChange={clearCredentials => setDraft({ ...draft, clearCredentials })} /> : null}
         <Toggle label="فعال‌بودن پروفایل" checked={draft.enabled} onChange={enabled => setDraft({ ...draft, enabled })} />
         <p>اگر پروفایلِ یک مسیر فعال را غیرفعال کنید، درخواست‌ها مسدود می‌شوند؛ برای اتصال مستقیم، مسیر آن سرویس را صریحاً غیرفعال کنید.</p>
-        <div className="outbound-actions"><Button type="submit" disabled={busy || !encryptionReady}>ذخیرهٔ پراکسی</Button>{draft.id ? <Button variant="secondary" onClick={() => setDraft(blank)}>انصراف از ویرایش</Button> : null}</div>
+        <div className="outbound-actions"><Button type="submit" disabled={busy}>ذخیرهٔ پراکسی</Button>{draft.id ? <Button variant="secondary" onClick={() => setDraft(blank)}>انصراف از ویرایش</Button> : null}</div>
       </form>
     </Card>
     <Card><h2>پروفایل‌ها</h2>

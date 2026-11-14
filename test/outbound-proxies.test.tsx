@@ -23,7 +23,7 @@ beforeEach(() => {
       return Response.json({ data: { revision: 'initial' } })
     }
     reads.push(path)
-    if (path.endsWith('/capabilities')) return Response.json({ data: { allowed: true, outboundProxies: allowed, encryptionReady } })
+    if (path.endsWith('/capabilities')) return Response.json({ data: { allowed, encryptionReady } })
     if (path.endsWith('/outbound')) return Response.json({ data })
     throw new Error(`Unexpected fixture path: ${path}`)
   }))
@@ -32,18 +32,18 @@ const open = () => render(<MemoryRouter initialEntries={['/admin/settings/outbou
 async function ready() { open(); await screen.findByRole('heading', { name: 'شبکه و پراکسی خروجی' }) }
 function integration(name: string) { return within(screen.getByRole('heading', { name, exact: true }).closest('article')!) }
 
-describe('super-admin outbound panel', () => {
-  it('denies an ordinary admin without fetching sensitive proxy settings or showing the navigation entry', async () => {
+describe('admin outbound panel', () => {
+  it('uses the existing settings access gate without fetching proxy settings for unauthorized users', async () => {
     allowed = false; open()
-    await screen.findByText('تنظیمات شبکه فقط برای سوپرادمین مجاز در دسترس است.')
+    await screen.findByText('دسترسی مدیریت مجاز نیست')
     expect(reads).not.toContain('/admin/settings/outbound')
-    expect(screen.queryByRole('link', { name: 'شبکه و پراکسی خروجی' })).toBeNull()
   })
-  it('defaults new profiles to disabled and prevents saving without the encryption key', async () => {
+  it('lets an existing admin save without an additional store key and defaults new profiles to disabled', async () => {
     encryptionReady = false; await ready()
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'ذخیرهٔ پراکسی' }).disabled).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'ذخیرهٔ پراکسی' }).disabled).toBe(false)
     expect(screen.getByRole<HTMLButtonElement>('switch', { name: 'فعال‌بودن پروفایل' }).getAttribute('aria-checked')).toBe('false')
-    expect(screen.getByText(/STORE_SECRET_KEY باید/)).toBeTruthy()
+    expect(screen.queryByText(/STORE_SECRET_KEY/)).toBeNull()
+    expect(screen.getByRole('link', { name: 'شبکه و پراکسی خروجی' })).toBeTruthy()
     expect(posts).toEqual([])
   })
   it('keeps stored credentials masked during editing and binds a replacement to the sensitive-operation proof', async () => {
