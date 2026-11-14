@@ -1,6 +1,7 @@
 import { Clock3, Laptop, LogOut, MapPin, Save, ShieldCheck, UserRound, UserRoundCheck } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { Button } from '../components/ui/Button'
+import { LogoutButton } from '../components/ui/LogoutButton'
 import { Card, SectionHeading } from '../components/ui/Card'
 import { Input, Select, Toggle } from '../components/ui/FormControls'
 import { MetricCard } from '../components/ui/MetricCard'
@@ -177,7 +178,7 @@ export function SessionsPage() {
                 <p><MapPin size={15} /> {session.location} <span>·</span> آخرین فعالیت: {session.lastActivity}</p>
               </div>
               {session.current ? (
-                <Button variant="secondary" icon={<LogOut size={17} />} disabled={revoking} onClick={revoke}>{revoking ? 'در حال خروج...' : 'خروج از سایر نشست‌ها'}</Button>
+                <LogoutButton icon={<LogOut size={17} />} disabled={revoking} onClick={revoke}>{revoking ? 'در حال خروج...' : 'خروج از سایر نشست‌ها'}</LogoutButton>
               ) : null}
             </article>
           ))

@@ -22,6 +22,9 @@
   --warning-soft: #fff7cc;
   --danger: #ef4444;
   --danger-soft: #fff1f2;
+  --danger-ink: #991b1b;
+  --danger-hover: #fee2e2;
+  --danger-active: #fecaca;
   --purple: #9333ea;
   --purple-soft: #f5eeff;
   --cyan: #14b8a6;
@@ -55,6 +58,9 @@
   --success-soft: #123323;
   --warning-soft: #3b3010;
   --danger-soft: #3f1920;
+  --danger-ink: #fda4af;
+  --danger-hover: #581c28;
+  --danger-active: #6b2130;
   --purple-soft: #291b40;
   --cyan-soft: #12343a;
   --shadow-sm: 0 2px 8px rgb(0 0 0 / 18%);
@@ -297,11 +303,6 @@ textarea:focus-visible {
 .nav-item--compact {
   min-height: 40px;
   font-size: 14px;
-}
-
-.nav-item--danger:hover {
-  background: var(--danger-soft);
-  color: var(--danger);
 }
 
 .sidebar__version {

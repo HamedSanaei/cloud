@@ -4,6 +4,7 @@ import { AuthPage } from '../pages/AuthPages'
 import { useAuth } from '../auth/AuthContext'
 import { useTheme } from '../hooks/useTheme'
 import { BRAND_NAME, BrandMark } from '../components/Brand'
+import { LogoutButton } from '../components/ui/LogoutButton'
 import './admin.css'
 
 const nav = [
@@ -64,7 +65,7 @@ export function AdminLayout() {
         <div className="admin-sidebar__bottom">
           <div className="admin-sidebar__role"><ShieldCheck size={19} /><span><strong>مدیر سامانه</strong><small>دسترسی مدیریتی</small></span></div>
           <Link className="admin-sidebar__exit" to="/dashboard"><Home size={17} /> ناحیه کاربری</Link>
-          <button className="admin-sidebar__exit" type="button" onClick={() => void onLogout()}><LogOut size={17} /> خروج</button>
+          <LogoutButton className="admin-sidebar__exit" onClick={() => void onLogout()}><LogOut size={17} /> خروج</LogoutButton>
         </div>
       </aside>
       <div className="admin-shell__main">

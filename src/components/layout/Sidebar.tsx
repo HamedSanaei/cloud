@@ -6,6 +6,7 @@ import { useAuth } from '../../auth/AuthContext'
 import { useApiQuery } from '../../hooks/useApiQuery'
 import { getIntegrationStatus } from '../../lib/platformClient'
 import { BRAND_NAME, BrandMark } from '../Brand'
+import { LogoutButton } from '../ui/LogoutButton'
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { showToast } = useToast()
@@ -79,10 +80,10 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               {settingsLinks.map(({ label, path, icon: Icon }) => <NavLink to={path} key={path} onClick={onClose} className={({ isActive }) => `nav-item nav-item--compact ${isActive ? 'nav-item--active' : ''}`}><Icon size={17} /><span>{label}</span></NavLink>)}
             </details>
           )}
-          <button type="button" className="nav-item nav-item--compact nav-item--danger" onClick={() => void logout()}>
+          <LogoutButton className="nav-item nav-item--compact" onClick={() => void logout()}>
             <LogOut size={18} />
             <span>خروج</span>
-          </button>
+          </LogoutButton>
         </div>
 
         <NavLink to="/changelog" className="sidebar__version" onClick={onClose}>نسخه ۱.۰.۰</NavLink>
