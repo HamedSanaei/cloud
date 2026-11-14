@@ -17,7 +17,7 @@ import { PlatformAdminPage } from './pages/PlatformAdminPage'
 import { AdminLayout } from './admin/AdminLayout'
 import { AdminDatacenters } from './admin/AdminDatacenters'
 import { AdminTickets } from './admin/AdminTickets'
-import { SystemSettingsLayout, SystemGateway, SystemLogs, SystemFinance, SystemBackups } from './admin/SystemSettings'
+import { SystemSettingsLayout, SystemGateway, SystemLogs, SystemFinance, SystemBackups, SystemPrimaryIpv4Pricing } from './admin/SystemSettings'
 import { AdminOverview, AdminOrders, AdminOrderPage, AdminUsers, AdminUserPage, AdminUserServers, AdminServers, AdminServerPage } from './admin/AdminPages'
 
 export function App() {
@@ -39,6 +39,7 @@ export function App() {
         <Route path="datacenters" element={<AdminDatacenters />} />
         <Route path="tickets" element={<AdminTickets />} />
         <Route path="settings" element={<SystemSettingsLayout />}>
+          <Route path="primary-ipv4" element={<SystemPrimaryIpv4Pricing />} />
           <Route index element={<Navigate to="gateway" replace />} />
           <Route path="gateway" element={<SystemGateway />} /><Route path="logs" element={<SystemLogs />} />
           <Route path="backups" element={<SystemBackups />} /><Route path="finance" element={<SystemFinance />} />

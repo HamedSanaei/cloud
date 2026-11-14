@@ -104,6 +104,7 @@ const envSchema = z.object({
   TABAPAY_MERCHANT: z.string().default(''),
   TABAPAY_SANDBOX: z.string().default('false').transform(v => v === 'true' || v === '1'),
   STORE_SECRET_KEY: z.string().default(''),
+  PRIMARY_IPV4_SUPER_ADMIN_IDS: z.string().default('').transform(value => value.split(',').map(id => id.trim().toLowerCase()).filter(Boolean)).pipe(z.array(z.uuid())),
   SYSTEM_BACKUP_KEY: z.string().default(''),
   SYSTEM_INSTANCE_ID: z.string().default(''),
   SYSTEM_BACKUP_DIR: z.string().default('/var/lib/parserver/system'),

@@ -26,6 +26,7 @@ export class HetznerClient {
         signal: AbortSignal.timeout(30_000),
         redirect: 'error',
       })
+      if (method === 'DELETE' && response.status === 204) return {}
       payload = await response.json()
     } catch {
       if (method !== 'GET') throw new ProviderUnknownError('Hetzner mutation outcome is unknown; do not dispatch again')

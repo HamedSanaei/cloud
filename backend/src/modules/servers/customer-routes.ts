@@ -17,6 +17,8 @@ import { customerProvider, findBlockingManagementOperation, isOrphanedPowerOpera
 import { inspectLegacyPowerOperation, reconcileReceiptlessPowerOffWithoutProviderAction } from './power-reconciliation.js'
 import { getServerForUser } from './service.js'
 import { claimServerPassword } from './secrets.js'
+import { quotePrimaryIpv4, replacePrimaryIpv4, requestPrimaryIpv4 } from './primary-ip-request.js'
+import { advancePrimaryIpv4, primaryIpv4Result } from './primary-ip-operation.js'
 
 const params = z.object({ id: z.string().uuid() })
 const acknowledgement = { confirm: z.literal(true), hostname: z.string().min(1).max(63) }
@@ -44,6 +46,7 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
   app.get('/servers/:id/management', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async request => {
     const user = requireUser(request), { id } = parse(params, request.params), server = await getServerForUser(db, user.id, id)
     const { refresh } = parse(z.object({ refresh: z.literal('1').optional() }), request.query)
+    const blocking = findBlockingManagementOperation(db, server.id)
     let manager: CustomerProvider | undefined
     let providerBlock: ServerAccessBlock | null = null
     try { manager = customerProvider(server) } catch (error) {
@@ -53,7 +56,10 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
     }
     let view: ProviderServerView | null = null
     if (manager && !server.terminatedAt && server.status !== 'terminated') {
-      try { view = await liveView(server, manager, refresh === '1') } catch (error) {
+      try {
+        view = await liveView(server, manager, refresh === '1')
+        if (view.ipv4 && server.ipv4 && view.ipv4 !== server.ipv4 && !await blocking) view = await liveView(server, manager, true)
+      } catch (error) {
         const accessDenied = error instanceof HetznerApiError ? [401, 403, 404].includes(error.httpStatus) : error instanceof ProviderPermanentError
         providerBlock = accessDenied ? 'provider_access_denied' : 'provider_unavailable'
       }
@@ -63,7 +69,7 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
       server.subscriptionId ? db.query.subscriptions.findFirst({ where: t => and(eq(t.id, server.subscriptionId!), eq(t.userId, user.id)) }) : undefined,
       order?.quoteId ? db.query.quotes.findFirst({ where: t => and(eq(t.id, order.quoteId!), eq(t.userId, user.id)) }) : undefined,
       db.query.providerOperations.findMany({ where: t => and(eq(t.referenceId, server.id), inArray(t.kind, ['server_action', 'server_management'])), orderBy: t => desc(t.createdAt), limit: 30 }),
-      findBlockingManagementOperation(db, server.id),
+      blocking,
     ])
     const operations = blockingOperation && !history.some(op => op.id === blockingOperation.id) ? [...history, blockingOperation] : history
     const commonBlock = managementBlock(server, !!blockingOperation) ?? providerBlock
@@ -77,7 +83,7 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
     return { data: { ...serverToDto(server, serverPowerPolicy(server, fleet)), lifecycle: server.terminationState ?? (server.activatedAt ? 'ready' : 'provisioning'),
       providerAvailable: !!view, providerIdentity: server.providerServerId, providerState: view?.state ?? (server.terminatedAt ? 'terminated' : null),
       facts: view ? { hostname: view.hostname ?? null, vcpu: view.vcpu ?? null, memoryMb: view.memoryMb ?? null, diskGb: view.diskGb ?? null,
-        ipv4: view.ipv4 ?? null, ipv6: view.ipv6 ?? null, createdAt: meta.createdAt ?? null, location: meta.location ?? null, serverType: meta.serverType ?? null,
+        ipv4: blockingOperation?.action === replacePrimaryIpv4 ? server.ipv4 : view.ipv4 ?? null, ipv6: view.ipv6 ?? null, createdAt: meta.createdAt ?? null, location: meta.location ?? null, serverType: meta.serverType ?? null,
         image: meta.operatingSystem ?? null, imageId: meta.imageId ?? null, outgoingTrafficBytes: meta.outgoingTrafficBytes ?? null, includedTrafficBytes: meta.includedTrafficBytes ?? null,
         trafficPeriod: null, protection: meta.protection ?? null, rescueEnabled: meta.rescueEnabled ?? null, isoId: meta.isoId ?? null,
         backupWindow: meta.backupWindow ?? null, volumes: meta.volumes ?? [], privateNetworks: meta.privateNetworks ?? [], firewalls: meta.firewalls ?? [], floatingIps: meta.floatingIps ?? [] } : null,
@@ -91,7 +97,8 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
         unavailableReason: 'مالکیت و تعرفهٔ مستقل منابع جانبی باید پیش از فعال‌سازی عملیات در فروشگاه ثبت شود؛ فهرست منابع متصل صرفاً جهت اطلاع است.' },
       accessEligibility, resizeBlock: commonBlock,
       consoleBlock: commonBlock ?? (hasBrowserSession(request) ? null : 'browser_session_required'),
-      operations: operations.map(managementDto), credentials,
+      primaryIpv4: await quotePrimaryIpv4(db, server, view, !!commonBlock || !manager?.primaryIpv4, fleet),
+      operations: operations.map(op => ({ ...managementDto(op), ...(op.action === replacePrimaryIpv4 ? { primaryIpv4: primaryIpv4Result(op) } : {}) })), credentials,
     } }
   })
   app.post('/servers/:id/management/operations/:operationId/recheck', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async request => {
@@ -108,7 +115,8 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
         // Never release this lock by timeout alone; require full provider proof.
         const recovered = await reconcileReceiptlessPowerOffWithoutProviderAction(db, server, operation, user.id)
         if (!recovered) await inspectLegacyPowerOperation(server, operation)
-      } else await reconcileCustomerOperation(db, server, operation)
+      } else if (operation.action === replacePrimaryIpv4) await advancePrimaryIpv4(db, server, operation)
+      else await reconcileCustomerOperation(db, server, operation)
     } catch (error) {
       if (!(error instanceof ProviderPermanentError || error instanceof ProviderRetryableError || error instanceof ProviderUnknownError)) throw error
       checkFailed = true
@@ -116,6 +124,15 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
     const current = await findOperation()
     if (!current) throw new NotFoundError('عملیات سرور یافت نشد')
     return { data: { operation: managementDto(current), checkFailed } }
+  })
+  app.post('/servers/:id/primary-ipv4', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const user = requireUser(request), { id } = parse(params, request.params)
+    const key = parse(z.uuid(), request.headers['idempotency-key'])
+    const input = parse(z.object({ ...acknowledgement, feeRial: z.number().int().positive(), version: z.string().max(50), currentIp: z.ipv4() }).strict(), request.body)
+    const operation = await requestPrimaryIpv4(db, user, id, input, key)
+    // The periodic server sync also recovers committed operations if Redis is unavailable here.
+    if (!operation.completedAt) await queues.addServerSync(id).catch(() => undefined)
+    return reply.code(202).send({ data: { ...managementDto(operation), primaryIpv4: primaryIpv4Result(operation) } })
   })
   app.get('/servers/:id/images', async request => {
     const user = requireUser(request), { id } = parse(params, request.params), server = await getServerForUser(db, user.id, id)

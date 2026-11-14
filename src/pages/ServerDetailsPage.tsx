@@ -14,15 +14,15 @@ import { ServerConsole } from '../components/servers/ServerConsole'
 import { ServerAccess } from '../components/servers/ServerAccess'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { formatFaDateTime, formatFaNumber, formatToman } from '../lib/format'
-import { actionLabels, getResizeOptions, getServerDetail, getServerMetrics, previewResize, recheckServerOperation, submitServerAction,
-  type ManagementAction, type ResizePreview, type ServerDetail, type ServerMetrics, type ServerOperation } from '../lib/serverManagement'
+import { actionLabels, getResizeOptions, getServerDetail, getServerMetrics, previewResize, recheckServerOperation, submitPrimaryIpv4, submitServerAction,
+  type ManagementAction, type PrimaryIpv4Quote, type ResizePreview, type ServerDetail, type ServerMetrics, type ServerOperation } from '../lib/serverManagement'
 
 const missing = 'در دسترس نیست'
 const byteValue = (value: number | null | undefined) => value === null || value === undefined ? missing : `${new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 2 }).format(value / 1e9)} GB`
 const amount = (value: number | null) => value === null ? missing : formatToman(value / 10)
 const periodLabels: Record<string, string> = { HOURLY: 'ساعتی', DAILY: 'روزانه', MONTHLY: 'ماهانه' }
 const tabs = [['overview', 'نمای کلی'], ['monitoring', 'مانیتورینگ'], ['operations', 'عملیات'], ['resize', 'تغییر پلن'], ['access', 'سیستم‌عامل و دسترسی'], ['console', 'کنسول و تنظیمات']] as const
-type ActionRequest = { action: ManagementAction; input: Record<string, unknown> }
+type ActionRequest = { action: ManagementAction; input: Record<string, unknown> } | { action: 'replace_primary_ipv4'; quote: PrimaryIpv4Quote }
 export function ServerDetailsPage() {
   const { id = '' } = useParams(), [search, setSearch] = useSearchParams(), tab = search.get('tab') || 'overview'
   const fresh = useRef(false)
@@ -40,6 +40,13 @@ export function ServerDetailsPage() {
   const recheck = () => { rounds.current = 0; fresh.current = true; refresh() }
   const blockingOperation = server?.operations.find(op => !['confirmed', 'failed'].includes(op.status))
   const pending = !!blockingOperation
+  const latestIpChange = server?.operations.find(op => op.action === 'replace_primary_ipv4')
+  const lastIpCompletion = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (latestIpChange?.status !== 'confirmed' || latestIpChange.id === lastIpCompletion.current) return
+    lastIpCompletion.current = latestIpChange.id
+    window.dispatchEvent(new Event('server-lifecycle-changed'))
+  }, [latestIpChange])
   const checkOperation = async (operation: ServerOperation) => {
     if (checking) return
     setChecking(true)
@@ -78,7 +85,8 @@ export function ServerDetailsPage() {
     }
     setBusy(true); setError('')
     try {
-      await submitServerAction(server.id, server.name, request.action, request.input, key.current)
+      if (request.action === 'replace_primary_ipv4') await submitPrimaryIpv4(server.id, server.name, request.quote, key.current)
+      else await submitServerAction(server.id, server.name, request.action, request.input, key.current)
       showToast('درخواست ثبت شد؛ نتیجهٔ نهایی ارائه‌دهنده در تاریخچه نمایش داده می‌شود.', 'info')
       setRequest(null); rounds.current = 0; refresh(); window.dispatchEvent(new Event('server-lifecycle-changed'))
     } catch (error) { setError(error instanceof Error ? error.message : 'ثبت عملیات ناموفق بود؛ پیش از تکرار، تاریخچه را بررسی کنید.') }
@@ -128,7 +136,16 @@ export function ServerDetailsPage() {
       openOperations={() => setSearch({ tab: 'operations' })} />
       <Card><h2>امکانات پیشرفته</h2><div className="server-advanced-links"><Button variant="secondary" onClick={() => setSearch({ tab: 'storage' })}>Snapshot، Backup و Volume</Button><Button variant="secondary" onClick={() => setSearch({ tab: 'network' })}>شبکه، حفاظت و Rescue</Button></div><p>{server.capabilities.unavailableReason}</p></Card></div>}
     {tab === 'storage' && <ServerStorage server={server} />}
-    {tab === 'network' && <ServerNetwork server={server} disabled={disabled} ask={ask} />}
+    {tab === 'network' && <><ServerNetwork server={server} disabled={disabled} ask={ask} />
+      <Card><h2>تعویض IPv4 اصلی</h2>{server.primaryIpv4 ? <>
+        {server.provider === 'hetzner' && <><PrimaryIpv4Summary quote={server.primaryIpv4} /><PrimaryIpv4Warning /></>}
+        {server.primaryIpv4.reason && <p>{server.primaryIpv4.reason}</p>}
+        {server.primaryIpv4.needsTopUp && <LinkButton variant="secondary" to="/wallet">افزایش موجودی</LinkButton>}
+        <Button variant="secondary" disabled={disabled || detail.loading || !!detail.error || !!server.primaryIpv4.reason || !server.primaryIpv4.currentIp}
+          onClick={() => { key.current = crypto.randomUUID(); setError(''); setRequest({ action: 'replace_primary_ipv4', quote: server.primaryIpv4! }) }}>درخواست تعویض IPv4 اصلی</Button>
+      </> : <p>تعویض IPv4 اصلی برای این سرور در دسترس نیست.</p>}
+      {latestIpChange && <ServerOperationStatus operation={latestIpChange} />}
+      {blockingOperation?.action === 'replace_primary_ipv4' && operationRecovery}</Card></>}
     {!['overview', 'monitoring', 'operations', 'resize', 'access', 'console', 'storage', 'network'].includes(tab) && <Card><p>این بخش یافت نشد.</p><Button onClick={() => setSearch({ tab: 'overview' })}>نمای کلی</Button></Card>}
     <ServerBillingTerminationState server={server} />
     <Card className="server-danger-zone">
@@ -146,9 +163,18 @@ export function ServerDetailsPage() {
         </div>
       </div>}
     </Card>
-    {request && <DestructiveConfirmation key={key.current} server={server} action={request.action} busy={busy} error={error} onClose={() => setRequest(null)} onConfirm={() => { void confirm() }} />}
+    {request && <DestructiveConfirmation key={key.current} server={server} action={request.action} busy={busy} error={error} onClose={() => setRequest(null)} onConfirm={() => { void confirm() }}>
+      {request.action === 'replace_primary_ipv4' && <><PrimaryIpv4Summary quote={request.quote} /><PrimaryIpv4Warning /></>}
+    </DestructiveConfirmation>}
     {secretOperation && <OneTimePassword server={server} operationId={secretOperation} onClose={() => { setSecretOperation(null); refresh() }} />}
   </div>
+}
+function PrimaryIpv4Summary({ quote }: { quote: PrimaryIpv4Quote }) {
+  return <dl className="server-facts"><div><dt>IPv4 فعلی</dt><dd><CopyableIp value={quote.currentIp} /></dd></div>
+    <div><dt>هزینهٔ یک‌باره</dt><dd>{amount(quote.feeRial)}</dd></div><div><dt>موجودی کیف پول پرداخت سرور</dt><dd>{amount(quote.balanceRial)}</dd></div></dl>
+}
+function PrimaryIpv4Warning() {
+  return <p className="server-notice">تعویض آدرس به خاموشی موقت نیاز دارد و ممکن است چند دقیقه یا بیشتر طول بکشد. پس از تغییر، تنظیمات SSH، DNS، فایروال، فهرست‌های مجاز و در صورت نیاز شبکهٔ سیستم‌عامل را به‌روز کنید. تعرفهٔ مستمر IPv4 هتزنر جدا از این هزینهٔ یک‌باره است. مبلغ هنگام ثبت کنار گذاشته می‌شود و در صورت شکست یا نتیجهٔ نامشخص بازمی‌گردد.</p>
 }
 function ServerOverview({ server }: { server: ServerDetail }) {
   const f = server.facts, b = server.billing

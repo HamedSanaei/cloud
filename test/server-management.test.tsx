@@ -27,6 +27,30 @@ function open(tab = 'overview') {
   return render(<MemoryRouter initialEntries={[`/servers/${detailServer.id}?tab=${tab}`]}><ToastProvider><Routes><Route path="/servers/:id" element={<ServerDetailsPage />} /></Routes></ToastProvider></MemoryRouter>)
 }
 describe('customer server management UI', () => {
+  it('shows the IPv4 quote and downtime before submitting the confirmed fee once', async () => {
+    const user = userEvent.setup()
+    detail.primaryIpv4 = { currentIp: '192.0.2.10', feeRial: 1500000, version: 'default', balanceRial: 5000000, reason: null, needsTopUp: false }
+    open('network')
+    await user.click(await screen.findByRole('button', { name: 'درخواست تعویض IPv4 اصلی' }))
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.textContent).toContain('خاموشی موقت')
+    expect(dialog.textContent).toMatch(/۱۵۰[٬,]۰۰۰ تومان/)
+    const confirm = screen.getByRole<HTMLButtonElement>('button', { name: 'تأیید تعویض IPv4 اصلی' })
+    expect(confirm.disabled).toBe(true)
+    await user.type(screen.getByRole('textbox'), detailServer.name)
+    await user.click(screen.getByRole('checkbox'))
+    await user.click(confirm)
+    const submitted = requests.filter(request => request.method === 'POST')
+    expect(submitted).toEqual([expect.objectContaining({ path: `/servers/${detailServer.id}/primary-ipv4`, key: expect.any(String),
+      body: { currentIp: '192.0.2.10', version: 'default', feeRial: 1500000, hostname: detailServer.name, confirm: true } })])
+  })
+  it('explains insufficient IPv4 replacement funds and links to the wallet', async () => {
+    detail.primaryIpv4 = { currentIp: '192.0.2.10', feeRial: 1500000, version: 'default', balanceRial: 0, reason: 'موجودی کافی نیست.', needsTopUp: true }
+    open('network')
+    expect(await screen.findByText('موجودی کافی نیست.')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'افزایش موجودی' }).getAttribute('href')).toBe('/wallet')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'درخواست تعویض IPv4 اصلی' }).disabled).toBe(true)
+  })
   it('shows real resource fields and keeps provider and customer price separate', async () => {
     open()
     await screen.findByText('اطلاعات فنی')
