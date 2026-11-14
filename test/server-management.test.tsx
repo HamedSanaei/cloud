@@ -162,6 +162,17 @@ describe('customer server management UI', () => {
     expect(await screen.findByText(/ساخت و بازیابی Snapshot.*هنوز/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'ساخت اسنپ‌شات' })).toBeNull()
   })
+  it('routes a console blocked by a prior operation to the operation history', async () => {
+    detail.capabilities.console = true
+    detail.consoleBlock = 'operation_pending'
+    detail.operations = [{ id: 'pending-shutdown', action: 'power_off', status: 'outcome_unknown', actionId: null,
+      createdAt: '2026-11-14T00:00:00Z', updatedAt: '2026-11-14T00:00:00Z', completedAt: null, message: null }]
+    open('console')
+    expect((await screen.findByRole<HTMLButtonElement>('button', { name: 'ایجاد نشست موقت' })).disabled).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'پایان نشست' }).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'مشاهدهٔ عملیات' }))
+    expect(screen.getByRole('button', { name: 'بررسی نتیجهٔ عملیات' })).toBeTruthy()
+  })
   it('does not reveal a delayed one-time credential after the tab becomes hidden', async () => {
     let resolve: (value: Response) => void = () => undefined
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(done => { resolve = done })))

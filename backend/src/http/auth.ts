@@ -11,6 +11,11 @@ export function extractToken(request: FastifyRequest): string | undefined {
   return cookie || undefined
 }
 
+export function hasBrowserSession(request: FastifyRequest): boolean {
+  const cookie = request.cookies?.[AUTH_COOKIE]
+  return !!cookie && extractToken(request) === cookie
+}
+
 export function requireUser(request: FastifyRequest): SessionUser {
   const user = request.user
   if (!user) throw new UnauthorizedError('ابتدا وارد حساب خود شوید')

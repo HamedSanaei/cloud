@@ -4,7 +4,7 @@ import { z } from 'zod'
 import type { AppContext } from '../../app.js'
 import { idempotencyKeys, serverSecrets } from '../../db/schema.js'
 import { parse } from '../../http/validate.js'
-import { requireUser } from '../../http/auth.js'
+import { hasBrowserSession, requireUser } from '../../http/auth.js'
 import { ConflictError, NotFoundError, ProviderPermanentError, ProviderRetryableError, ProviderUnknownError, ValidationError } from '../../lib/errors.js'
 import { serverToDto } from '../../lib/dto.js'
 import { loadFundingFleet, serverPowerPolicy } from '../billing/funding.js'
@@ -88,7 +88,9 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
       capabilities: { power: !!manager, resize: !!manager, rebuild: !!manager, resetPassword: !!manager, console: !!manager?.console, rescue: !!manager, protection: !!manager,
         iso: false, snapshots: false, backups: false, volumes: false, networkMutations: false,
         unavailableReason: 'مالکیت و تعرفهٔ مستقل منابع جانبی باید پیش از فعال‌سازی عملیات در فروشگاه ثبت شود؛ فهرست منابع متصل صرفاً جهت اطلاع است.' },
-      accessEligibility, resizeBlock: commonBlock, operations: operations.map(managementDto), credentials,
+      accessEligibility, resizeBlock: commonBlock,
+      consoleBlock: commonBlock ?? (hasBrowserSession(request) ? null : 'browser_session_required'),
+      operations: operations.map(managementDto), credentials,
     } }
   })
   app.post('/servers/:id/management/operations/:operationId/recheck', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async request => {
