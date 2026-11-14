@@ -27,8 +27,14 @@ import { formatCount, formatFaDateTime, formatToman } from '../lib/format'
 import { getIntegrationStatus } from '../lib/platformClient'
 import { WalletRecharge } from '../components/ui/WalletRecharge'
 import { WalletPaymentStatus } from '../components/ui/WalletPaymentStatus'
+import { useAuth } from '../auth/AuthContext'
+
+function FinancialDate({ date, dueAt, paidAt, timezone, label }: { date: string; dueAt?: string; paidAt?: string; timezone?: string; label?: string }) {
+  return <>{label && `${label}: `}<time dateTime={date}>{formatFaDateTime(date, timezone)}</time>{dueAt && dueAt !== date && <small style={{ display: 'block' }}>سررسید: <time dateTime={dueAt}>{formatFaDateTime(dueAt, timezone)}</time></small>}{paidAt && <small style={{ display: 'block' }}>ثبت پرداخت: <time dateTime={paidAt}>{formatFaDateTime(paidAt, timezone)}</time></small>}</>
+}
 
 export function WalletPage() {
+  const { user } = useAuth()
   const [searchParams] = useSearchParams()
   const returnToCheckout = searchParams.get('returnTo') === 'server-checkout'
   const [modalOpen, setModalOpen] = useState(false)
@@ -87,7 +93,7 @@ export function WalletPage() {
   const downloadTransactions = () => {
     // Quote all cells and neutralize spreadsheet formulas in user-controlled text.
     const cell = (value: string | number) => `"${String(value).replace(/^\s*[=+@-]/, "'$&").replaceAll('"', '""')}"`
-    const rows = [['شرح', 'کیف پول', 'مبلغ', 'تاریخ', 'وضعیت'], ...visibleTransactions.map(item => [item.description, item.wallet ?? '—', item.formattedAmount ?? formatToman(item.amount), item.date, item.status])]
+    const rows = [['شرح', 'کیف پول', 'مبلغ', 'زمان ثبت تراکنش', 'سررسید تمدید', 'وضعیت'], ...visibleTransactions.map(item => [item.description, item.wallet ?? '—', item.formattedAmount ?? formatToman(item.amount), formatFaDateTime(item.date, user?.timezone), item.scheduledAt ? formatFaDateTime(item.scheduledAt, user?.timezone) : '—', item.status])]
     const url = URL.createObjectURL(new Blob(['\uFEFF' + rows.map(row => row.map(cell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' }))
     const link = document.createElement('a'); link.href = url; link.download = 'wallet-transactions.csv'; link.click()
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
@@ -149,7 +155,7 @@ export function WalletPage() {
                 <td>{transaction.description}</td>
                 <td>{transaction.wallet}</td>
                 <td>{transaction.formattedAmount ?? formatToman(transaction.amount)}</td>
-                <td>{transaction.date}</td>
+                <td><FinancialDate label="ثبت تراکنش" date={transaction.date} dueAt={transaction.scheduledAt} timezone={user?.timezone} /></td>
                 <td><Badge>{transaction.status}</Badge></td>
               </tr>
             ))}
@@ -183,6 +189,7 @@ const chargeStatusLabels: Record<string, string> = {
 }
 
 function FinancialList({ type }: FinancialListProps) {
+  const { user } = useAuth()
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
   const isInvoice = type === 'invoice'
@@ -197,7 +204,7 @@ function FinancialList({ type }: FinancialListProps) {
   }, [type])
 
   const rows = useMemo(() => {
-    const items = (active.data?.items ?? []) as Array<{ number: string; description?: string; invoiceNumber?: string; status: string; amount: number; formattedAmount?: string; date: string; id: string }>
+    const items = (active.data?.items ?? []) as Array<{ number: string; description?: string; invoiceNumber?: string; status: string; amount: number; formattedAmount?: string; date: string; dueAt?: string; paidAt?: string; id: string }>
     const normalized = query.trim()
     return items.filter((item) => {
       const haystack = `${item.number} ${item.description ?? ''} ${item.invoiceNumber ?? ''}`
@@ -247,7 +254,7 @@ function FinancialList({ type }: FinancialListProps) {
                 <td>{row.number}</td>
                 <td>{isInvoice ? row.description : row.invoiceNumber ?? '—'}</td>
                 <td>{row.formattedAmount ?? formatToman(row.amount)}</td>
-                <td>{isInvoice ? row.date : formatFaDateTime(row.date)}</td>
+                <td><FinancialDate label={isInvoice ? 'صدور' : undefined} date={row.date} dueAt={isInvoice ? row.dueAt : undefined} paidAt={isInvoice ? row.paidAt : undefined} timezone={user?.timezone} /></td>
                 <td><Badge>{isInvoice ? row.status : chargeStatusLabels[row.status] ?? 'نامشخص'}</Badge></td>
               </tr>
             ))}

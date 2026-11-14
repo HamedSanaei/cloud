@@ -12,6 +12,7 @@ import { useApiQuery } from '../hooks/useApiQuery'
 import { isApiConfigured } from '../lib/apiClient'
 import { getProfile, listSessions, revokeOtherSessions, updateProfile, updateTimezone, verifyNationalCode } from '../lib/endpoints'
 import { formatCount } from '../lib/format'
+import { useAuth } from '../auth/AuthContext'
 
 export function ProfilePage() {
   const [firstName, setFirstName] = useState('')
@@ -187,9 +188,10 @@ export function SessionsPage() {
 }
 
 export function SettingsPage() {
+  const { user, refresh } = useAuth()
   const [timezone, setTimezone] = useState(() => {
     try {
-      return localStorage.getItem('cloud-timezone') ?? 'Asia/Tehran'
+      return user?.timezone ?? localStorage.getItem('cloud-timezone') ?? 'Asia/Tehran'
     } catch {
       return 'Asia/Tehran'
     }
@@ -201,6 +203,7 @@ export function SettingsPage() {
     setSaving(true)
     try {
       await updateTimezone(timezone)
+      await refresh()
       try {
         localStorage.setItem('cloud-timezone', timezone)
       } catch {

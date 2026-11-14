@@ -9,6 +9,7 @@ export interface AuthUser {
   lastName?: string | null
   mobile?: string | null
   twoFactorEnabled?: boolean
+  timezone?: string
 }
 
 export interface AuthSession {

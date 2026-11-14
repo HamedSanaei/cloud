@@ -130,6 +130,29 @@ provider_base_cost (cents)
 - The notification bell refreshes every minute, on focus and when opened.
   Messages and the top-up link remain accessible on narrow mobile screens.
 
+## Display timezone and hourly posting (issue #29)
+
+- Wallet history, its CSV export and invoices format API timestamps as Solar
+  Hijri dates with Persian digits and a 24-hour clock. The authenticated account
+  timezone takes priority over the browser cache; Tehran is the Persian default
+  and is visibly labeled «به وقت ایران». API timestamps remain UTC ISO values.
+- Wallet renewal rows show transaction posting separately from the invoice's
+  scheduled due time. This context is resolved from the existing
+  `renewal:<invoice UUID>` idempotency reference for historical rows too, with
+  invoice ownership checked; no ledger rows are rewritten. Invoices distinguish
+  issuance, due time and payment posting.
+- Previously, extending from the worker's current time added its scheduling
+  delay to every hourly boundary. Active automatic hourly renewals now extend
+  from the previous period end. A minute-late posting does not shift the next
+  due time. Existing pause/restart, grace and daily/monthly policies remain.
+  Delayed active periods can be caught up one period per sweep, with the same
+  subscription/user locks and invoice-keyed debit idempotency safeguards.
+- An isolated PostgreSQL regression exercises three concurrently requested
+  hourly renewals with increasing posting delays: posting intervals can be
+  61 minutes while due intervals remain exactly 60 minutes, with one debit per
+  period. No live account was charged or inspected for this fix; historical
+  schedule drift is not retroactively rebased.
+
 ## Idempotency
 
 - `Idempotency-Key` header on order/payment POSTs (orders store

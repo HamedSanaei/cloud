@@ -78,6 +78,7 @@ export function transactionToDto(tx: {
   description?: string | null
   createdAt: Date
   balanceAfterRial: number
+  scheduledAt?: Date | null
 }) {
   return {
     id: tx.id,
@@ -85,6 +86,7 @@ export function transactionToDto(tx: {
     amount: rialToToman(tx.amountRial),
     amountRial: tx.amountRial,
     date: tx.createdAt.toISOString(),
+    ...(tx.scheduledAt ? { scheduledAt: tx.scheduledAt.toISOString() } : {}),
     status: tx.amountRial < 0 ? 'success' : 'success',
     type: tx.type,
   }
@@ -98,6 +100,7 @@ export function invoiceToDto(invoice: {
   status: string
   createdAt: Date
   dueAt: Date
+  paidAt?: Date | null
 }) {
   return {
     id: invoice.id,
@@ -108,6 +111,7 @@ export function invoiceToDto(invoice: {
     status: mapInvoiceStatus(invoice.status),
     date: invoice.createdAt.toISOString(),
     dueAt: invoice.dueAt.toISOString(),
+    paidAt: invoice.paidAt?.toISOString() ?? null,
   }
 }
 
