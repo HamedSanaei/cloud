@@ -71,6 +71,10 @@ export function walletToDto(wallet: { id: string; name: string; balanceRial: num
   }
 }
 
+export function transactionDirection(amount: number): 'credit' | 'debit' | null {
+  return amount > 0 ? 'credit' : amount < 0 ? 'debit' : null
+}
+
 export function transactionToDto(tx: {
   id: string
   amountRial: number
@@ -79,7 +83,10 @@ export function transactionToDto(tx: {
   createdAt: Date
   balanceAfterRial: number
   scheduledAt?: Date | null
-}) {
+  walletId?: string
+  referenceType?: string | null
+  referenceId?: string | null
+}, wallet?: string) {
   return {
     id: tx.id,
     description: tx.description ?? tx.type,
@@ -87,7 +94,12 @@ export function transactionToDto(tx: {
     amountRial: tx.amountRial,
     date: tx.createdAt.toISOString(),
     ...(tx.scheduledAt ? { scheduledAt: tx.scheduledAt.toISOString() } : {}),
-    status: tx.amountRial < 0 ? 'success' : 'success',
+    wallet,
+    walletId: tx.walletId,
+    referenceType: tx.referenceType,
+    referenceId: tx.referenceId,
+    direction: transactionDirection(tx.amountRial),
+    status: 'success',
     type: tx.type,
   }
 }

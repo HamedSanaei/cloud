@@ -183,7 +183,18 @@ describe('platform bridge', () => {
     const { app } = await harness()
     const response = await app.inject('/api/wallets/transactions')
     expect(response.statusCode).toBe(200)
-    expect(response.json().data[0]).toMatchObject({ amount: 500, formattedAmount: '+5.00 USD', wallet: 'مشترک تلگرام و سایت' })
+    expect(response.json().data[0]).toMatchObject({ amount: 500, direction: 'credit', currency: 'USD', formattedAmount: '+5.00 USD', wallet: 'مشترک تلگرام و سایت' })
+    await app.close()
+  })
+
+  it('preserves non-posted statuses and transaction references supplied by the platform', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ data: { balance: { currency: 'IRT', balance_minor: 1000 }, history: { items: [{
+      entry_id: 'failed', amount_minor: -500, currency: 'IRT', entry_type: 'purchase', status: 'failed', reference_type: 'order', reference_id: 'order-id',
+    }] } } }, { headers: { 'X-Platform-Contract': '1' } })))
+    const { app } = await harness()
+    const response = await app.inject('/api/wallets/transactions')
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data[0]).toMatchObject({ amount: -500, status: 'failed', referenceType: 'order', referenceId: 'order-id' })
     await app.close()
   })
 

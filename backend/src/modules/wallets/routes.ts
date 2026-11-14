@@ -59,15 +59,17 @@ export const registerWalletRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     const user = requireUser(request)
     const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
     const query = parse(z.object({ limit: z.coerce.number().int().positive().max(200).optional() }), request.query)
-    const rows = await listTransactions(db, user.id, { walletId: id, limit: query.limit ?? 50 })
-    return { data: rows.map(transactionToDto) }
+    const [rows, wallets] = await Promise.all([listTransactions(db, user.id, { walletId: id, limit: query.limit ?? 50 }), listWallets(db, user.id)])
+    const wallet = wallets.find(wallet => wallet.id === id)
+    return { data: rows.map(row => transactionToDto(row, wallet?.name)) }
   })
 
   app.get('/wallets/transactions', async (request) => {
     const user = requireUser(request)
     const query = parse(z.object({ limit: z.coerce.number().int().positive().max(200).optional() }), request.query)
-    const rows = await listTransactions(db, user.id, { limit: query.limit ?? 50 })
-    return { data: rows.map(transactionToDto) }
+    const [rows, wallets] = await Promise.all([listTransactions(db, user.id, { limit: query.limit ?? 50 }), listWallets(db, user.id)])
+    const names = new Map(wallets.map(wallet => [wallet.id, wallet.name]))
+    return { data: rows.map(row => transactionToDto(row, names.get(row.walletId))) }
   })
 }
 

@@ -8,7 +8,7 @@ import { and, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppContext } from '../../app.js'
 import { users, wallets, orders, servers, providers, tickets } from '../../db/schema.js'
-import { ticketToDto } from '../../lib/dto.js'
+import { ticketToDto, transactionToDto } from '../../lib/dto.js'
 import { getConfig } from '../../config.js'
 import { syncHetznerInventory } from '../providers/hetzner/inventory.js'
 import { requireAdmin } from '../../http/auth.js'
@@ -196,8 +196,8 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
       ...money(total),
       wallets: userWallets.map(w => ({ id: w.id, name: w.name, currency: w.currency, isDefault: w.isDefault, ...money(w.balanceRial) })),
       transactions: txs.map(t => ({
-        id: t.id, walletId: t.walletId, type: t.type, description: t.description,
-        amountRial: t.amountRial, amountToman: rialToToman(t.amountRial),
+        ...transactionToDto(t), description: t.description,
+        amountToman: rialToToman(t.amountRial),
         createdAt: t.createdAt.toISOString(),
       })),
       servers: ownedServers.map(serverDto),

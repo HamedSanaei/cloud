@@ -5,7 +5,7 @@ export function Table({ headers, children }: { headers: string[]; children?: Rea
     <div className="table-scroll">
       <table className="data-table">
         <thead>
-          <tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr>
+          <tr>{headers.map((header) => <th scope="col" key={header}>{header}</th>)}</tr>
         </thead>
         <tbody>{children}</tbody>
       </table>

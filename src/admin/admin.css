@@ -110,6 +110,9 @@
 .admin-table tbody tr:hover { background: #fafcff; }
 .admin-table td a { color: var(--admin-ink); font-weight: 700; text-decoration: none; }
 .admin-table td a:hover { color: var(--admin-blue); text-decoration: underline; }
+:root[data-theme='dark'] .admin-ledger th { background: var(--surface-muted); color: var(--muted); }
+:root[data-theme='dark'] .admin-ledger td, :root[data-theme='dark'] .admin-ledger td a { color: var(--ink); }
+:root[data-theme='dark'] .admin-ledger tbody tr:hover { background: var(--surface-muted); }
 .admin-status { display: inline-flex; white-space: nowrap; justify-content: center; align-items: center; min-height: 29px; padding: 4px 12px; border-radius: 8px; font-size: 11px; font-weight: 700; }
 .admin-status--success { background: #e6f6ef; color: #18835b; }
 .admin-status--warning { background: #fff5df; color: #af7615; }

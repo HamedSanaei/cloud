@@ -9,6 +9,7 @@ import type { DbClient } from '../../db/index.js'
 import { requireUser } from '../../http/auth.js'
 import { parse } from '../../http/validate.js'
 import { AppError, BadRequestError, ConflictError } from '../../lib/errors.js'
+import { transactionDirection } from '../../lib/dto.js'
 import { storefrontProjection, type ConsoleOffer } from './storefront.js'
 import { listNotifications, publishNotification } from '../notifications/service.js'
 import { isPlatformAuthority } from './authority.js'
@@ -264,12 +265,17 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
       return reply.send({ data: data.data.map(serverProjection) })
     }
     if (['/api/wallets', '/api/wallets/summary', '/api/wallets/transactions'].includes(pathname)) {
-      const { data } = await platformRequest<{ data: { balance: { balance_minor: number; currency: string }; history: { items: Array<{ entry_id: string; amount_minor: number; currency: string; formatted: string; description: string; entry_type: string; created_at: string }> } } }>(token, '/wallet')
+      const { data } = await platformRequest<{ data: { balance: { balance_minor: number; currency: string }; history: { items: Array<{
+        entry_id: string; amount_minor: number; currency: string; formatted: string; description: string; entry_type: string; created_at: string;
+        status?: string; reference_type?: string; reference_id?: string;
+      }> } } }>(token, '/wallet')
       const amount = requireToman(data.balance)
       if (pathname.endsWith('/summary')) return reply.send({ data: { totalBalance: amount, wallets: 1, defaultWallet: 'مشترک تلگرام و سایت', connectedProducts: 0 } })
       if (pathname.endsWith('/transactions')) return reply.send({ data: data.history.items.map(item => {
         if (!Number.isSafeInteger(item.amount_minor)) throw new ConflictError('مبلغ تراکنش خارج از محدوده نمایش است')
-        return { id: item.entry_id, amount: item.amount_minor, formattedAmount: item.formatted, description: item.description, wallet: 'مشترک تلگرام و سایت', type: item.entry_type, date: item.created_at, status: 'success' }
+        return { id: item.entry_id, amount: item.amount_minor, direction: transactionDirection(item.amount_minor), currency: item.currency,
+          formattedAmount: item.formatted, description: item.description, wallet: 'مشترک تلگرام و سایت', walletId: 'platform', type: item.entry_type,
+          date: item.created_at, status: item.status ?? 'success', referenceType: item.reference_type, referenceId: item.reference_id }
       }) })
       return reply.send({ data: [{ id: 'platform', name: 'مشترک تلگرام و سایت', balance: amount, isDefault: true }] })
     }

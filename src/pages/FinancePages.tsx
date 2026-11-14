@@ -28,6 +28,10 @@ import { getIntegrationStatus } from '../lib/platformClient'
 import { WalletRecharge } from '../components/ui/WalletRecharge'
 import { WalletPaymentStatus } from '../components/ui/WalletPaymentStatus'
 import { useAuth } from '../auth/AuthContext'
+import { WalletLedgerAmountCells, WalletLedgerDescription } from '../components/ui/WalletLedgerCells'
+import { emptyAmount, movementAmounts, movementHeaders, transactionsCsv, transactionStatus } from '../lib/walletHistory'
+
+const walletHistoryHeaders = ['شرح', 'کیف پول', ...movementHeaders, 'تاریخ', 'وضعیت']
 
 function FinancialDate({ date, dueAt, paidAt, timezone, label }: { date: string; dueAt?: string; paidAt?: string; timezone?: string; label?: string }) {
   return <>{label && `${label}: `}<time dateTime={date}>{formatFaDateTime(date, timezone)}</time>{dueAt && dueAt !== date && <small style={{ display: 'block' }}>سررسید: <time dateTime={dueAt}>{formatFaDateTime(dueAt, timezone)}</time></small>}{paidAt && <small style={{ display: 'block' }}>ثبت پرداخت: <time dateTime={paidAt}>{formatFaDateTime(paidAt, timezone)}</time></small>}</>
@@ -43,6 +47,7 @@ export function WalletPage() {
   const [walletDescription, setWalletDescription] = useState('')
   const [creating, setCreating] = useState(false)
   const [period, setPeriod] = useState('24h')
+  const [walletFilter, setWalletFilter] = useState('')
   const { showToast } = useToast()
 
   const summary = useApiQuery(getWalletSummary)
@@ -87,14 +92,11 @@ export function WalletPage() {
     const since = Date.now() - (period === '24h' ? 1 : 7) * 86400000
     return (transactions.data ?? []).filter(item => {
       const date = Date.parse(item.date)
-      return Number.isFinite(date) && date >= since
+      return Number.isFinite(date) && date >= since && (!walletFilter || item.walletId === walletFilter)
     })
-  }, [transactions.data, period])
+  }, [transactions.data, period, walletFilter])
   const downloadTransactions = () => {
-    // Quote all cells and neutralize spreadsheet formulas in user-controlled text.
-    const cell = (value: string | number) => `"${String(value).replace(/^\s*[=+@-]/, "'$&").replaceAll('"', '""')}"`
-    const rows = [['شرح', 'کیف پول', 'مبلغ', 'زمان ثبت تراکنش', 'سررسید تمدید', 'وضعیت'], ...visibleTransactions.map(item => [item.description, item.wallet ?? '—', item.formattedAmount ?? formatToman(item.amount), formatFaDateTime(item.date, user?.timezone), item.scheduledAt ? formatFaDateTime(item.scheduledAt, user?.timezone) : '—', item.status])]
-    const url = URL.createObjectURL(new Blob(['\uFEFF' + rows.map(row => row.map(cell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' }))
+    const url = URL.createObjectURL(new Blob([transactionsCsv(visibleTransactions, user?.timezone)], { type: 'text/csv;charset=utf-8' }))
     const link = document.createElement('a'); link.href = url; link.download = 'wallet-transactions.csv'; link.click()
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
@@ -138,25 +140,28 @@ export function WalletPage() {
         <div className="segmented-filter">
           <button type="button" className={period === '24h' ? 'active' : ''} onClick={() => setPeriod('24h')}>۲۴ ساعت اخیر</button>
           <button type="button" className={period === '7d' ? 'active' : ''} onClick={() => setPeriod('7d')}>۷ روز اخیر</button>
-          <Select aria-label="کیف پول"><option>همه کیف پول‌ها</option></Select>
+          <Select aria-label="کیف پول" value={walletFilter} onChange={event => setWalletFilter(event.target.value)}>
+            <option value="">همه کیف پول‌ها</option>
+            {wallets.data?.map(wallet => <option key={wallet.id} value={wallet.id}>{wallet.name}</option>)}
+          </Select>
         </div>
         {transactions.loading ? (
           <LoadingState label="در حال دریافت تراکنش‌ها..." />
         ) : transactions.error ? (
           <QueryError message={transactions.error} onRetry={transactions.refetch} />
         ) : !visibleTransactions.length ? (
-          <Table headers={['شرح', 'کیف پول', 'مبلغ', 'تاریخ', 'وضعیت']}>
-            <tr className="table-empty"><td colSpan={5}>هیچ تراکنشی یافت نشد</td></tr>
+          <Table headers={walletHistoryHeaders}>
+            <tr className="table-empty"><td colSpan={walletHistoryHeaders.length}>هیچ تراکنشی یافت نشد</td></tr>
           </Table>
         ) : (
-          <Table headers={['شرح', 'کیف پول', 'مبلغ', 'تاریخ', 'وضعیت']}>
+          <Table headers={walletHistoryHeaders}>
             {visibleTransactions.map((transaction) => (
               <tr key={transaction.id}>
-                <td>{transaction.description}</td>
-                <td>{transaction.wallet}</td>
-                <td>{transaction.formattedAmount ?? formatToman(transaction.amount)}</td>
+                <td><WalletLedgerDescription transaction={transaction} /></td>
+                <td>{transaction.wallet || emptyAmount}</td>
+                <WalletLedgerAmountCells amounts={movementAmounts(transaction)} />
                 <td><FinancialDate label="ثبت تراکنش" date={transaction.date} dueAt={transaction.scheduledAt} timezone={user?.timezone} /></td>
-                <td><Badge>{transaction.status}</Badge></td>
+                <td><Badge>{transactionStatus(transaction.status)}</Badge></td>
               </tr>
             ))}
           </Table>

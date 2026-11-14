@@ -1368,6 +1368,24 @@ textarea:focus-visible {
   text-align: center;
 }
 
+.data-table td.ledger-amount,
+.admin-table td.ledger-amount {
+  text-align: end;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-amount bdi { font-weight: 700; }
+.ledger-amount--credit bdi { color: #166534; }
+.ledger-amount--debit bdi { color: var(--danger-ink); }
+:root[data-theme='dark'] .ledger-amount--credit bdi { color: #86efac; }
+
+.ledger-reference {
+  display: block;
+  margin-block-start: 4px;
+  overflow-wrap: anywhere;
+}
+
 .server-power-controls {
   display: flex;
   flex-wrap: wrap;
