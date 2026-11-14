@@ -107,7 +107,7 @@ describe.skipIf(skip)('auth + permissions (integration)', () => {
       method: 'POST',
       url: '/api/v1/servers',
       headers: { authorization: `Bearer ${aToken}`, 'idempotency-key': 'perm-a-1' },
-      payload: { name: 'a-vps', offerId: offer!.id, os: 'ubuntu-24.04', walletId: wallet.id, billingPeriod: 'monthly' },
+      payload: { name: 'a-vps', offerId: offer!.id, os: 'ubuntu-24.04', billingPeriod: 'monthly' },
     })
     expect(create.statusCode).toBe(201)
     const creation = create.json<{ data: { id: string; tracking: { orderId: string; serverId: null } } }>()

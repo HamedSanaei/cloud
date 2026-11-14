@@ -7,7 +7,6 @@ import { useApiQuery } from '../../hooks/useApiQuery'
 import { apiGet, apiPost } from '../../lib/apiClient'
 import { Link } from 'react-router-dom'
 import { firstPartyTabapayHandoff } from '../../lib/paymentHandoff'
-import type { Wallet } from '../../lib/types'
 
 export function WalletRecharge() {
   const status = useApiQuery(getIntegrationStatus)
@@ -18,8 +17,6 @@ export function WalletRecharge() {
   const [payment, setPayment] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [wallets, setWallets] = useState<Wallet[]>([])
-  const [walletId, setWalletId] = useState('')
   const [attemptId, setAttemptId] = useState('')
   const [attemptStatus, setAttemptStatus] = useState('')
   const key = useRef(crypto.randomUUID())
@@ -40,10 +37,8 @@ export function WalletRecharge() {
           if (wallet.balance.currency !== 'IRT') throw new Error('شارژ تومانی برای واحد فعلی کیف پول مجاز نیست')
           const list = await platformGet<string[]>('/recharge/gateways'); setGateways(list); setGateway(list[0] ?? '')
         } else {
-          const { data } = await apiGet<{ data: { enabled: boolean; gateways: string[]; wallets: Wallet[] } }>('/wallets/recharge/options')
+          const { data } = await apiGet<{ data: { enabled: boolean; gateways: string[] } }>('/wallets/recharge/options')
           if (!data.enabled) throw new Error('درگاه پرداخت هنوز پیکربندی نشده است؛ با پشتیبانی تماس بگیرید.')
-          setWallets(data.wallets)
-          if (!attemptId) setWalletId(data.wallets.find(w => w.isDefault)?.id || data.wallets[0]?.id || '')
           setGateways(data.gateways); setGateway(data.gateways[0] || '')
         }
       })
@@ -55,10 +50,9 @@ export function WalletRecharge() {
         if (gateway === 'tabapay' && (value < 10_000 || value > 50_000_000)) {
           throw new Error('مبلغ شارژ با تاباپی باید بین ۱۰٬۰۰۰ تا ۵۰٬۰۰۰٬۰۰۰ تومان باشد')
         }
-        if (!shared && !walletId) throw new Error('کیف پول پرداخت را انتخاب کنید.')
         const response = shared
           ? await platformPost<{ paymentUrl: string; id?: string; status?: string }>('/recharge', { amountMinor: value, gateway }, key.current)
-          : (await apiPost<{ data: { paymentUrl: string | null; id: string; status: string } }>('/wallets/recharges', { walletId, amountToman: value }, { headers: { 'idempotency-key': key.current }, timeoutMs: 22000 })).data
+          : (await apiPost<{ data: { paymentUrl: string | null; id: string; status: string } }>('/wallets/recharges', { amountToman: value }, { headers: { 'idempotency-key': key.current }, timeoutMs: 22000 })).data
         setAttemptId(response.id || '')
         setAttemptStatus(response.status || '')
         if (!response.paymentUrl) throw new Error('لینک پرداخت آماده نشد؛ نتیجه همین درخواست را پیگیری کنید.')
@@ -68,7 +62,6 @@ export function WalletRecharge() {
       }) }}>
         <p>مبلغ به تومان است. موجودی پس از تأیید پرداخت توسط درگاه افزایش می‌یابد.</p>
         <div className="payment-vpn-notice" role="note"><strong>پیش از ورود به درگاه، VPN یا فیلترشکن را خاموش کنید.</strong><p>روشن بودن آن ممکن است باعث اختلال یا رد پرداخت شود.</p></div>
-        {!shared ? <Select label="کیف پول مقصد" required disabled={busy || !!attemptId} value={walletId} onChange={e => { setWalletId(e.target.value); key.current = crypto.randomUUID() }}>{wallets.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}</Select> : null}
         <Input label="مبلغ (تومان)" inputMode="numeric" required disabled={busy || !!attemptId} value={amount} onChange={e => { setAmount(e.target.value); setPayment(''); key.current = crypto.randomUUID() }} />
         <Select label="درگاه پرداخت" required disabled={busy || !!attemptId} value={gateway} onChange={e => { setGateway(e.target.value); setPayment(''); key.current = crypto.randomUUID() }}><option value="">انتخاب کنید</option>{gateways.map(item => <option key={item} value={item}>{item === 'tabapay' ? 'تاباپی' : item}</option>)}</Select>
         {!busy && !gateways.length && <p role="status">درگاه سازگار با کیف پول در دسترس نیست.</p>}

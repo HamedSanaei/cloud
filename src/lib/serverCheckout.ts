@@ -3,7 +3,7 @@ import type { BillingPeriod } from './types'
 
 export interface CheckoutDraft {
   step: number; providerId: string; location: string; offerId: string; os: string; name: string
-  walletId: string; billingPeriod: BillingPeriod | ''; purchaseKey: string
+  billingPeriod: BillingPeriod | ''; purchaseKey: string
 }
 const storageKey = (userId: string) => `server-checkout:${userId}`
 export function readCheckoutDraft(userId?: string): CheckoutDraft | null {
@@ -12,7 +12,7 @@ export function readCheckoutDraft(userId?: string): CheckoutDraft | null {
     const data = JSON.parse(sessionStorage.getItem(storageKey(userId)) ?? 'null')
     if (!data || data.expiresAt < Date.now() || !Number.isFinite(data.expiresAt)) return null
     if (!Number.isInteger(data.step) || data.step < 0 || data.step > 5) return null
-    for (const key of ['providerId', 'location', 'offerId', 'os', 'name', 'walletId', 'purchaseKey']) {
+    for (const key of ['providerId', 'location', 'offerId', 'os', 'name', 'purchaseKey']) {
       if (typeof data[key] !== 'string' || data[key].length > 200) return null
     }
     if (!['', 'hourly', 'daily', 'monthly'].includes(data.billingPeriod)) return null

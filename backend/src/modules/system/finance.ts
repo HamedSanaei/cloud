@@ -4,7 +4,7 @@ import type { DbClient, DbOrTx } from '../../db/index.js'
 import { adminAdjustments, wallets } from '../../db/schema.js'
 import type { SessionUser } from '../auth/service.js'
 import { normalizeIranMobile } from '../auth/delivery.js'
-import { creditWallet, debitWallet } from '../wallets/service.js'
+import { creditWallet, debitWallet, getWallet, listWallets } from '../wallets/service.js'
 import { walletCommitments } from '../billing/creation-funding.js'
 import { writeAudit } from '../audit/service.js'
 import { consumeAuthorization, canonical, systemAdmin } from './security.js'
@@ -21,14 +21,15 @@ export async function findFinancialUser(db: DbClient, search: string) {
     ? sql`regexp_replace(translate(${t.mobile}, '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789'), '[^0-9+]', '', 'g') in (${mobile}, ${'0' + mobile.slice(3)}, ${mobile.slice(1)})`
     : sql`lower(${t.email}) = ${email}`, limit: 10 })
   return Promise.all(rows.map(async u => ({ id: u.id, name: [u.firstName, u.lastName].filter(Boolean).join(' '), email: u.email, mobile: u.mobile, status: u.status,
-    wallets: (await db.query.wallets.findMany({ where: t => eq(t.userId, u.id) })).map(w => ({ id: w.id, name: w.name, balanceRial: w.balanceRial, isDefault: w.isDefault })) })))
+    wallets: (await listWallets(db, u.id)).map(w => ({ id: w.id, name: w.name, balanceRial: w.balanceRial, isDefault: w.isDefault })) })))
 }
 async function execute(tx: DbOrTx, adjustment: typeof adminAdjustments.$inferSelect, actorId: string) {
-  const [wallet] = await tx.select().from(wallets).where(eq(wallets.id, adjustment.walletId)).for('update')
+  const canonicalWallet = await getWallet(tx, adjustment.userId, adjustment.walletId)
+  const [wallet] = await tx.select().from(wallets).where(eq(wallets.id, canonicalWallet.id)).for('update')
   if (!wallet || wallet.userId !== adjustment.userId) throw new NotFoundError('کیف پول متعلق به کاربر انتخابی نیست.')
   const after = wallet.balanceRial + (adjustment.direction === 'credit' ? 1 : -1) * adjustment.amountRial
   if (!Number.isSafeInteger(after)) throw new ValidationError('موجودی خارج از محدودهٔ مجاز است.')
-  if (adjustment.direction === 'debit' && after < await walletCommitments(tx, adjustment)) throw new InsufficientFundsError('برداشت، موجودی قابل برداشت یا پوشش تعهدات هفت روز آینده را نقض می‌کند.')
+  if (adjustment.direction === 'debit' && after < await walletCommitments(tx, { userId: adjustment.userId, walletId: wallet.id })) throw new InsufficientFundsError('برداشت، موجودی قابل برداشت یا پوشش تعهدات هفت روز آینده را نقض می‌کند.')
   const input = { type: adjustment.direction === 'credit' ? 'manual_credit' as const : 'manual_debit' as const,
     referenceType: 'admin_adjustment', referenceId: adjustment.id, idempotencyKey: `adjustment:${adjustment.id}`,
     description: adjustment.reason, metadata: { adminId: adjustment.actorId, approvedBy: actorId, reference: adjustment.reference } }
@@ -47,15 +48,17 @@ export async function requestAdjustment(db: DbClient, user: SessionUser, input: 
     const prior = await tx.query.adminAdjustments.findFirst({ where: t => and(eq(t.actorId, user.id), eq(t.key, key)) })
     if (prior) {
       const old = { userId: prior.userId, walletId: prior.walletId, amountRial: prior.amountRial, direction: prior.direction, reason: prior.reason, reference: prior.reference, confirm: true }
-      if (canonical(old) !== canonical(input)) throw new ConflictError('این کلید قبلاً برای تعدیل دیگری استفاده شده است.')
+      if (old.userId !== input.userId || canonical({ ...old, walletId: (await getWallet(tx, old.userId, old.walletId)).id }) !==
+        canonical({ ...input, walletId: (await getWallet(tx, input.userId, input.walletId)).id })) throw new ConflictError('این کلید قبلاً برای تعدیل دیگری استفاده شده است.')
       return prior
     }
     await consumeAuthorization(tx, user, proof, 'wallet.adjust', input)
     // Lock BEFORE inserting the wallet FK. Two concurrent FK key-share holders
     // upgrading to FOR UPDATE would otherwise deadlock during ledger execution.
-    const [wallet] = await tx.select().from(wallets).where(and(eq(wallets.id, input.walletId), eq(wallets.userId, input.userId))).for('update')
+    const target = await getWallet(tx, input.userId, input.walletId)
+    const [wallet] = await tx.select().from(wallets).where(eq(wallets.id, target.id)).for('update')
     if (!wallet) throw new NotFoundError('هویت کاربر و کیف پول مطابقت ندارد.')
-    const [row] = await tx.insert(adminAdjustments).values({ ...input, actorId: user.id, key }).returning()
+    const [row] = await tx.insert(adminAdjustments).values({ ...input, walletId: wallet.id, actorId: user.id, key }).returning()
     await writeAudit(tx, { actorId: user.id, action: 'system.adjustment_requested', targetType: 'adjustment', targetId: row!.id, metadata: { amountRial: input.amountRial, walletId: input.walletId, direction: input.direction } })
     return execute(tx, row!, user.id)
   })

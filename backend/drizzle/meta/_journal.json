@@ -85,6 +85,13 @@
       "when": 1794613358817,
       "tag": "0011_notification-events",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794680477558,
+      "tag": "0012_single-wallet",
+      "breakpoints": true
     }
   ]
 }

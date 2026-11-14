@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { CreateServerPage } from '../src/pages/WizardPages'
@@ -48,7 +48,8 @@ async function configure() {
   await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
   await user.click(screen.getByRole('button', { name: /Ubuntu/ }))
   await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
-  await user.selectOptions(await screen.findByLabelText('کیف پول پرداخت'), 'wallet')
+  await screen.findAllByText('موجودی کیف پول')
+  expect(screen.queryByLabelText('کیف پول پرداخت')).toBeNull()
   return user
 }
 
@@ -66,11 +67,11 @@ describe('Issue #3 server checkout', () => {
     expect(posts).toHaveLength(0)
     await user.click(screen.getByRole('link', { name: 'افزایش موجودی کیف پول' }))
     const saved = readCheckoutDraft('checkout-user')!
-    expect(saved).toMatchObject({ offerId: 'Cheap', os: 'ubuntu', walletId: 'wallet', location: 'nbg1', billingPeriod: 'hourly', step: 4 })
+    expect(saved).toMatchObject({ offerId: 'Cheap', os: 'ubuntu', location: 'nbg1', billingPeriod: 'hourly', step: 4 })
     expect(readCheckoutDraft('other-user')).toBeNull()
     balance = 168000 // Exactly one week at 1,000 toman/hour.
     await user.click(await screen.findByRole('link', { name: 'بازگشت به سفارش سرور' }))
-    await waitFor(() => expect((screen.getByLabelText('کیف پول پرداخت') as HTMLSelectElement).value).toBe('wallet'))
+    await screen.findAllByText('موجودی کیف پول')
     await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
     await user.type(screen.getByRole('textbox', { name: /نام سرور/ }), 'test-server')
     expect((screen.getByRole('button', { name: 'تایید و ایجاد سرور' }) as HTMLButtonElement).disabled).toBe(false)
@@ -81,7 +82,7 @@ describe('Issue #3 server checkout', () => {
     expect(checkoutFailure(new ApiError('private', 422, { error: 'insufficient_funds' })).message).toBe('موجودی کیف پول شما کافی نیست.')
   })
   it('ignores expired and malformed drafts', () => {
-    saveCheckoutDraft('user', { step: 5, providerId: 'hetzner', location: 'nbg1', offerId: 'x', os: 'ubuntu', name: 'test', walletId: 'w', billingPeriod: 'hourly', purchaseKey: 'key' })
+    saveCheckoutDraft('user', { step: 5, providerId: 'hetzner', location: 'nbg1', offerId: 'x', os: 'ubuntu', name: 'test', billingPeriod: 'hourly', purchaseKey: 'key' })
     expect(readCheckoutDraft('user')?.step).toBe(5)
     clearCheckoutDraft('user')
     expect(readCheckoutDraft('user')).toBeNull()

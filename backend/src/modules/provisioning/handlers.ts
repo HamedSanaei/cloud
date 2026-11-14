@@ -25,7 +25,7 @@ import { generateNumber, transitionOrder } from '../orders/service.js'
 import { createServerRecord, activateServer, updateServerFromView, createServerActionOperation } from '../servers/service.js'
 import { createSubscription, enterGracePeriod, extendSubscriptionPeriod, findGraceExpiredSubscriptions, findSubscriptionsDueForRenewal, suspendSubscription } from '../subscriptions/service.js'
 import { getProvider } from '../providers/registry.js'
-import { applyWalletTransaction } from '../wallets/service.js'
+import { applyWalletTransaction, getWallet } from '../wallets/service.js'
 import type { CloudQueues } from '../../jobs/queue.js'
 import type { ProviderBillingOption, ProviderServerView, RecoveryResult } from '../providers/provider.interface.js'
 import { assertPowerOnFunding, loadFundingFleet, warnLowBalance } from '../billing/funding.js'
@@ -739,11 +739,8 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
         amountRial: current.priceRial,
       }).returning()
       if (!attempt) throw new Error('failed to create renewal attempt')
-      const wallet = order?.walletId
-        ? await tx.query.wallets.findFirst({ where: (t) => and(eq(t.id, order.walletId!), eq(t.userId, current.userId)) })
-        : await tx.query.wallets.findFirst({ where: (t) => and(eq(t.userId, current.userId), eq(t.isDefault, true)) })
       try {
-        if (!wallet) throw new AppError(422, 'insufficient_funds', 'کیف پول پرداخت یافت نشد')
+        const wallet = await getWallet(tx, current.userId, order?.walletId ?? undefined)
         await applyWalletTransaction(tx, current.userId, wallet.id, {
           amountRial: current.priceRial,
           type: 'renewal',

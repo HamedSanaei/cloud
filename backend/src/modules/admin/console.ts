@@ -194,9 +194,9 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
     return { data: {
       user: userDto(user),
       ...money(total),
-      wallets: userWallets.map(w => ({ id: w.id, name: w.name, currency: w.currency, isDefault: w.isDefault, ...money(w.balanceRial) })),
+      wallets: userWallets.filter(w => !w.mergedInto).map(w => ({ id: w.id, name: w.name, currency: w.currency, isDefault: w.isDefault, ...money(w.balanceRial) })),
       transactions: txs.map(t => ({
-        ...transactionToDto(t), description: t.description,
+        ...transactionToDto(t, userWallets.find(w => w.id === t.walletId)?.name), description: t.description,
         amountToman: rialToToman(t.amountRial),
         createdAt: t.createdAt.toISOString(),
       })),

@@ -10,6 +10,16 @@ import { createLogger } from '../logger.js'
 import { retryStartup, startupFailure } from '../lib/startup.js'
 import { exclusive, writerLock } from '../modules/system/writer-gate.js'
 
+export async function assertWalletConsolidationApproved(client: PoolClient) {
+  if (getConfig().NODE_ENV !== 'production' || process.env.WALLET_CONSOLIDATION_APPROVED === 'true') return
+  const wallet = (await client.query(`select to_regclass('public.wallets') is not null as present,
+    exists(select 1 from information_schema.columns where table_schema='public' and table_name='wallets' and column_name='merged_into') as migrated`)).rows[0]
+  if (!wallet?.present || wallet.migrated) return
+  if ((await client.query('select 1 from wallets group by user_id having count(*) > 1 limit 1')).rowCount) {
+    throw new Error('Wallet consolidation requires reviewed preflight and verified backup; see docs/WALLET_CONSOLIDATION.md')
+  }
+}
+
 // Stable, database-scoped key shared by CLI, API and worker.
 const migrationLock = [1953457774, 1835624306] as const
 
@@ -45,6 +55,9 @@ export async function migrate(connectionString?: string): Promise<void> {
       )
       if (!lock.rows[0]?.acquired) throw Object.assign(new Error('Migration lock is held'), { code: 'migration_lock_busy' })
       await exclusive(client, writerLock)
+      await assertWalletConsolidationApproved(client)
+      await client.query("select set_config('parserver.wallet_consolidation_approved',$1,false)",
+        [String(getConfig().NODE_ENV !== 'production' || process.env.WALLET_CONSOLIDATION_APPROVED === 'true')])
       await drizzleMigrate(drizzle(client), { migrationsFolder })
     } finally {
       // Destroy this session even on success: releasing a session lock this way
