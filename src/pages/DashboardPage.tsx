@@ -19,6 +19,7 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { getDashboardSummary, getRecentServers, getRecentTickets } from '../lib/endpoints'
 import { formatCount, formatToman } from '../lib/format'
+import { ServerStatus } from '../components/servers/ServerPrimitives'
 
 const quickLinks = [
   { label: 'ایجاد سرور', icon: HardDrive, path: '/servers/create', accent: 'blue' },
@@ -90,7 +91,7 @@ export function DashboardPage() {
               {servers.data.map((server) => (
                 <tr key={server.id}>
                   <td>{server.name}</td>
-                  <td><Badge tone={statusTone(server.status)}>{server.status}</Badge></td>
+                  <td><ServerStatus server={server} /></td>
                   <td>{server.datacenter}</td>
                 </tr>
               ))}
