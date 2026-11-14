@@ -19,6 +19,7 @@ import { adjustmentSchema, approveAdjustment, findFinancialUser, requestAdjustme
 import { approveRestore, backupFile, getBackupJob, importBackup, listBackupJobs, removeBackup, requestBackupJob, requestRestore, waitBackupJobs, initializeBackupJobs } from './backups.js'
 import { maxPrimaryIpv4FeeRial, primaryIpv4Pricing, setPrimaryIpv4Fee } from '../servers/primary-ip-pricing.js'
 import { confirmPrimaryIpv4Rollback } from '../servers/primary-ip-operation.js'
+import { canManageOutbound, requireOutboundAdmin, outboundStatus, profileInput, routeInput, deleteInput, testInput, saveProfile, saveRoute, deleteProfile, testConnection } from '../outbound/settings.js'
 
 const canManagePrimaryIpv4Pricing = (user: ReturnType<typeof requireAdmin>) =>
   user.status === 'active' && getConfig().PRIMARY_IPV4_SUPER_ADMIN_IDS.includes(user.id)
@@ -26,7 +27,7 @@ const canManagePrimaryIpv4Pricing = (user: ReturnType<typeof requireAdmin>) =>
 const idParam = z.object({ id: z.string().uuid() })
 const proofSchema = z.string().uuid()
 const confirm = z.object({ confirm: z.literal(true), proof: proofSchema }).strict()
-const actions = z.enum(['gateway.update', 'gateway.diagnose', 'wallet.adjust', 'wallet.approve', 'logs.export', 'backup.backup', 'backup.rehearsal', 'backup.upload', 'backup.download', 'backup.delete', 'backup.restore', 'backup.approve'])
+const actions = z.enum(['gateway.update', 'gateway.diagnose', 'wallet.adjust', 'wallet.approve', 'logs.export', 'backup.backup', 'backup.rehearsal', 'backup.upload', 'backup.download', 'backup.delete', 'backup.restore', 'backup.approve', 'outbound.profile', 'outbound.route', 'outbound.delete', 'outbound.test'])
 const gatewaySchema = z.object({ enabled: z.boolean(), sandbox: z.boolean(), merchant: z.string().uuid().optional(), version: z.string().regex(/^[0-9a-f]{64}$/).optional(), confirm: z.literal(true) }).strict()
 const paging = z.object({ page: z.coerce.number().int().min(1).max(10000).default(1), limit: z.coerce.number().int().min(1).max(100).default(20) })
 const logsQuery = paging.extend({ level: z.enum(['', 'info', 'warn', 'error']).default(''), service: z.string().regex(/^[a-zA-Z0-9_-]{0,40}$/).default(''),
@@ -68,7 +69,7 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     const c = getConfig(), user = requireAdmin(request)
     let allowed = true
     try { systemAdmin(user) } catch { allowed = false }
-    return { data: { allowed, primaryIpv4Pricing: canManagePrimaryIpv4Pricing(user), encryptionReady: /^[a-f0-9]{64}$/i.test(c.STORE_SECRET_KEY), backupsEnabled: c.SYSTEM_BACKUP_ENABLED,
+    return { data: { allowed, outboundProxies: canManageOutbound(user), primaryIpv4Pricing: canManagePrimaryIpv4Pricing(user), encryptionReady: /^[a-f0-9]{64}$/i.test(c.STORE_SECRET_KEY), backupsEnabled: c.SYSTEM_BACKUP_ENABLED,
       restoreEnabled: c.SYSTEM_RESTORE_ENABLED, maxUploadBytes: max, dualApprovalRial: c.SYSTEM_DUAL_APPROVAL_RIAL,
       requirements: ['STORE_SECRET_KEY', 'SYSTEM_BACKUP_KEY', 'SYSTEM_INSTANCE_ID', 'SYSTEM_BACKUP_ENABLED'] } }
   })
@@ -98,7 +99,32 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
   })
   app.post('/authorize', { config: { rateLimit: { max: 5, timeWindow: '10 minutes' } } }, async request => {
     const input = parse(z.object({ action: actions, payload: z.unknown() }).strict(), request.body)
-    return { data: await issueAuthorization(db, requireAdmin(request), input.action, input.payload) }
+    if (input.action.startsWith('outbound.')) requireOutboundAdmin(requireAdmin(request))
+    const payload = input.action === 'outbound.profile' ? parse(profileInput, input.payload)
+      : input.action === 'outbound.route' ? parse(routeInput, input.payload)
+      : input.action === 'outbound.delete' ? parse(deleteInput, input.payload)
+      : input.action === 'outbound.test' ? parse(testInput, input.payload) : input.payload
+    return { data: await issueAuthorization(db, requireAdmin(request), input.action, payload) }
+  })
+  app.get('/outbound', async request => {
+    requireOutboundAdmin(requireAdmin(request))
+    return { data: await outboundStatus(db) }
+  })
+  app.post('/outbound/profiles', async request => {
+    const { proof, ...input } = parse(profileInput.safeExtend({ proof: proofSchema }), request.body)
+    return { data: await saveProfile(db, requireAdmin(request), input, proof) }
+  })
+  app.post('/outbound/routes', async request => {
+    const { proof, ...input } = parse(routeInput.safeExtend({ proof: proofSchema }), request.body)
+    return { data: await saveRoute(db, requireAdmin(request), input, proof) }
+  })
+  app.post('/outbound/profiles/delete', async request => {
+    const { proof, ...input } = parse(deleteInput.extend({ proof: proofSchema }), request.body)
+    return { data: await deleteProfile(db, requireAdmin(request), input, proof) }
+  })
+  app.post('/outbound/test', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async request => {
+    const { proof, ...input } = parse(testInput.extend({ proof: proofSchema }), request.body)
+    return { data: await testConnection(db, requireAdmin(request), input, proof) }
   })
   app.get('/gateway', async () => ({ data: await gatewayStatus(db) }))
   app.get('/iran-tariffs', async () => ({ data: await iranTariffSettings(db) }))

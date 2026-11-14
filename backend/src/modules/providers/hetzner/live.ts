@@ -8,6 +8,7 @@ import {
 import { decimal, readCatalog, type HetznerCatalog } from './catalog.js'
 import { HetznerApiError, HetznerClient, object, type ApiObject } from './client.js'
 import { createCustomerProvider } from './customer.js'
+import { integrationFetcher } from '../../outbound/client.js'
 
 export interface HetznerProviderOptions { fetch?: typeof fetch }
 
@@ -26,7 +27,7 @@ export function createHetznerProvider(config: HetznerConfig, options: HetznerPro
     if (account.enabled && account.state !== 'disabled' && !account.apiToken?.trim()) throw new ProviderPermanentError('Hetzner active account requires a credential')
     if (account.apiToken && /\s/.test(account.apiToken)) throw new ProviderPermanentError('Hetzner account credential is invalid')
     // Disabled accounts remain addressable for already-owned resources.
-    if (account.apiToken) clients.set(account.id, new HetznerClient(config.baseUrl, account.apiToken, options.fetch ?? fetch))
+    if (account.apiToken) clients.set(account.id, new HetznerClient(config.baseUrl, account.apiToken, options.fetch ?? integrationFetcher('hetzner')))
   }
   const secrets = accounts.flatMap((account) => [account.apiToken ?? '', account.apiKey ?? '']).filter(Boolean).sort((a, b) => b.length - a.length)
   function clean(value: string): string {

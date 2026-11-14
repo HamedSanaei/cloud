@@ -16,6 +16,7 @@ import { TelegramSettingsPage } from './pages/TelegramSettingsPage'
 import { PlatformAdminPage } from './pages/PlatformAdminPage'
 import { AdminLayout } from './admin/AdminLayout'
 import { AdminDatacenters } from './admin/AdminDatacenters'
+import { SystemOutboundProxies } from './admin/SystemOutboundProxies'
 import { AdminTickets } from './admin/AdminTickets'
 import { SystemSettingsLayout, SystemGateway, SystemLogs, SystemFinance, SystemBackups, SystemPrimaryIpv4Pricing, SystemIranTariffs } from './admin/SystemSettings'
 import { AdminOverview, AdminOrders, AdminOrderPage, AdminUsers, AdminUserPage, AdminUserServers, AdminServers, AdminServerPage } from './admin/AdminPages'
@@ -39,6 +40,7 @@ export function App({ initialTariffs }: { initialTariffs?: string } = {}) {
         <Route path="datacenters" element={<AdminDatacenters />} />
         <Route path="tickets" element={<AdminTickets />} />
         <Route path="settings" element={<SystemSettingsLayout />}>
+          <Route path="outbound" element={<SystemOutboundProxies />} />
           <Route path="primary-ipv4" element={<SystemPrimaryIpv4Pricing />} />
           <Route path="iran-tariffs" element={<SystemIranTariffs />} />
           <Route index element={<Navigate to="gateway" replace />} />

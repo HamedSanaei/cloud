@@ -7,10 +7,11 @@ vi.mock('../../src/logger.js', () => ({ createLogger: () => ({ warn }) }))
 
 vi.mock('../../src/config.js', () => ({
   getConfig: () => ({
+    NODE_ENV: 'test',
     AUTH_DELIVERY_MODE: 'live',
     PARSGREEN_SIGNATURE: 'fixture-signature<&>',
     PARSGREEN_FROM: 'fixture-sender',
-    PARSGREEN_ENDPOINT: 'https://sms.example.test/service',
+    PARSGREEN_ENDPOINT: 'https://login.parsgreen.com/Api/SendSMS.asmx',
     PARSGREEN_TIMEOUT_MS: 1000,
     PARSGREEN_APPROVED_PHONE_LOGIN_PATTERN: smsConfig.pattern,
     FRONTEND_URL: 'https://login.example.test/login',
@@ -83,7 +84,7 @@ describe('ParsGreen SOAP delivery contract', () => {
     vi.stubGlobal('fetch', request)
     await expect(sendParsGreenSms('+989000000000', 'fixture <code> & text')).resolves.toEqual({})
     const [url, options] = request.mock.calls[0]!
-    expect(url).toBe('https://sms.example.test/service')
+    expect(String(url)).toBe('https://login.parsgreen.com/Api/SendSMS.asmx')
     expect(options.headers.soapaction).toBe('"http://ParsGreen.com/SendGroupSMS"')
     expect(options.body).toContain('<SendGroupSMS xmlns="http://ParsGreen.com/">')
     expect(options.body).not.toContain('tempuri.org')

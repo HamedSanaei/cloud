@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { getConfig } from '../../config.js'
 import { AppError } from '../../lib/errors.js'
+import { outboundFetch } from '../outbound/client.js'
 
 export const validToken = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) && !/^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(value)
 export const responseCode = (value: unknown): number | null => typeof value === 'number' && Number.isSafeInteger(value) ? value : typeof value === 'string' && /^-?\d{1,8}$/.test(value) ? Number(value) : null
@@ -25,7 +26,7 @@ export async function tabapayRequest(operation: 'create' | 'verify', fields: Rec
   try {
     const form = new FormData()
     for (const [key, value] of Object.entries(fields)) form.set(key, value)
-    const response = await fetch(`https://api.tabapay.ir/v1${sandbox ? '/sandbox' : ''}/${operation}`, {
+    const response = await outboundFetch('tabapay', `https://api.tabapay.ir/v1${sandbox ? '/sandbox' : ''}/${operation}`, {
       method: 'POST', headers: { Authorization: `Bearer ${merchant}`, Referer: new URL(config.FRONTEND_URL).origin + '/' }, body: form,
       redirect: 'error', signal: AbortSignal.timeout(15000),
     })

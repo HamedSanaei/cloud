@@ -1,0 +1,10 @@
+.outbound-fields, .outbound-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.outbound-grid { margin-top: 20px; }
+.outbound-profile { min-width: 0; padding: 20px; border: 1px solid var(--admin-line, #dce4ef); border-radius: 14px; background: var(--admin-paper); }
+.outbound-profile p, .outbound-test { overflow-wrap: anywhere; }
+.outbound-profile h3 { margin: 0 0 12px; }
+.outbound-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.outbound-test { display: flex; flex-direction: column; gap: 5px; margin: 16px 0; padding: 12px; border-inline-start: 3px solid var(--admin-accent, #2869e8); }
+.outbound-test small, .outbound-muted { color: var(--admin-subtle, #64748b); }
+@media (max-width: 800px) { .outbound-fields, .outbound-grid { grid-template-columns: minmax(0, 1fr); } .outbound-profile { padding: 14px; } }
+.outbound-panel { --admin-paper: var(--surface, #fff); --admin-ink: var(--ink, #162337); --admin-line: var(--border, #dce4ef); --admin-subtle: var(--muted, #64748b); color: var(--admin-ink); }

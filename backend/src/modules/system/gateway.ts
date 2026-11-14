@@ -8,6 +8,7 @@ import { fingerprint, validToken } from '../payments/tabapay.js'
 import type { SessionUser } from '../auth/service.js'
 import { writeAudit } from '../audit/service.js'
 import { consumeAuthorization, seal, unseal } from './security.js'
+import { outboundFetch } from '../outbound/client.js'
 
 export interface GatewayConfig { enabled: boolean; sandbox: boolean; merchant: string; fingerprint: string; source: 'environment' | 'store' }
 interface StoredConfig { enabled: boolean; sandbox: boolean; fingerprint: string }
@@ -60,7 +61,7 @@ export async function updateGateway(db: DbClient, user: SessionUser, input: { en
 export async function diagnoseGateway(db: DbClient) {
   const cfg = await effectiveGateway(db)
   let reachable = false
-  try { await fetch('https://api.tabapay.ir', { method: 'HEAD', redirect: 'error', signal: AbortSignal.timeout(5000) }); reachable = true } catch { /* No financial request, merchant or token sent. */ }
+  try { await outboundFetch('tabapay', 'https://api.tabapay.ir', { method: 'HEAD', redirect: 'error', signal: AbortSignal.timeout(5000) }); reachable = true } catch { /* No financial request, merchant or token sent. */ }
   return { reachable, credential: validToken(cfg.merchant) ? 'format_valid_provider_unverified' : 'invalid_format',
     domain: 'provider_confirmation_required', referer: 'browser_origin_required',
     message: 'این بررسی تراکنش نمی‌سازد. API مستندِ بدون تراکنش برای تأیید مرچنت یا دامنه وجود ندارد؛ تأیید دامنه باید در پنل تاباپی بررسی شود. لینک پرداخت Origin را ارسال می‌کند؛ افزونهٔ حریم خصوصی یا تنظیم مرورگر می‌تواند آن را حذف کند.' }

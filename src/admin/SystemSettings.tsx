@@ -14,7 +14,7 @@ import './system-settings.css'
 const base = '/admin/settings'
 type RunSensitive = (action: string, payload: unknown, summary: string, execute: (proof: string) => Promise<void>) => void
 const ActionContext = createContext<RunSensitive>(() => undefined)
-const useSensitive = () => useContext(ActionContext)
+export const useSensitive = () => useContext(ActionContext)
 const post = async <T,>(url: string, data: unknown, key?: string) => (await apiPost<{ data: T }>(base + url, data, key ? { headers: { 'idempotency-key': key } } : undefined)).data
 const get = async <T,>(url: string) => (await apiGet<{ data: T }>(base + url)).data
 const errorText = (e: unknown) => e instanceof Error ? e.message : 'عملیات تکمیل نشد.'
@@ -22,7 +22,7 @@ const rial = (value: number) => new Intl.NumberFormat('fa-IR').format(value) + '
 const countLabel: Record<string,string> = { users: 'کاربران', tickets: 'تیکت‌ها', wallets: 'کیف پول‌ها', wallet_transactions: 'گردش‌های مالی', orders: 'سفارش‌ها', order_items: 'اقلام سفارش', order_events: 'رویدادهای سفارش', invoices: 'فاکتورها', invoice_items: 'اقلام فاکتور', subscriptions: 'اشتراک‌ها', subscription_events: 'رویدادهای اشتراک', renewal_attempts: 'تلاش‌های تمدید', servers: 'سرورها', provider_operations: 'عملیات سرویس‌دهنده', wallet_payments: 'پرداخت‌ها', gateway_credentials: 'نسخه‌های مرچنت', admin_adjustments: 'تعدیل‌های مالی', pricing_rules: 'قواعد قیمت‌گذاری' }
 const label = (value: string) => ({ active: 'فعال', disabled: 'غیرفعال', pending: 'در انتظار', backup: 'پشتیبان', upload: 'فایل بارگذاری‌شده', rehearsal: 'آزمایش بازیابی', restore: 'بازیابی', completed: 'تکمیل‌شده', failed: 'ناموفق', running: 'در حال اجرا', queued: 'در صف', awaiting_approval: 'در انتظار تکمیل', interrupted: 'قطع‌شده؛ نیازمند بررسی', rolled_back: 'بازگردانی ایمن انجام شد', deleted: 'حذف‌شده', preflight: 'پیش‌بررسی', dumping: 'تهیه پشتیبان', encrypted: 'رمزگذاری‌شده', authenticated: 'اصالت تأیید شد', verified: 'صحت‌سنجی موفق', pre_backup: 'پشتیبان پیش از بازیابی', restoring: 'در حال بازیابی', rollback: 'بازگردانی ایمن', retention_expired: 'پایان دوره نگهداری' } as Record<string,string>)[value] || value
 function date(value: string) { return new Date(value).toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' }) }
-interface Capabilities { allowed: boolean; primaryIpv4Pricing?: boolean; encryptionReady: boolean; backupsEnabled: boolean; restoreEnabled: boolean; maxUploadBytes: number; dualApprovalRial: number }
+export interface Capabilities { allowed: boolean; outboundProxies?: boolean; primaryIpv4Pricing?: boolean; encryptionReady: boolean; backupsEnabled: boolean; restoreEnabled: boolean; maxUploadBytes: number; dualApprovalRial: number }
 function SimpleAdminActions({ children }: { children: ReactNode }) {
   const [error, setError] = useState('')
   const inFlight = useRef(false)
@@ -54,6 +54,7 @@ export function SystemSettingsLayout() {
       { to: 'backups', label: 'پشتیبان‌گیری و بازیابی', icon: Database }, { to: 'finance', label: 'عملیات مالی کاربران', icon: WalletCards },
       { to: 'iran-tariffs', label: 'تعرفهٔ سرور ایران', icon: Settings2 },
       ...(capabilities.data?.primaryIpv4Pricing ? [{ to: 'primary-ipv4', label: 'تعرفهٔ تعویض IPv4', icon: Settings2 }] : []),
+      ...(capabilities.data?.outboundProxies ? [{ to: 'outbound', label: 'شبکه و پراکسی خروجی', icon: Settings2 }] : []),
     ].map(({ to, label, icon: Icon }) => <NavLink key={to} to={to}><Icon size={19} />{label}</NavLink>)}</nav>
     {capabilities.loading ? <p role="status">در حال بررسی دسترسی…</p> : capabilities.error ? <p role="alert">{capabilities.error}</p> : !capabilities.data?.allowed ? <Card><h2>دسترسی مدیریت مجاز نیست</h2><p>این بخش فقط برای حساب‌های مدیر فعال فروشگاه قابل استفاده است.</p></Card> : <SimpleAdminActions>{!capabilities.data.encryptionReady ? <Card><h2>کلید رمزگذاری آماده نیست</h2><p>برای تغییر مرچنت TabaPay باید STORE_SECRET_KEY مستقل و پایدار در تنظیمات محافظت‌شده سرور ثبت شود. سایر بخش‌های مدیریتی قابل مشاهده و استفاده هستند و عملیات Backup نیز به تنظیمات مستقل خود نیاز دارد.</p></Card> : null}<Outlet context={capabilities.data} /></SimpleAdminActions>}
   </div>

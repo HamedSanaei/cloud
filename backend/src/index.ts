@@ -10,6 +10,8 @@ import { assertUnifiedCutoverReady } from './modules/integration/platform.js'
 import { assertSiteAuthorityReady, isPlatformAuthority } from './modules/integration/authority.js'
 import { assertAuthenticationReady } from './modules/auth/readiness.js'
 import { retryStartup, startupFailure, waitForStartupDependencies } from './lib/startup.js'
+import { installOutboundClient, OutboundHttp } from './modules/outbound/client.js'
+import { readOutbound } from './modules/outbound/settings.js'
 
 async function main() {
   loadConfig()
@@ -21,10 +23,12 @@ async function main() {
   if (!isPlatformAuthority()) registerConfiguredProviders()
 
   const dbHandle = createDb()
+  const closeOutbound = installOutboundClient(new OutboundHttp(() => readOutbound(dbHandle.db)))
   let queues: CloudQueues | undefined
   let app: FastifyInstance | undefined
   const closeHandles = async () => {
     await queues?.close().catch(() => undefined)
+    await closeOutbound().catch(() => undefined)
     await dbHandle.pool.end().catch(() => undefined)
   }
   try {

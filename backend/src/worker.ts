@@ -7,6 +7,8 @@ import { registerConfiguredProviders } from './modules/providers/registry.js'
 import { migrate } from './db/migrate.js'
 import { retryStartup, startupFailure, waitForStartupDependencies } from './lib/startup.js'
 import { assertSiteAuthorityReady, isPlatformAuthority } from './modules/integration/authority.js'
+import { installOutboundClient, OutboundHttp } from './modules/outbound/client.js'
+import { readOutbound } from './modules/outbound/settings.js'
 
 async function main() {
   loadConfig()
@@ -25,14 +27,16 @@ async function main() {
   logger.info('starting cloud worker (env=%s, leaseweb_mode=%s)', config.NODE_ENV, config.LEASEWEB_MODE)
   await waitForStartupDependencies(logger)
   await migrate()
-  const providers = registerConfiguredProviders()
   const dbHandle = createDb()
+  const closeOutbound = installOutboundClient(new OutboundHttp(() => readOutbound(dbHandle.db)))
+  const providers = registerConfiguredProviders()
   await assertSiteAuthorityReady(dbHandle.db)
   let queues: CloudQueues | undefined
   let workerSet: WorkerSet | undefined
   const close = async () => {
     await workerSet?.close().catch(() => undefined)
     await queues?.close().catch(() => undefined)
+    await closeOutbound().catch(() => undefined)
     await dbHandle.pool.end().catch(() => undefined)
   }
   try {

@@ -19,6 +19,8 @@
  */
 import { loadConfig, getConfig } from '../config.js'
 import { createDb } from '../db/index.js'
+import { installOutboundClient, OutboundHttp } from '../modules/outbound/client.js'
+import { readOutbound } from '../modules/outbound/settings.js'
 import { migrate } from '../db/migrate.js'
 import { registerConfiguredProviders, getProvider } from '../modules/providers/registry.js'
 import { syncProviderCatalog } from '../modules/catalog/service.js'
@@ -296,22 +298,26 @@ async function main() {
   const cmd = process.argv[2] ?? ''
   loadConfig()
   await migrate()
-  registerConfiguredProviders()
+  const networkDb = createDb()
+  const closeOutbound = installOutboundClient(new OutboundHttp(() => readOutbound(networkDb.db)))
+  try {
+    registerConfiguredProviders()
 
-  const json = process.argv.includes('--json')
-  switch (cmd) {
-    case 'doctor':
-      return runDoctor()
-    case 'sync-offers':
-      return runSyncOffers()
-    case 'list-monthly':
-      return runListMonthly(json)
-    case 'price-preview':
-      return runPricePreview(json)
-    default:
-      console.log(`Usage: npm run leaseweb -- <command> [--json]\n\nCommands:\n  doctor\n  sync-offers\n  list-monthly\n  price-preview`)
-      return cmd ? 1 : 0
-  }
+    const json = process.argv.includes('--json')
+    switch (cmd) {
+      case 'doctor':
+        return await runDoctor()
+      case 'sync-offers':
+        return await runSyncOffers()
+      case 'list-monthly':
+        return await runListMonthly(json)
+      case 'price-preview':
+        return await runPricePreview(json)
+      default:
+        console.log(`Usage: npm run leaseweb -- <command> [--json]\n\nCommands:\n  doctor\n  sync-offers\n  list-monthly\n  price-preview`)
+        return cmd ? 1 : 0
+    }
+  } finally { await closeOutbound(); await networkDb.pool.end() }
 }
 
 main()
