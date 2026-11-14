@@ -10,7 +10,7 @@ import {
   WalletCards,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Button, LinkButton } from '../components/ui/Button'
 import { Card, SectionHeading } from '../components/ui/Card'
 import { Input, Select } from '../components/ui/FormControls'
@@ -34,6 +34,10 @@ const priceLabel = (totalRial: number) => `${formatFaNumber(totalRial / 10)} ت�
 
 export function CreateServerPage() {
   const { user } = useAuth()
+  const [params] = useSearchParams()
+  const linkedOffer = params.get('offer'), linkedPeriod = params.get('period')
+  const appliedLink = useRef(false)
+  const [linkUnavailable, setLinkUnavailable] = useState(false)
   const [draft] = useState(() => readCheckoutDraft(user?.id))
   const [step, setStep] = useState(draft?.step ?? 0)
   const [providerId, setProviderId] = useState(draft?.providerId ?? '')
@@ -50,6 +54,18 @@ export function CreateServerPage() {
   const navigate = useNavigate()
   const { showToast } = useToast()
   const catalog = useApiQuery(getStorefrontCatalog)
+  useEffect(() => {
+    if (!linkedOffer || appliedLink.current || catalog.loading || !catalog.data || catalog.error) return
+    appliedLink.current = true
+    const selected = catalog.data.offers.find(item => item.id === linkedOffer && item.provider === 'hetzner')
+    if (!selected || (linkedPeriod !== 'hourly' && linkedPeriod !== 'monthly') || !selected.prices.some(price => price.period === linkedPeriod)) {
+      setLinkUnavailable(true); setStep(0); setProviderId(''); setLocation(''); setBillingPeriod(''); setOfferId(''); setOs(''); setWalletId('')
+      return
+    }
+    if (draft?.offerId === linkedOffer && draft.billingPeriod === linkedPeriod) return
+    setProviderId(selected.provider); setLocation(selected.location); setBillingPeriod(linkedPeriod); setOfferId(selected.id)
+    setOs(''); setWalletId(''); purchaseKey.current = crypto.randomUUID(); setStep(3)
+  }, [catalog.data, catalog.error, catalog.loading, draft, linkedOffer, linkedPeriod])
   const wallets = useApiQuery(listWallets)
   const datacenters = catalog.data?.datacenters ?? []
   const provider = datacenters.find((item) => item.id === providerId)
@@ -126,6 +142,7 @@ export function CreateServerPage() {
 
   return (
     <div className="page-stack wizard-page server-storefront" dir="rtl">
+      {linkUnavailable && <p className="info-box" role="status">پلن لینک‌شده دیگر برای این دوره در دسترس نیست. از فهرست فعلی انتخاب کنید.</p>}
       <PageHeader title="ایجاد سرور جدید" subtitle="دیتاسنتر، دوره پرداخت و منابع را از کاتالوگ زنده انتخاب کنید." icon={<Server />}
         actions={<LinkButton to="/servers" variant="secondary" icon={<ArrowLeft size={18} />}>بازگشت</LinkButton>} />
       <Card padding="none" className="wizard-card">

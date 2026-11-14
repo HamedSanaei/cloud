@@ -17,13 +17,13 @@ import { PlatformAdminPage } from './pages/PlatformAdminPage'
 import { AdminLayout } from './admin/AdminLayout'
 import { AdminDatacenters } from './admin/AdminDatacenters'
 import { AdminTickets } from './admin/AdminTickets'
-import { SystemSettingsLayout, SystemGateway, SystemLogs, SystemFinance, SystemBackups, SystemPrimaryIpv4Pricing } from './admin/SystemSettings'
+import { SystemSettingsLayout, SystemGateway, SystemLogs, SystemFinance, SystemBackups, SystemPrimaryIpv4Pricing, SystemIranTariffs } from './admin/SystemSettings'
 import { AdminOverview, AdminOrders, AdminOrderPage, AdminUsers, AdminUserPage, AdminUserServers, AdminServers, AdminServerPage } from './admin/AdminPages'
 
-export function App() {
+export function App({ initialTariffs }: { initialTariffs?: string } = {}) {
   return (
     <Routes>
-      <Route index element={<LandingPage />} />
+      <Route index element={<LandingPage initialTariffs={initialTariffs} />} />
       <Route path="login" element={<AuthPage intent="login" />} />
       <Route path="register" element={<AuthPage intent="register" />} />
       <Route path="forgot-password" element={<AuthPage intent="forgot" />} />
@@ -40,6 +40,7 @@ export function App() {
         <Route path="tickets" element={<AdminTickets />} />
         <Route path="settings" element={<SystemSettingsLayout />}>
           <Route path="primary-ipv4" element={<SystemPrimaryIpv4Pricing />} />
+          <Route path="iran-tariffs" element={<SystemIranTariffs />} />
           <Route index element={<Navigate to="gateway" replace />} />
           <Route path="gateway" element={<SystemGateway />} /><Route path="logs" element={<SystemLogs />} />
           <Route path="backups" element={<SystemBackups />} /><Route path="finance" element={<SystemFinance />} />

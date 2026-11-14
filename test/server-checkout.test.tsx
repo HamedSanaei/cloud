@@ -29,8 +29,8 @@ beforeEach(() => {
     return new Response(JSON.stringify({ data }), { headers: { 'content-type': 'application/json' } })
   }))
 })
-function open() {
-  return render(<MemoryRouter initialEntries={['/servers/create']}><ToastProvider><Routes>
+function open(path = '/servers/create') {
+  return render(<MemoryRouter initialEntries={[path]}><ToastProvider><Routes>
     <Route path="/servers/create" element={<CreateServerPage />} /><Route path="/wallet" element={<WalletPage />} />
   </Routes></ToastProvider></MemoryRouter>)
 }
@@ -53,6 +53,17 @@ async function configure() {
 }
 
 describe('Issue #3 server checkout', () => {
+  it('opens a public offer in its available billing period without placing an order', async () => {
+    open('/servers/create?offer=Cheap&period=hourly')
+    expect(await screen.findByRole('button', { name: /Ubuntu/ })).toBeTruthy()
+    expect(posts).toEqual([])
+  })
+
+  it('returns to location selection if the public price period is no longer available', async () => {
+    open('/servers/create?offer=Cheap&period=monthly')
+    expect(await screen.findByText(/پلن لینک‌شده دیگر/)).toBeTruthy()
+    expect(await screen.findByRole('button', { name: /Hetzner/ })).toBeTruthy()
+  })
   it('sends idempotency only in the header accepted by the strict API', async () => {
     await createServer({ name: 'test-server', offerId: 'offer', os: 'ubuntu', billingPeriod: 'hourly', walletId: 'wallet', idempotencyKey: 'stable-key' })
     expect(posts).toHaveLength(1)

@@ -17,12 +17,14 @@ import './panel-layout.css'
 import './dropdown.css'
 import './server-management.css'
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
+const root = document.getElementById('root')!
+const initialTariffs = window.location.pathname === '/' ? document.getElementById('home-tariff-content')?.innerHTML : undefined
+ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <BrowserRouter>
       <AuthProvider>
         <ToastProvider>
-          <App />
+          <App initialTariffs={initialTariffs?.includes('<!--#') ? undefined : initialTariffs} />
         </ToastProvider>
       </AuthProvider>
     </BrowserRouter>

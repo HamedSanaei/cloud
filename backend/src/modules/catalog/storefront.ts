@@ -24,17 +24,18 @@ interface StorefrontOffer {
   vcpu: number
   memoryMb: number
   diskGb: number
+  diskType?: string
   trafficGb: number | null
   operatingSystems: ProviderOsOption[]
   prices: StorefrontPrice[]
 }
-export async function getStorefront(db: DbClient, admin = false) {
+export async function getStorefront(db: DbClient, admin = false, providerFilter?: string) {
   const config = getConfig()
   const registered = new Set(listProviders().map((provider) => provider.id))
   const configured = [
     { id: 'hetzner', ...config.PROVIDERS.hetzner },
     { id: 'leaseweb', ...config.PROVIDERS.leaseweb },
-  ].filter((provider) => provider.enabled && provider.orderingEnabled && registered.has(provider.id))
+  ].filter((provider) => provider.enabled && provider.orderingEnabled && registered.has(provider.id) && (!providerFilter || providerFilter === provider.id))
   const providerRows = await db.query.providers.findMany({ where: admin ? undefined : (t) => eq(t.enabled, true) })
   const active = configured.filter((provider) => providerRows.some((row) => row.id === provider.id && row.mode === 'live'))
   const activeIds = new Set(active.map((provider) => provider.id))
@@ -84,6 +85,8 @@ export async function getStorefront(db: DbClient, admin = false) {
       vcpu: product.vcpu,
       memoryMb: product.memoryMb,
       diskGb: product.diskGb,
+      diskType: (product.raw as { storageType?: unknown } | null)?.storageType === 'local' ? 'Local' :
+        (product.raw as { storageType?: unknown } | null)?.storageType === 'network' ? 'Network' : undefined,
       trafficGb: product.trafficGb,
       operatingSystems,
       prices,

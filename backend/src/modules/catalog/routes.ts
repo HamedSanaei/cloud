@@ -8,9 +8,21 @@ import { getOffer, listCatalogProviders, listLocations, listOffers } from './ser
 import { offerToDto } from '../../lib/dto.js'
 import { NotFoundError } from '../../lib/errors.js'
 import { getStorefront } from './storefront.js'
+import { getHomeTariffs } from './home-tariffs.js'
+import { renderHomeTariffs } from '../../contracts/home-tariffs.js'
 
 export const registerCatalogRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
   const { db } = ctx
+  app.get('/public/home-tariffs', async (_request, reply) => {
+    const { iran, hetzner } = await getHomeTariffs(db)
+    return reply.type('text/html; charset=utf-8').header('Cache-Control', 'no-store')
+      .header('Content-Security-Policy', "default-src 'none'; sandbox")
+      .send(renderHomeTariffs(iran, hetzner))
+  })
+  app.get('/public/home-prices', async (_request, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    return { data: await getHomeTariffs(db) }
+  })
 
   // Public catalog projection contains no credentials or provider account ids.
   app.get('/catalog/storefront', async (request, reply) => {
