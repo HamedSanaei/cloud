@@ -1799,6 +1799,15 @@ textarea:focus-visible {
   line-height: 1.8;
 }
 
+.info-box.infrastructure-purchase-availability {
+  flex-wrap: wrap;
+  justify-content: space-between;
+  font-size: 14px;
+  color: var(--ink);
+}
+.infrastructure-purchase-availability > span { flex: 1 1 240px; min-width: 0; }
+.infrastructure-purchase-availability > button { flex-shrink: 0; }
+
 .review-list {
   overflow: hidden;
   border: 1px solid var(--border);
