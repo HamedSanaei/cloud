@@ -26,3 +26,5 @@ backend/configuration.toml
 __pycache__/
 *.pyc
 .recovery-backups/
+/docs/سامانه جامع پیامک_files/
+/docs/سامانه جامع پیامک.html
