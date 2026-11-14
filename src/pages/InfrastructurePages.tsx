@@ -75,6 +75,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
   const ips = useApiQuery(listIps, [kind])
   const active = server ? servers : ips
   const refreshServers = servers.refetch
+  const resetFilters = () => { setQuery(''); setStatus('all'); setSecondary('all') }
 
 
   const filteredServers = useMemo(() => {
@@ -128,7 +129,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
         }
       />
       {!server && <PurchaseAvailability purchase={purchase} />}
-      <FilterPanel query={query} onQueryChange={setQuery} placeholder={server ? 'جستجو در سرورها...' : 'جستجو در آی‌پی، سرور یا دیتاسنتر...'} onReset={() => { setQuery(''); setStatus('all'); setSecondary('all') }}>
+      <FilterPanel query={query} onQueryChange={setQuery} placeholder={server ? 'جستجو در سرورها...' : 'جستجو در آی‌پی، سرور یا دیتاسنتر...'} onReset={resetFilters}>
         <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="وضعیت"><option value="all">همه وضعیت‌ها</option><option value="inactive">غیرفعال</option><option value="active">فعال</option>{!server ? <option value="reserved">رزرو شده</option> : null}</Select>
         <Select value={secondary} onChange={(event) => setSecondary(event.target.value)} aria-label={server ? 'دیتاسنتر' : 'نوع آی‌پی'}>
           <option value="all">{server ? 'همه دیتاسنترها' : 'همه انواع'}</option>
@@ -153,9 +154,11 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
           ) : (
             <EmptyState
               icon={ServerCog}
-              title="هنوز سروری نساخته‌اید"
-              description={query ? 'عبارت جستجو یا فیلترها را تغییر دهید.' : 'برای شروع، اولین سرور ابری خود را ایجاد کنید.'}
-              action={<LinkButton to="/servers/create" icon={<Plus size={17} />}>ساخت اولین سرور</LinkButton>}
+              title={servers.data.length ? 'سروری با این جستجو یا فیلترها یافت نشد' : 'هنوز سروری نساخته‌اید'}
+              description={servers.data.length ? 'عبارت جستجو یا فیلترها را تغییر دهید یا آن‌ها را پاک کنید.' : 'برای شروع، اولین سرور ابری خود را ایجاد کنید.'}
+              action={servers.data.length
+                ? <Button variant="secondary" onClick={resetFilters}>پاک کردن فیلترها</Button>
+                : <LinkButton to="/servers/create" icon={<Plus size={17} />}>ساخت اولین سرور</LinkButton>}
             />
           )
         ) : filteredIps.length ? (
