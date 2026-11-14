@@ -13,14 +13,21 @@ export function LifecycleBadge({ state }: { state: ServerLifecycle }) {
 export function ServerResourceMetricCard({ label, value }: { label: string; value?: string | null }) {
   return <article className="server-resource-metric"><span>{label}</span><strong>{value || 'در دسترس نیست'}</strong></article>
 }
+function serverLifecycleState(server: Server): ServerLifecycle {
+  return server.lifecycle ?? server.tracking?.state ?? (server.status === 'building' ? 'provisioning' : 'ready')
+}
+export function ServerStatus({ server }: { server: Server }) {
+  const state = serverLifecycleState(server)
+  return <><LifecycleBadge state={state} />{state === 'ready' && server.status === 'inactive' && <small>خاموش</small>}</>
+}
 export function ServerTableRow({ server, onPlatformManage }: { server: Server; onPlatformManage?: () => void }) {
-  const state = server.lifecycle ?? server.tracking?.state ?? (server.status === 'building' ? 'provisioning' : 'ready')
+  const state = serverLifecycleState(server)
   const ready = state === 'ready'
   const addressUnavailable = serverAddressUnavailable(server)
   const inspectable = ready || ['delete_failed', 'deletion_requested', 'deleting', 'terminated'].includes(state)
   return <tr className={`server-table-row${!ready ? ' server-table-row--pending' : ''}`}>
     <td><strong>{server.name}</strong><small>{server.datacenter || 'در حال دریافت'}{server.os ? ` · ${server.os}` : ''}</small></td>
-    <td data-label="وضعیت"><LifecycleBadge state={state} />{ready && server.status === 'inactive' && <small>خاموش</small>}</td>
+    <td data-label="وضعیت"><ServerStatus server={server} /></td>
     <td data-label="منابع">{[server.cpu, server.ram, server.disk].filter(Boolean).join(' · ') || 'در حال دریافت'}</td>
     <td data-label="آدرس‌های آی‌پی"><CopyableIp value={server.ip} unavailableReason={addressUnavailable} />{!addressUnavailable && server.ipv6 && <CopyableIp value={server.ipv6} />}</td>
     <td>{(server.platformServerId ? ready : inspectable) ? server.platformServerId
