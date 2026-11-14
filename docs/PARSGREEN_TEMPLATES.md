@@ -133,3 +133,25 @@ separately; no live SMS was sent during this change.
    records available panel messages, not automated send hooks.
 6. With authorization, test real OTP delivery to an actual handset before
    claiming that phone login is operational in production.
+
+## Phone login autofill rollout
+
+`PARSGREEN_APPROVED_PHONE_LOGIN_PATTERN` defaults to empty. Set it only after
+ParsGreen confirms the exact dynamic WhiteText pattern for this account, the
+configured service line, `SendGroupSMS` and the required blacklist coverage.
+The approved literal sample does not provide that confirmation. See #21.
+
+Use the provider-approved text verbatim, with one `%%` for the generated OTP in
+the body and the final line `@parserver.ir #%%`. The live login URL is
+`https://parserver.ir/login`. The final line must match `FRONTEND_URL`'s HTTPS
+hostname exactly, with no trailing text or newline. In the Compose `.env` file,
+use a double-quoted value with `\n` between lines. Start and resend use this
+format for phone login requests from the configured origin. Requests without
+that origin use the existing SMS.
+
+After approval, validate with consented numbers on Android Chrome (accept or
+deny the WebOTP prompt) and iOS Safari (tap the keyboard suggestion). Check
+manual entry and resend on both. Keep the variable empty until confirmation.
+
+- [Android WebOTP](https://developer.chrome.com/docs/identity/web-apis/web-otp)
+- [iOS domain-bound SMS autofill](https://developer.apple.com/documentation/security/enabling-autofill-for-domain-bound-sms-codes)

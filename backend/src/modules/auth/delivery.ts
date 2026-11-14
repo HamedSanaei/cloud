@@ -129,6 +129,12 @@ export async function sendParsGreenSms(to: string, message: string): Promise<{ d
   }
 }
 
-export async function sendSmsOtp(to: string, code: string): Promise<{ developmentCode?: string }> {
+export async function sendSmsOtp(to: string, code: string, loginOrigin?: string): Promise<{ developmentCode?: string; smsAutofill?: true }> {
+  const config = getConfig()
+  const pattern = config.PARSGREEN_APPROVED_PHONE_LOGIN_PATTERN
+  if (pattern && config.AUTH_DELIVERY_MODE === 'live' && loginOrigin === new URL(config.FRONTEND_URL).origin) {
+    await sendParsGreenSms(to, pattern.replaceAll('%%', code))
+    return { smsAutofill: true }
+  }
   return sendParsGreenSms(to, `کد ورود پارس سرور: ${code}\nاین کد را در اختیار دیگران قرار ندهید.`)
 }

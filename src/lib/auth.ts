@@ -24,6 +24,7 @@ export interface AuthChallenge {
   expiresIn: number
   resendAfter: number
   developmentCode?: string
+  smsAutofill?: boolean
 }
 
 type Data<T> = { data: T }

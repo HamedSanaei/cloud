@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { isAbsolute } from 'node:path'
 import { loadLocalEnvFiles } from './lib/env-loader.js'
 import { loadProviderConfig, type ProviderRuntimeConfig } from './lib/provider-config.js'
+import { isDomainBoundLoginPattern } from './modules/auth/sms-autofill.js'
 export type { ProviderAccount, HetznerConfig, LeasewebConfig, AsiatechConfig } from './lib/provider-config.js'
 
 const envSchema = z.object({
@@ -61,6 +62,7 @@ const envSchema = z.object({
   PARSGREEN_FROM: z.string().default(''),
   PARSGREEN_ENDPOINT: z.string().url().default('https://login.parsgreen.com/Api/SendSMS.asmx'),
   PARSGREEN_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
+  PARSGREEN_APPROVED_PHONE_LOGIN_PATTERN: z.string().default(''),
 
   GOOGLE_CLIENT_ID: z.string().default(''),
   GOOGLE_CLIENT_SECRET: z.string().default(''),
@@ -134,6 +136,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new Error('DATA_AUTHORITY=platform requires PLATFORM_API_URL')
   }
   const system = parsed.data
+  if (system.PARSGREEN_APPROVED_PHONE_LOGIN_PATTERN &&
+      !isDomainBoundLoginPattern(system.PARSGREEN_APPROVED_PHONE_LOGIN_PATTERN, system.FRONTEND_URL)) {
+    throw new Error('PARSGREEN_APPROVED_PHONE_LOGIN_PATTERN must match the HTTPS FRONTEND_URL hostname and include the OTP in the body and final line')
+  }
   if (system.SYSTEM_RESTORE_ENABLED && !system.SYSTEM_BACKUP_ENABLED) throw new Error('Restore requires configured system backups')
   if (system.SYSTEM_BACKUP_ENABLED && (!/^[a-f0-9]{64}$/i.test(system.STORE_SECRET_KEY) || !/^[a-f0-9]{64}$/i.test(system.SYSTEM_BACKUP_KEY) || !z.uuid().safeParse(system.SYSTEM_INSTANCE_ID).success || !isAbsolute(system.SYSTEM_BACKUP_DIR))) throw new Error('System backup encryption keys, instance UUID and absolute private directory must be configured')
   if (parsed.data.TABAPAY_ENABLED && (!z.string().uuid().safeParse(parsed.data.TABAPAY_MERCHANT).success ||
