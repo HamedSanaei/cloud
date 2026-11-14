@@ -91,12 +91,16 @@ export async function cancelSubscription(db: DbClient, userId: string, subscript
  * Extend the subscription periods by one interval. Called by the renewal job
  * after a successful payment. Idempotent: if already extended past `now`, no-op.
  */
-export async function extendSubscriptionPeriod(db: DbOrTx, subscriptionId: string): Promise<boolean> {
+export async function extendSubscriptionPeriod(db: DbOrTx, subscriptionId: string, opts: { scheduledHourly?: boolean } = {}): Promise<boolean> {
   const sub = await db.query.subscriptions.findFirst({ where: (t) => eq(t.id, subscriptionId) })
   if (!sub) return false
   if (sub.currentPeriodEnd > new Date() && sub.status === 'active') return false
 
-  const start = sub.currentPeriodEnd > new Date() ? sub.currentPeriodEnd : new Date()
+  // Active hourly renewals retain their purchased boundary. Posting delays must
+  // not accumulate into a 61-minute billing cadence. Grace/restarts keep their
+  // existing policy and are not retrospectively charged by this option.
+  const start = opts.scheduledHourly && sub.billingInterval === 'HOURLY' && sub.status === 'active'
+    ? sub.currentPeriodEnd : sub.currentPeriodEnd > new Date() ? sub.currentPeriodEnd : new Date()
   const end = addInterval(start, sub.billingInterval)
   await db.update(subscriptions).set({
     currentPeriodStart: start,

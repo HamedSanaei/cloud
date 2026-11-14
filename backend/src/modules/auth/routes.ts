@@ -340,6 +340,6 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
   })
 }
 
-function publicUser(u: { id: string; email: string; role: string; status: string; firstName?: string | null; lastName?: string | null; mobile?: string | null; twoFactorEnabled?: boolean }) {
-  return { id: u.id, email: u.email.endsWith('@accounts.serverhub.invalid') ? '' : u.email, role: u.role, status: u.status, firstName: u.firstName ?? null, lastName: u.lastName ?? null, mobile: u.mobile ?? null, twoFactorEnabled: getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED && (u.twoFactorEnabled ?? false) }
+function publicUser(u: { id: string; email: string; role: string; status: string; firstName?: string | null; lastName?: string | null; mobile?: string | null; twoFactorEnabled?: boolean; timezone?: string | null }) {
+  return { id: u.id, email: u.email.endsWith('@accounts.serverhub.invalid') ? '' : u.email, role: u.role, status: u.status, firstName: u.firstName ?? null, lastName: u.lastName ?? null, mobile: u.mobile ?? null, twoFactorEnabled: getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED && (u.twoFactorEnabled ?? false), timezone: u.timezone ?? 'Asia/Tehran' }
 }

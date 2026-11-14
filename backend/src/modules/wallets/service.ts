@@ -1,6 +1,6 @@
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, inArray, sql } from 'drizzle-orm'
 import type { DbClient, DbOrTx } from '../../db/index.js'
-import { walletTransactions, wallets } from '../../db/schema.js'
+import { invoices, walletTransactions, wallets } from '../../db/schema.js'
 import { ConflictError, InsufficientFundsError, NotFoundError } from '../../lib/errors.js'
 import { assertNonNegative, rialToToman } from '../../lib/money.js'
 import { writeAudit } from '../audit/service.js'
@@ -187,12 +187,19 @@ export async function creditWallet(
 }
 
 export async function listTransactions(db: DbClient, userId: string, opts: { limit?: number; offset?: number; walletId?: string } = {}) {
-  return db.query.walletTransactions.findMany({
+  const rows = await db.query.walletTransactions.findMany({
     where: (t, { and, eq }) => and(eq(t.userId, userId), opts.walletId ? eq(t.walletId, opts.walletId) : undefined),
     orderBy: (t, { desc }) => [desc(t.createdAt)],
     limit: opts.limit ?? 50,
     offset: opts.offset ?? 0,
   })
+  // Resolve the existing invoice reference too, so historical renewals gain
+  // scheduling context without rewriting immutable ledger metadata.
+  const invoiceId = (row: typeof rows[number]) => row.type === 'renewal' && /^renewal:[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(row.idempotencyKey ?? '') ? row.idempotencyKey!.slice(8) : null
+  const ids = rows.flatMap(row => invoiceId(row) ? [invoiceId(row)!] : [])
+  const due = ids.length ? await db.select({ id: invoices.id, dueAt: invoices.dueAt }).from(invoices).where(and(eq(invoices.userId, userId), inArray(invoices.id, ids))) : []
+  const schedule = new Map(due.map(invoice => [invoice.id, invoice.dueAt]))
+  return rows.map(row => ({ ...row, scheduledAt: schedule.get(invoiceId(row) ?? '') ?? null }))
 }
 
 export async function getWalletWithLock(db: DbClient, walletId: string) {

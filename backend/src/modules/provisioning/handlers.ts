@@ -757,7 +757,7 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
       }
       await tx.update(invoices).set({ status: 'paid', paidAt: new Date() }).where(eq(invoices.id, invoice.id))
       await tx.update(renewalAttempts).set({ status: 'succeeded' }).where(eq(renewalAttempts.id, attempt.id))
-      await extendSubscriptionPeriod(tx, current.id)
+      await extendSubscriptionPeriod(tx, current.id, { scheduledHourly: true })
       return 'renewed'
     })
     if (outcome === 'renewed') renewed++

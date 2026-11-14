@@ -1,8 +1,10 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { getTestContext, truncateAll, dbAvailable, type TestContext } from '../helpers.js'
-import { subscriptions } from '../../src/db/schema.js'
-import { registerUser } from '../../src/modules/auth/service.js'
+import { subscriptions, users } from '../../src/db/schema.js'
+import { createSession, registerUser } from '../../src/modules/auth/service.js'
+import { buildApp } from '../../src/app.js'
+import { testLogger } from '../helpers.js'
 import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
 import { getProvider, registerProvider, registerConfiguredProviders } from '../../src/modules/providers/registry.js'
 import { setFxRate } from '../../src/modules/pricing/service.js'
@@ -31,6 +33,7 @@ describe.skipIf(!dbAvailable)('hourly and daily purchase boundaries', () => {
     await enableAllOffersForSale(ctx.db, 'hetzner')
   })
   afterAll(async () => { registerConfiguredProviders(); await ctx.close() })
+  afterEach(() => vi.useRealTimers())
 
   async function buy(period: 'hourly' | 'daily', email: string) {
     const user = await registerUser(ctx.db, { email, password: 'Retail-boundary-123!' })
@@ -72,5 +75,35 @@ describe.skipIf(!dbAvailable)('hourly and daily purchase boundaries', () => {
     expect(invoices.map((invoice) => invoice.status)).toEqual(['paid'])
     const renewed = await ctx.db.query.subscriptions.findFirst({ where: (t) => eq(t.id, purchase.subscription.id) })
     expect(renewed!.currentPeriodEnd.getTime() - renewed!.currentPeriodStart.getTime()).toBe(3600000)
+  })
+  it('keeps hourly due times anchored across delayed postings, debits each period once and exposes historical schedule context', async () => {
+    const purchase = await buy('hourly', 'hourly-no-drift@test.local')
+    const firstDue = purchase.subscription.currentPeriodEnd.getTime()
+    const before = (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, purchase.wallet.id) }))!.balanceRial
+    vi.useFakeTimers({ toFake: ['Date'] })
+    for (let period = 0; period < 3; period++) {
+      vi.setSystemTime(firstDue + period * 3600000 + (period + 1) * 60000)
+      await Promise.all([handleRenewalSweep(ctx), handleRenewalSweep(ctx)])
+      const sub = (await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.id, purchase.subscription.id) }))!
+      expect(sub.currentPeriodStart.getTime()).toBe(firstDue + period * 3600000)
+      expect(sub.nextInvoiceAt.getTime()).toBe(firstDue + (period + 1) * 3600000)
+    }
+    const debits = (await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.walletId, purchase.wallet.id) })).filter(t => t.type === 'renewal')
+    expect(debits).toHaveLength(3); expect(new Set(debits.map(t => t.idempotencyKey)).size).toBe(3)
+    expect((await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, purchase.wallet.id) }))!.balanceRial).toBe(before - 3 * purchase.order.totalRial)
+    await ctx.db.update(users).set({ timezone: 'Asia/Dubai' }).where(eq(users.id, purchase.order.userId))
+    const session = await createSession(ctx.db, purchase.order.userId, {}), headers = { authorization: `Bearer ${session.token}` }
+    const app = await buildApp({ db: ctx.db, queues: ctx.queues, logger: testLogger })
+    try {
+      expect((await app.inject({ url: '/api/auth/me', headers })).json().data.timezone).toBe('Asia/Dubai')
+      const rows = (await app.inject({ url: '/api/wallets/transactions', headers })).json().data.filter((t: { type: string }) => t.type === 'renewal')
+      expect(rows.map((t: { scheduledAt: string }) => t.scheduledAt).sort()).toEqual([0, 1, 2].map(p => new Date(firstDue + p * 3600000).toISOString()))
+      const renewalIds = new Set(debits.map(t => t.idempotencyKey!.slice(8)))
+      const invoiceRows = (await app.inject({ url: '/api/invoices', headers })).json().data.filter((i: { id: string }) => renewalIds.has(i.id))
+      expect(invoiceRows).toHaveLength(3); expect(invoiceRows.every((i: { paidAt: string }) => i.paidAt)).toBe(true)
+      const postingTimes = invoiceRows.map((i: { paidAt: string }) => Date.parse(i.paidAt)).sort((a: number, b: number) => a - b)
+      expect(postingTimes[1] - postingTimes[0]).toBe(61 * 60000)
+      expect(postingTimes[2] - postingTimes[1]).toBe(61 * 60000)
+    } finally { await app.close() }
   })
 })

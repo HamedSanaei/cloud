@@ -149,6 +149,7 @@ export interface Transaction {
   date: string
   status: string
   formattedAmount?: string
+  scheduledAt?: string
 }
 
 export interface Invoice {
@@ -158,6 +159,8 @@ export interface Invoice {
   amount: number
   status: string
   date: string
+  dueAt?: string
+  paidAt?: string
 }
 
 export interface ChargeRequest {
