@@ -17,7 +17,7 @@ beforeEach(() => {
 })
 
 describe('WebOTP during mobile login', () => {
-  const loginChallenge = { challengeToken: 'login-otp', challengeType: 'sms', destination: 'masked', resendAfter: 0, expiresIn: 300, smsAutofill: true }
+  const loginChallenge = { challengeToken: 'login-otp', challengeType: 'sms', destination: '09123***789', resendAfter: 0, expiresIn: 300, smsAutofill: true }
   const getCredential = vi.fn()
   const jsdom = (globalThis as unknown as { jsdom: { reconfigure(options: { url: string }): void } }).jsdom
   let originalUrl: string
@@ -70,6 +70,16 @@ describe('WebOTP during mobile login', () => {
     expect(await screen.findByText('Google Authenticator یا برنامه مشابه')).toBeTruthy()
     expect(verifyChallenge).toHaveBeenCalledExactlyOnceWith('login-otp', '034567', expect.any(AbortSignal))
     expect(acceptSession).not.toHaveBeenCalled()
+  })
+
+  it('isolates the exact masked number in the RTL subtitle', async () => {
+    getCredential.mockResolvedValue(null)
+    startLogin()
+    const number = await screen.findByText('09123***789')
+    expect(number.tagName).toBe('BDI')
+    expect(number.dir).toBe('ltr')
+    expect(number.closest('main')?.dir).toBe('rtl')
+    expect(number.parentElement?.textContent).toBe('کد ارسال‌شده به 09123***789 را وارد کنید.')
   })
 
   it.each(['denied', 'unsupported', 'http', 'unformatted', 'invalid code'])('allows manual paste after %s', async (mode) => {

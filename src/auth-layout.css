@@ -16,6 +16,88 @@
   min-height: calc(100dvh - 2 * var(--auth-page-gutter));
 }
 
+.auth-otp-control {
+  position: relative;
+  container-type: inline-size;
+  --otp-gutter: 12px;
+  --otp-color: #111827;
+  height: 66px;
+  border: 1px solid #d4dfeb;
+  border-radius: 10px;
+  background: #fff;
+  font: 700 26px ui-monospace, monospace;
+}
+
+.auth-otp-control:focus-within {
+  border-color: #2869e8;
+  box-shadow: 0 0 0 3px rgb(40 105 232 / 10%);
+}
+
+.auth-otp-field .auth-otp-control input {
+  /* Align the native text hit targets with the visual slot centers. */
+  --otp-slot-width: calc((100cqw - 2 * var(--otp-gutter)) / 6);
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  box-shadow: none;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: transparent;
+  font: inherit;
+  text-align: left;
+  padding: 0;
+  padding-inline-start: calc(var(--otp-gutter) + var(--otp-slot-width) / 2 - .5ch);
+  letter-spacing: calc(var(--otp-slot-width) - 1ch);
+  forced-color-adjust: none;
+}
+
+.auth-otp-control input::selection { background: transparent; }
+
+.auth-otp-slots {
+  position: absolute;
+  inset: 0 var(--otp-gutter);
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  color: var(--otp-color);
+  pointer-events: none;
+}
+
+.auth-otp-slot {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.auth-otp-dash {
+  width: min(14px, 45%);
+  border-top: 2px solid #8794a7;
+  border-radius: 2px;
+}
+
+.auth-otp-caret {
+  position: absolute;
+  inset-inline-start: calc(50% - .5ch - 2px);
+  height: 1em;
+  border-inline-start: 2px solid #2869e8;
+  visibility: hidden;
+}
+
+.auth-otp-caret[data-end] { inset-inline-start: calc(50% + .5ch + 1px); }
+.auth-otp-control input:focus + .auth-otp-slots .auth-otp-caret { visibility: visible; }
+.auth-otp-control input:focus + .auth-otp-slots [data-selected] {
+  border-radius: 4px;
+  background: Highlight;
+  color: HighlightText;
+}
+
+@media (forced-colors: active) {
+  .auth-otp-control:focus-within { outline: 2px solid Highlight; }
+  .auth-otp-caret { border-color: Highlight; }
+}
+
 @media (max-width: 1100px) {
   .auth-layout { grid-template-columns: 1fr; max-width: 622px; }
   .auth-brand-panel { display: none; }

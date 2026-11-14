@@ -3,6 +3,7 @@ import { ArrowLeft, Check, Eye, EyeOff, KeyRound, LockKeyhole, Mail, Phone, Refr
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { BRAND_NAME, BrandMark } from '../components/Brand'
+import { OtpField } from '../components/OtpField'
 import { ApiError } from '../lib/apiClient'
 import { toFaDigits } from '../lib/format'
 import { readSmsCode } from '../lib/webOtp'
@@ -49,27 +50,6 @@ function AuthBrandPanel() {
 
 function GoogleIcon() {
   return <span className="google-g" aria-hidden="true">G</span>
-}
-
-function OtpField({ value, onChange, disabled }: { value: string; onChange: (value: string) => void; disabled?: boolean }) {
-  return (
-    <label className="auth-field auth-otp-field">
-      <span>کد تأیید ۶ رقمی</span>
-      <input
-        autoFocus
-        autoComplete="one-time-code"
-        dir="ltr"
-        disabled={disabled}
-        inputMode="numeric"
-        onChange={(event) => onChange(event.target.value
-          .replace(/[۰-۹]/g, digit => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
-          .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
-          .replace(/\D/g, '').slice(0, 6))}
-        placeholder="— — — — — —"
-        value={value}
-      />
-    </label>
-  )
 }
 
 export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; adminEntry?: boolean }) {
@@ -289,7 +269,9 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
     : intent === 'register' ? 'ساخت حساب کاربری' : intent === 'forgot' ? 'بازیابی رمز عبور' : adminEntry ? 'ورود به پنل مدیریت' : 'ورود به حساب کاربری'
 
   const subtitle = challenge
-    ? challenge.challengeType === 'totp' ? 'کد ۶ رقمی برنامه احراز هویت خود را وارد کنید.' : `کد ارسال‌شده به ${challenge.destination} را وارد کنید.`
+    ? challenge.challengeType === 'totp'
+      ? 'کد ۶ رقمی برنامه احراز هویت خود را وارد کنید.'
+      : <>کد ارسال‌شده به <bdi dir="ltr">{challenge.destination}</bdi> را وارد کنید.</>
     : intent === 'register' ? 'برای شروع مدیریت زیرساخت، حساب امن خود را بسازید.' : intent === 'forgot' ? 'لینک بازیابی را با یک کد امن به ایمیل شما می‌فرستیم.' : adminEntry ? 'با حساب مدیر پارس سرور وارد شوید.' : 'برای مدیریت سرویس‌های ابری وارد حساب خود شوید.'
 
   return (
@@ -315,10 +297,10 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
                   <span className="auth-title-desktop">{title}</span>
                   <span className="auth-title-mobile">{!challenge && intent === 'login' ? 'خوش آمدید 👋' : title}</span>
                 </h1>
-                <p>
+                {!challenge && intent === 'login' ? <p>
                   <span className="auth-title-desktop">{subtitle}</span>
-                  <span className="auth-title-mobile">{!challenge && intent === 'login' ? 'برای ورود به پنل، اطلاعات حساب خود را وارد کنید.' : subtitle}</span>
-                </p>
+                  <span className="auth-title-mobile">برای ورود به پنل، اطلاعات حساب خود را وارد کنید.</span>
+                </p> : <p>{subtitle}</p>}
               </div>
               {!challenge ? (
                 <form className="auth-form" onSubmit={submitEntry}>
