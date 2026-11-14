@@ -114,6 +114,46 @@ describe('customer server management UI', () => {
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'بازنشانی رمز عبور' }).disabled).toBe(true)
     await waitFor(() => expect(screen.getByRole<HTMLSelectElement>('combobox').disabled).toBe(false))
   })
+  it('rechecks the blocking shutdown from Resize, then offers a plan and price after confirmed power off', async () => {
+    const shutdown = { id: 'shutdown-27', action: 'power_off', status: 'outcome_unknown', actionId: 27,
+      createdAt: '2026-11-14T00:00:00Z', updatedAt: '2026-11-14T00:00:00Z', completedAt: null, message: null } as const
+    detail.operations = [shutdown]
+    detail.resizeBlock = 'operation_pending'
+    const fallback = vi.mocked(fetch).getMockImplementation()!
+    let checkCount = 0
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      const path = String(url)
+      if (path.endsWith('/operations/shutdown-27/recheck')) {
+        expect(init?.method).toBe('POST')
+        if (++checkCount === 1) return Response.json({ data: { operation: shutdown, checkFailed: false } })
+        const confirmed = { ...shutdown, status: 'confirmed' as const, completedAt: new Date().toISOString() }
+        detail = { ...detail, providerState: 'suspended', resizeBlock: null, operations: [confirmed] }
+        return Response.json({ data: { operation: confirmed, checkFailed: false } })
+      }
+      if (path.endsWith('/resize-preview')) return Response.json({ data: { quoteId: 'fixture', upgradeDisk: false,
+        currentPriceRial: 20000, priceRial: 30000, immediateChargeRial: 0, period: 'HOURLY', expiresAt: new Date(Date.now() + 60_000).toISOString() } })
+      return fallback(url, init)
+    })
+    open('resize')
+    expect(await screen.findByText(/تا روشن شدن نتیجهٔ «خاموشی اجباری»/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /CX33/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'رفتن به عملیات برق' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'مشاهدهٔ عملیات' }))
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'خاموشی اجباری' }).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'بررسی نتیجهٔ عملیات' }))
+    expect(await screen.findByText(/نتیجه هنوز نهایی نشده است/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'تغییر پلن' }))
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'بررسی نتیجهٔ عملیات' }).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'بررسی نتیجهٔ عملیات' }))
+    expect(await screen.findByText('ارائه‌دهنده انجام عملیات را تأیید کرد.')).toBeTruthy()
+    const plan = await screen.findByRole<HTMLButtonElement>('button', { name: /CX33/ })
+    await waitFor(() => expect(plan.disabled).toBe(false))
+    fireEvent.click(plan)
+    fireEvent.click(screen.getByRole('button', { name: 'بررسی قیمت و محدودیت‌ها' }))
+    expect(await screen.findByText(/قیمت قبل/)).toBeTruthy()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'تأیید تغییر پلن' }).disabled).toBe(false)
+    expect(checkCount).toBe(2)
+  })
   it('uses actual metric series and keeps unsupported shared-project mutations out of the UI', async () => {
     open('monitoring')
     expect(await screen.findByRole('img', { name: /نمودار CPU/ })).toBeTruthy()

@@ -15,6 +15,7 @@ import { sealServerSecret } from './secrets.js'
 import { notifyServerOperation } from '../notifications/service.js'
 
 const unresolved = ['pending', 'running', 'unknown', 'needs_reconciliation'] as const
+const reconcilable = ['running', 'unknown', 'needs_reconciliation'] as const
 type Operation = typeof providerOperations.$inferSelect
 type Server = typeof servers.$inferSelect
 const operationTimeoutMs = 2 * 60 * 1000
@@ -78,7 +79,7 @@ export function managementBlock(server: Server, operationPending: boolean) {
   return operationPending ? 'operation_pending' : null
 }
 
-const managementConflict = {
+export const managementConflict = {
   server_deleted: 'سرور حذف شده است', deletion_pending: 'عملیات حذف این سرور هنوز نهایی نشده است',
   server_not_ready: 'سرور هنوز آمادهٔ مدیریت نیست', operation_pending: 'ابتدا نتیجهٔ عملیات قبلی سرور را پیگیری کنید',
 } as const
@@ -145,7 +146,7 @@ async function validateDispatch(db: DbClient, server: Server, action: Management
     const baseline = input.baseline as { serverType?: string; diskGb?: number; imageId?: string } | undefined
     if (!baseline || baseline.serverType !== meta.serverType || baseline.diskGb !== view.diskGb || baseline.imageId !== meta.imageId || typeof input.expiresAt !== 'string' || new Date(input.expiresAt).getTime() <= Date.now()) throw new ValidationError('وضعیت سرور یا پیش‌نمایش قیمت تغییر کرده است؛ دوباره بررسی کنید')
     const target = (await provider.resizeOptions(server.providerServerId!)).find(type => type.type === input.serverType)
-    if (!target || target.diskGb < (view.diskGb ?? Infinity) || target.storageType !== meta.storageType) throw new ValidationError('پلن مقصد، ظرفیت دیسک یا نوع ذخیره‌سازی سازگار نیست')
+    if (!target?.available || target.type === meta.serverType || target.diskGb < (view.diskGb ?? Infinity) || target.storageType !== meta.storageType) throw new ValidationError('پلن مقصد، ظرفیت دیسک یا نوع ذخیره‌سازی سازگار نیست')
   }
   if (action === 'rebuild') {
     const image = (await provider.images(server.providerServerId!)).find(image => image.id === input.image)
@@ -207,7 +208,11 @@ export async function handleCustomerOperation(db: DbClient, operationId: string)
 }
 
 export async function reconcileCustomerOperation(db: DbClient, server: Server, operation: Operation) {
-  if (operation.completedAt || !operation.action || operation.status === 'pending') return
+  if (operation.completedAt || !operation.action || !reconcilable.some(status => status === operation.status)) return
+  const requestedServerId = (operation.requestMetadata as { providerServerId?: string } | null)?.providerServerId
+  if (operation.provider !== server.provider || (requestedServerId && requestedServerId !== server.providerServerId)) {
+    throw new ProviderUnknownError('Provider operation belongs to a different server identity')
+  }
   const provider = customerProvider(server), action = operation.action as ManagementAction
   if (action === 'delete' && await provider.absent(server.providerServerId!)) { await confirmTermination(db, server.id, operation.id); return }
   const receipt = operation.responseMetadata as { actionId?: number; command?: string; accepted?: boolean } | null
@@ -276,6 +281,6 @@ async function applyResizeSnapshot(tx: DbOrTx, server: Server, op: Operation, ob
   await tx.insert(subscriptionEvents).values({ subscriptionId: sub.id, event: 'resize_price_confirmed', metadata: { operationId: op.id, quoteId: input.quoteId, previousPriceRial: sub.priceRial, futurePriceRial: input.priceRial, nextInvoiceAt: sub.nextInvoiceAt.toISOString(), settledPeriodsUnchanged: true } })
 }
 export async function reconcileCustomerOperations(db: DbClient, server: Server) {
-  const operations = await db.query.providerOperations.findMany({ where: t => and(eq(t.referenceId, server.id), inArray(t.kind, ['server_management', 'server_action']), inArray(t.status, ['running', 'unknown', 'needs_reconciliation'])) })
+  const operations = await db.query.providerOperations.findMany({ where: t => and(eq(t.referenceId, server.id), inArray(t.kind, ['server_management', 'server_action']), inArray(t.status, [...reconcilable])) })
   for (const operation of operations) await reconcileCustomerOperation(db, server, operation)
 }

@@ -213,6 +213,9 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     const resizeKey = randomUUID()
     const submit = (extra = {}) => app.inject({ method: 'POST', remoteAddress: p.remoteAddress, url: `/api/servers/${p.server.id}/management/actions`, headers: { ...p.headers, 'idempotency-key': resizeKey }, payload: { action: 'resize', quoteId: preview.quoteId, upgradeDisk: true, hostname: 'fixture-server', confirm: true, ...extra } })
     expect((await submit({ priceRial: 1 })).statusCode).toBe(422)
+    machines.get(p.providerId)!.status = 'running'
+    expect((await submit()).statusCode).toBe(422)
+    machines.get(p.providerId)!.status = 'off'
     const accepted = await submit(); expect(accepted.statusCode, accepted.body).toBe(202)
     const id = accepted.json().data.id, balance = (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, p.wallet.id) }))!.balanceRial
     await ctx.db.update(idempotencyKeys).set({ expiresAt: new Date(0) }).where(eq(idempotencyKeys.key, preview.quoteId))
@@ -227,6 +230,37 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     expect((await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, p.wallet.id) }))!.balanceRial).toBe(balance)
     expect((await ctx.db.query.invoices.findFirst({ where: t => eq(t.orderId, p.orderId) }))!.totalRial).toBe(sub.priceRial)
     expect(await ctx.db.query.subscriptionEvents.findFirst({ where: t => eq(t.subscriptionId, sub.id) })).toBeTruthy()
+  })
+  it('rechecks a shutdown without dispatching it again and unlocks resize only after confirmed shutdown', async () => {
+    const p = await buy(); await activate(p)
+    const operationId = await action(p, 'power_off')
+    await handleServerAction(ctx, { operationId, serverId: p.server.id, action: 'power_off' })
+    const op = (await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.id, operationId) }))!
+    const actionId = (op.responseMetadata as { actionId: number }).actionId
+    await ctx.db.update(providerOperations).set({ status: 'unknown' }).where(eq(providerOperations.id, operationId))
+    const serverUrl = `/api/servers/${p.server.id}`
+    const check = (id = operationId) => app.inject({ method: 'POST', url: `${serverUrl}/management/operations/${id}/recheck`, headers: p.headers, remoteAddress: p.remoteAddress })
+    const offer = await findOfferByProductAndLocation(ctx.db, 'hetzner', 'cx-fixture-large:EUR', 'hel1')
+    const preview = () => app.inject({ method: 'POST', url: `${serverUrl}/resize-preview`, headers: p.headers, payload: { offerId: offer!.id, upgradeDisk: false } })
+    expect((await check(randomUUID())).statusCode).toBe(404)
+    const another = await buy()
+    expect((await app.inject({ method: 'POST', url: `${serverUrl}/management/operations/${operationId}/recheck`, headers: another.headers })).statusCode).toBe(404)
+    const receipt = actions.get(actionId)!
+    actions.delete(actionId)
+    expect((await check()).json().data).toMatchObject({ checkFailed: true, operation: { status: 'outcome_unknown' } })
+    actions.set(actionId, receipt)
+    expect((await check()).json().data).toMatchObject({ checkFailed: false, operation: { status: 'outcome_unknown' } })
+    receipt.status = 'success'
+    expect((await check()).json().data.operation.status).toBe('outcome_unknown')
+    expect((await preview()).statusCode).toBe(409)
+    machines.get(p.providerId)!.status = 'off'
+    expect((await check()).json().data.operation.status).toBe('confirmed')
+    expect((await check()).json().data.operation.status).toBe('confirmed')
+    expect((await app.inject({ url: `${serverUrl}/management?refresh=1`, headers: p.headers })).json().data)
+      .toMatchObject({ providerState: 'suspended', resizeBlock: null })
+    const quote = await preview()
+    expect(quote.statusCode, quote.body).toBe(200)
+    expect(calls.filter(c => c.method === 'POST' && c.path === `/servers/${p.providerId}/actions/poweroff`)).toHaveLength(1)
   })
   it('caches real metric samples without converting unavailable data to zero', async () => {
     const p = await buy(); await activate(p)
