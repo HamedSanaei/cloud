@@ -2,6 +2,12 @@ import type { ProviderServerView } from './provider.interface.js'
 
 export const managementActions = ['power_on', 'shutdown', 'power_off', 'reboot', 'reset', 'delete', 'resize', 'rebuild', 'reset_password', 'enable_rescue', 'disable_rescue', 'attach_iso', 'detach_iso', 'change_protection'] as const
 export type ManagementAction = typeof managementActions[number]
+export type ServerAccessBlock = 'operation_pending' | 'deletion_pending' | 'server_deleted' | 'server_not_ready'
+  | 'provider_unavailable' | 'provider_access_denied' | 'unsupported' | 'rebuild_protected'
+export interface ServerAccessEligibility {
+  rebuild: ServerAccessBlock | null
+  resetPassword: ServerAccessBlock | null
+}
 export interface ManagementResult { actionId: number; command?: string; secret?: string }
 export interface ManagementObservation { status: 'running' | 'success' | 'error'; command: string; errorCode?: string }
 export interface ServerMetrics { start: string; end: string; step: number; series: Record<string, Array<[number, number | null]>> }

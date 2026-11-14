@@ -65,6 +65,23 @@ export function managementDto(op: Operation) {
     completedAt: op.completedAt?.toISOString() ?? null, message: op.status === 'failed' ? 'عملیات انجام نشد؛ حفاظت، وضعیت سرور یا دسترسی پروژه را بررسی کنید.' : unknown ? 'نتیجهٔ ارائه‌دهنده هنوز قابل تأیید نیست؛ وضعیت را دوباره بررسی کنید.' : null }
 }
 function inputHash(value: unknown) { return createHash('sha256').update(JSON.stringify(value)).digest('hex') }
+
+export function findBlockingManagementOperation(db: DbOrTx, serverId: string) {
+  return db.query.providerOperations.findFirst({ where: t => and(eq(t.referenceId, serverId),
+    inArray(t.kind, ['server_action', 'server_management']), inArray(t.status, [...unresolved])), orderBy: t => [t.createdAt, t.id] })
+}
+
+export function managementBlock(server: Server, operationPending: boolean) {
+  if (server.terminatedAt || server.status === 'terminated') return 'server_deleted'
+  if (server.terminationState && server.terminationState !== 'delete_failed') return 'deletion_pending'
+  if (!server.activatedAt || !['active', 'suspended'].includes(server.status)) return 'server_not_ready'
+  return operationPending ? 'operation_pending' : null
+}
+
+const managementConflict = {
+  server_deleted: 'سرور حذف شده است', deletion_pending: 'عملیات حذف این سرور هنوز نهایی نشده است',
+  server_not_ready: 'سرور هنوز آمادهٔ مدیریت نیست', operation_pending: 'ابتدا نتیجهٔ عملیات قبلی سرور را پیگیری کنید',
+} as const
 export async function requestManagement(db: DbClient, user: SessionUser, serverId: string, action: ManagementAction, input: Record<string, unknown>, key: string) {
   await getServerForUser(db, user.id, serverId)
   return db.transaction(async tx => {
@@ -79,11 +96,8 @@ export async function requestManagement(db: DbClient, user: SessionUser, serverI
       if ((previous.requestMetadata as { hash?: string })?.hash !== hash) throw new ConflictError('این کلید برای درخواست دیگری استفاده شده است')
       return previous
     }
-    if (server.terminatedAt || server.status === 'terminated') throw new ConflictError('سرور حذف شده است')
-    if (server.terminationState && server.terminationState !== 'delete_failed') throw new ConflictError('عملیات حذف این سرور هنوز نهایی نشده است')
-    if (!server.activatedAt || !['active', 'suspended'].includes(server.status)) throw new ConflictError('سرور هنوز آمادهٔ مدیریت نیست')
-    const pending = await tx.query.providerOperations.findFirst({ where: t => and(eq(t.referenceId, server.id), inArray(t.kind, ['server_action', 'server_management']), inArray(t.status, [...unresolved])) })
-    if (pending) throw new ConflictError('ابتدا نتیجهٔ عملیات قبلی سرور را پیگیری کنید')
+    const block = managementBlock(server, !!await findBlockingManagementOperation(tx, server.id))
+    if (block) throw new ConflictError(managementConflict[block])
     if (['power_on', 'reboot', 'reset'].includes(action)) await assertPowerOnFunding(tx, server)
     const [op] = await tx.insert(providerOperations).values({ provider: server.provider, kind: 'server_management', action, referenceType: 'server', referenceId: server.id,
       businessKey, status: 'pending', requestMetadata: { input, hash, actorId: user.id, sessionId: user.sessionId, providerServerId: server.providerServerId } }).returning()

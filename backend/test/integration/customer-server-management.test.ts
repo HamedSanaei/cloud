@@ -126,6 +126,7 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     await handleServerSync(ctx, { serverId: p.server.id })
     const delayed = await app.inject({ url: `/api/servers/${p.server.id}/management`, headers: p.headers })
     expect(delayed.json().data.operations[0].status).toBe('outcome_unknown')
+    expect(delayed.json().data.accessEligibility).toEqual({ rebuild: 'operation_pending', resetPassword: 'operation_pending' })
     expect(await ctx.db.query.notifications.findFirst({ where: t => eq(t.eventKey, `server-operation:${id}:unknown`) })).toMatchObject({ type: 'warning' })
     actions.get(actionId)!.status = 'success'
     await Promise.all([handleServerSync(ctx, { serverId: p.server.id }), handleServerSync(ctx, { serverId: p.server.id })])
@@ -137,9 +138,29 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     expect(calls.filter(c => c.method === 'POST' && c.path === `/servers/${p.providerId}/actions/poweroff`)).toHaveLength(1)
     const final = await app.inject({ url: `/api/servers/${p.server.id}/management`, headers: p.headers })
     expect(final.json().data).toMatchObject({ providerState: 'suspended', power: { pendingAction: null }, operations: [expect.objectContaining({ status: 'confirmed' })] })
+    expect(final.json().data.accessEligibility).toEqual({ rebuild: null, resetPassword: null })
     expect(await ctx.db.query.notifications.findMany({ where: t => eq(t.eventKey, `server-operation:${id}:succeeded`) })).toEqual([
       expect.objectContaining({ userId: p.user.id, title: 'سرور خاموش شد', href: `/servers/${p.server.id}?tab=operations` }),
     ])
+  })
+  it('rechecks live rebuild protection and reports provider access denial without queuing an action', async () => {
+    const p = await buy(); await activate(p)
+    const read = async (refresh = false) => {
+      const response = await app.inject({ url: `/api/servers/${p.server.id}/management${refresh ? '?refresh=1' : ''}`,
+        remoteAddress: p.remoteAddress, headers: p.headers })
+      expect(response.statusCode).toBe(200)
+      return response.json().data.accessEligibility
+    }
+    expect(await read()).toEqual({ rebuild: null, resetPassword: null })
+    const machine = machines.get(p.providerId)!
+    machine.protection = { delete: false, rebuild: true }
+    expect(await read(true)).toEqual({ rebuild: 'rebuild_protected', resetPassword: null })
+    machines.delete(p.providerId)
+    expect(await read(true)).toEqual({ rebuild: 'provider_access_denied', resetPassword: 'provider_access_denied' })
+    machines.set(p.providerId, machine)
+    machine.protection = { delete: false, rebuild: false }
+    expect(await read(true)).toEqual({ rebuild: null, resetPassword: null })
+    expect(calls.filter(c => c.method === 'POST' && c.path.startsWith(`/servers/${p.providerId}/actions/`))).toEqual([])
   })
   it('reconciles a lost delete response, fences concurrent renewals and retains the paid ledger', async () => {
     const p = await buy(); await activate(p)

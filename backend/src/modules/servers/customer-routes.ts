@@ -5,13 +5,15 @@ import type { AppContext } from '../../app.js'
 import { idempotencyKeys, serverSecrets } from '../../db/schema.js'
 import { parse } from '../../http/validate.js'
 import { requireUser } from '../../http/auth.js'
-import { ConflictError, ValidationError } from '../../lib/errors.js'
+import { ConflictError, NotFoundError, ProviderPermanentError, ValidationError } from '../../lib/errors.js'
 import { serverToDto } from '../../lib/dto.js'
 import { loadFundingFleet, serverPowerPolicy } from '../billing/funding.js'
 import { createQuote } from '../quotes/service.js'
 import { retailBilling, type RetailPeriod } from '../pricing/periods.js'
 import type { ProviderBillingOption, ProviderServerView } from '../providers/provider.interface.js'
-import { customerProvider, managementDto, requestManagement } from './management.js'
+import type { CustomerProvider, ServerAccessBlock, ServerAccessEligibility } from '../providers/customer.interface.js'
+import { HetznerApiError } from '../providers/hetzner/client.js'
+import { customerProvider, findBlockingManagementOperation, managementBlock, managementDto, requestManagement } from './management.js'
 import { getServerForUser } from './service.js'
 import { claimServerPassword } from './secrets.js'
 
@@ -26,13 +28,13 @@ const actionInput = z.discriminatedUnion('action', [
   z.object({ action: z.literal('change_protection'), delete: z.boolean(), rebuild: z.boolean(), ...acknowledgement }).strict(),
 ])
 const cache = new Map<string, { expiresAt: number; value: Promise<ProviderServerView> }>()
-async function liveView(server: Awaited<ReturnType<typeof getServerForUser>>) {
+async function liveView(server: Awaited<ReturnType<typeof getServerForUser>>, manager: CustomerProvider, fresh: boolean) {
   const key = `${server.id}:${server.providerServerId}:${server.status}`, prior = cache.get(key)
-  if (prior && prior.expiresAt > Date.now()) return prior.value
+  if (!fresh && prior && prior.expiresAt > Date.now()) return prior.value
   if (cache.size >= 200) cache.delete(cache.keys().next().value!)
-  const value = customerProvider(server).inspect(server.providerServerId!)
+  const value = manager.inspect(server.providerServerId!)
   cache.set(key, { value, expiresAt: Date.now() + 15000 })
-  try { return await value } catch (error) { cache.delete(key); throw error }
+  try { return await value } catch (error) { if (cache.get(key)?.value === value) cache.delete(key); throw error }
 }
 const metricCache = new Map<string, { expiresAt: number; value: Promise<unknown> }>()
 export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
@@ -40,15 +42,35 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
   app.addHook('onSend', async (_request, reply) => { reply.header('Cache-Control', 'no-store') })
   app.get('/servers/:id/management', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async request => {
     const user = requireUser(request), { id } = parse(params, request.params), server = await getServerForUser(db, user.id, id)
-    const manager = customerProvider(server)
+    const { refresh } = parse(z.object({ refresh: z.literal('1').optional() }), request.query)
+    let manager: CustomerProvider | undefined
+    let providerBlock: ServerAccessBlock | null = null
+    try { manager = customerProvider(server) } catch (error) {
+      if (error instanceof ConflictError) providerBlock = 'provider_access_denied'
+      else if (error instanceof NotFoundError || error instanceof ValidationError) providerBlock = 'unsupported'
+      else throw error
+    }
     let view: ProviderServerView | null = null
-    if (!server.terminatedAt) { try { view = await liveView(server) } catch { /* A temporary provider read failure is not a fabricated zero. */ } }
+    if (manager && !server.terminatedAt && server.status !== 'terminated') {
+      try { view = await liveView(server, manager, refresh === '1') } catch (error) {
+        const accessDenied = error instanceof HetznerApiError ? [401, 403, 404].includes(error.httpStatus) : error instanceof ProviderPermanentError
+        providerBlock = accessDenied ? 'provider_access_denied' : 'provider_unavailable'
+      }
+    }
     const meta = view?.metadata ?? {}, order = await db.query.orders.findFirst({ where: t => eq(t.id, server.orderId) })
-    const [subscription, quote, operations] = await Promise.all([
+    const [subscription, quote, history, blockingOperation] = await Promise.all([
       server.subscriptionId ? db.query.subscriptions.findFirst({ where: t => and(eq(t.id, server.subscriptionId!), eq(t.userId, user.id)) }) : undefined,
       order?.quoteId ? db.query.quotes.findFirst({ where: t => and(eq(t.id, order.quoteId!), eq(t.userId, user.id)) }) : undefined,
       db.query.providerOperations.findMany({ where: t => and(eq(t.referenceId, server.id), inArray(t.kind, ['server_action', 'server_management'])), orderBy: t => desc(t.createdAt), limit: 30 }),
+      findBlockingManagementOperation(db, server.id),
     ])
+    const operations = blockingOperation && !history.some(op => op.id === blockingOperation.id) ? [...history, blockingOperation] : history
+    const commonBlock = managementBlock(server, !!blockingOperation) ?? providerBlock
+    const protection = meta.protection as { rebuild?: boolean } | undefined
+    const accessEligibility: ServerAccessEligibility = {
+      rebuild: commonBlock ?? (protection?.rebuild === true ? 'rebuild_protected' : null),
+      resetPassword: commonBlock,
+    }
     const credentials = await db.query.serverSecrets.findMany({ where: t => and(eq(t.serverId, id), eq(t.userId, user.id), eq(t.sessionId, user.sessionId), gt(t.expiresAt, new Date())), columns: { operationId: true, claimedAt: true, acknowledgedAt: true } })
     const fleet = await loadFundingFleet(db, user.id)
     return { data: { ...serverToDto(server, serverPowerPolicy(server, fleet)), lifecycle: server.terminationState ?? (server.activatedAt ? 'ready' : 'provisioning'),
@@ -63,10 +85,10 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
         currentPeriodEnd: subscription?.currentPeriodEnd.toISOString() ?? null, autoRenew: subscription?.autoRenew ?? false,
         futureDebits: server.terminatedAt ? 'stopped' : server.terminationState && server.terminationState !== 'delete_failed' ? 'held_pending_confirmation' : 'normal',
         refundPolicy: 'no_automatic_proration', providerQuotedRate: quote ? { currency: quote.providerCurrency, amountCents: quote.providerAmountCents, period: quote.billingInterval, observedAt: quote.createdAt.toISOString() } : null },
-      capabilities: { power: true, resize: true, rebuild: true, resetPassword: true, console: !!manager.console, rescue: true, protection: true,
+      capabilities: { power: !!manager, resize: !!manager, rebuild: !!manager, resetPassword: !!manager, console: !!manager?.console, rescue: !!manager, protection: !!manager,
         iso: false, snapshots: false, backups: false, volumes: false, networkMutations: false,
         unavailableReason: 'مالکیت و تعرفهٔ مستقل منابع جانبی باید پیش از فعال‌سازی عملیات در فروشگاه ثبت شود؛ فهرست منابع متصل صرفاً جهت اطلاع است.' },
-      operations: operations.map(managementDto), credentials,
+      accessEligibility, operations: operations.map(managementDto), credentials,
     } }
   })
   app.get('/servers/:id/images', async request => {
