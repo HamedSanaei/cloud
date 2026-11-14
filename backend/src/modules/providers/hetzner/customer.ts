@@ -39,7 +39,27 @@ export function createCustomerProvider(resolve: (id: string) => { id: string; cl
       const base = `/servers/${route.id}/actions`
       let data: { actions?: unknown }
       if (actionId === undefined) {
-        data = await route.client.request('GET', `${base}?per_page=50&sort=started:desc`)
+        // Missing or incomplete pagination must never prove that a request was not dispatched.
+        const all: unknown[] = []
+        let page = 1
+        while (true) {
+          const result = await route.client.request('GET', base + '?sort=started:desc&per_page=50&page=' + page)
+          if (!Array.isArray(result.actions)) throw new ProviderUnknownError('Invalid Hetzner action page')
+          all.push(...result.actions)
+          if (all.length > 2_000) throw new ProviderUnknownError('Hetzner action history exceeds verification limit')
+          const pagination = object(object(result.meta).pagination)
+          if (pagination.page !== page || pagination.per_page !== 50 ||
+            !Number.isSafeInteger(pagination.total_entries) || Number(pagination.total_entries) < 0 ||
+            !Object.hasOwn(pagination, 'next_page')) throw new ProviderUnknownError('Hetzner pagination cannot be verified')
+          if (pagination.next_page === null) {
+            if (all.length !== pagination.total_entries) throw new ProviderUnknownError('Hetzner history was incomplete')
+            break
+          }
+          if (typeof pagination.next_page !== 'number' || !Number.isSafeInteger(pagination.next_page) ||
+            pagination.next_page <= page) throw new ProviderUnknownError('Hetzner pagination is inconsistent')
+          page = pagination.next_page
+        }
+        data = { actions: all }
       } else {
         try { data = { actions: [(await route.client.request('GET', `${base}/${actionId}`)).action] } }
         catch (error) {
@@ -48,6 +68,16 @@ export function createCustomerProvider(resolve: (id: string) => { id: string; cl
         }
       }
       if (!Array.isArray(data.actions)) throw new ProviderUnknownError('Hetzner action history is unavailable')
+      // A partially parsed history must NEVER be used as proof of non-dispatch.
+      if (actionId === undefined && (data.actions.length > 2_000 ||
+        data.actions.some(raw => {
+          const action = object(raw)
+          return typeof action.id !== 'number' || !Number.isSafeInteger(action.id) || action.id <= 0 ||
+            typeof action.command !== 'string' || !['running', 'success', 'error'].includes(String(action.status)) ||
+            typeof action.started !== 'string' || !Number.isFinite(Date.parse(action.started)) ||
+            !Array.isArray(action.resources) ||
+            !action.resources.map(object).some(resource => resource.type === 'server' && String(resource.id) === route.id)
+        }))) throw new ProviderUnknownError('Hetzner full action history cannot be verified')
       return data.actions.map(object).flatMap(action => {
         const { id, command, status, started, finished } = action
         if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0 || typeof command !== 'string' ||

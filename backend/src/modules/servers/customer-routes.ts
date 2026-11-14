@@ -14,7 +14,7 @@ import type { ProviderBillingOption, ProviderServerView } from '../providers/pro
 import type { CustomerProvider, ServerAccessBlock, ServerAccessEligibility } from '../providers/customer.interface.js'
 import { HetznerApiError } from '../providers/hetzner/client.js'
 import { customerProvider, findBlockingManagementOperation, isOrphanedPowerOperation, managementBlock, managementConflict, managementDto, reconcileCustomerOperation, requestManagement } from './management.js'
-import { inspectLegacyPowerOperation } from './power-reconciliation.js'
+import { inspectLegacyPowerOperation, reconcileReceiptlessPowerOffWithoutProviderAction } from './power-reconciliation.js'
 import { getServerForUser } from './service.js'
 import { claimServerPassword } from './secrets.js'
 
@@ -104,8 +104,11 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
     if (!operation) throw new NotFoundError('عملیات سرور یافت نشد')
     let checkFailed = false
     try {
-      if (isOrphanedPowerOperation(operation)) await inspectLegacyPowerOperation(server, operation)
-      else await reconcileCustomerOperation(db, server, operation)
+      if (isOrphanedPowerOperation(operation)) {
+        // Never release this lock by timeout alone; require full provider proof.
+        const recovered = await reconcileReceiptlessPowerOffWithoutProviderAction(db, server, operation, user.id)
+        if (!recovered) await inspectLegacyPowerOperation(server, operation)
+      } else await reconcileCustomerOperation(db, server, operation)
     } catch (error) {
       if (!(error instanceof ProviderPermanentError || error instanceof ProviderRetryableError || error instanceof ProviderUnknownError)) throw error
       checkFailed = true

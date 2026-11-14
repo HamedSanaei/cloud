@@ -44,8 +44,9 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     if (/^\/servers\/\d+\/metrics$/.test(path)) return json({ metrics: { time_series: { cpu: { values: [[100, '15'], [160, null], [220, 'NaN'], [280, '0']] }, 'network.0.bandwidth.in': { values: [[100, '42']] } } } })
     if (method === 'GET' && /^\/servers\/\d+\/actions$/.test(path)) {
       const id = Number(path.split('/')[2]), actionId = request.searchParams.get('id')
-      return json({ actions: [...actions.values()].filter(action => (actionId === null || String(action.id) === actionId) &&
-        (action.resources as Array<{ id: number }> | undefined)?.some(resource => resource.id === id)) })
+      const found = [...actions.values()].filter(action => (actionId === null || String(action.id) === actionId) &&
+        (action.resources as Array<{ id: number }> | undefined)?.some(resource => resource.id === id))
+      return json({ actions: found, meta: { pagination: { page: 1, per_page: 50, next_page: null, total_entries: found.length } } })
     }
     if (method === 'POST' && path === '/servers') {
       const body = JSON.parse(String(init?.body)), id = ++sequence
@@ -401,6 +402,66 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     expect((await ctx.db.query.invoices.findFirst({ where: t => eq(t.orderId, p.orderId) }))?.status).toBe('paid')
     expect(calls.filter(c => c.method === 'DELETE' && c.path === `/servers/${p.providerId}`)).toHaveLength(1)
   })
+
+  it('recovers an old power-off with no Hetzner action so the owner can request deletion without a ticket', async () => {
+    const p = await buy(); await activate(p)
+    const started = new Date(Date.now() - 60 * 60_000)
+    const [orphan] = await ctx.db.insert(providerOperations).values({
+      provider: 'hetzner', kind: 'server_action', action: 'power_off', referenceType: 'server',
+      referenceId: p.server.id, businessKey: randomUUID(), status: 'unknown', attemptCount: 1,
+      createdAt: started, updatedAt: new Date(started.getTime() + 60_000),
+      lastError: 'Hetzner mutation outcome is unknown',
+    }).returning()
+    const oldCreation = new Date(started.getTime() - 2 * 60_000), creationId = 800000 + p.providerId
+    actions.set(creationId, { id: creationId, command: 'create_server', status: 'success',
+      started: oldCreation.toISOString(), finished: new Date(oldCreation.getTime() + 8_000).toISOString(),
+      resources: [{ type: 'server', id: p.providerId }] })
+
+    const url = '/api/servers/' + p.server.id
+    const recheck = () => app.inject({ method: 'POST', url: url + '/management/operations/' + orphan!.id + '/recheck',
+      headers: p.headers, remoteAddress: p.remoteAddress })
+    const deleteServer = () => app.inject({ method: 'POST', url: url + '/management/actions',
+      headers: { ...p.headers, 'idempotency-key': randomUUID() }, remoteAddress: p.remoteAddress,
+      payload: { action: 'delete', hostname: 'fixture-server', confirm: true } })
+    expect((await deleteServer()).statusCode).toBe(409)
+    const [a, b] = await Promise.all([recheck(), recheck()])
+    expect(a.statusCode, a.body).toBe(200)
+    expect(b.statusCode, b.body).toBe(200)
+    expect((await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.id, orphan!.id) })))
+      .toMatchObject({ status: 'failed', responseMetadata: { recoveryEvidence: {
+        type: 'exhaustive_no_dispatch', historyCount: 1, creationActionId: creationId,
+        observedState: 'active', matchingActionsSinceRequest: 0,
+      } } })
+    const audit = await ctx.db.query.auditLogs.findMany({ where: t => eq(t.targetId, orphan!.id) })
+    expect(audit.filter(row => row.action === 'server.legacy_power_off.no_dispatch_verified')).toHaveLength(1)
+    const result = await deleteServer()
+    expect(result.statusCode, result.body).toBe(202)
+    expect(calls.filter(c => c.method === 'POST' && c.path === '/servers/' + p.providerId + '/actions/poweroff')).toHaveLength(0)
+  })
+
+  it('retains the legacy lock when the provider history includes a later server action', async () => {
+    const p = await buy(); await activate(p)
+    const started = new Date(Date.now() - 60 * 60_000)
+    const [orphan] = await ctx.db.insert(providerOperations).values({
+      provider: 'hetzner', kind: 'server_action', action: 'power_off', referenceType: 'server',
+      referenceId: p.server.id, businessKey: randomUUID(), status: 'unknown', attemptCount: 1,
+      createdAt: started, updatedAt: new Date(started.getTime() + 60_000),
+    }).returning()
+    const before = new Date(started.getTime() - 120_000), after = new Date(started.getTime() + 30_000)
+    const creationId = 810000 + p.providerId, laterId = creationId + 1
+    actions.set(creationId, { id: creationId, command: 'create_server', status: 'success',
+      started: before.toISOString(), finished: new Date(before.getTime() + 5_000).toISOString(),
+      resources: [{ type: 'server', id: p.providerId }] })
+    actions.set(laterId, { id: laterId, command: 'start_server', status: 'success',
+      started: after.toISOString(), finished: new Date(after.getTime() + 5_000).toISOString(),
+      resources: [{ type: 'server', id: p.providerId }] })
+    const recheck = await app.inject({ method: 'POST', url: '/api/servers/' + p.server.id +
+      '/management/operations/' + orphan!.id + '/recheck', headers: p.headers, remoteAddress: p.remoteAddress })
+    expect(recheck.statusCode).toBe(200)
+    expect(recheck.json().data.operation.status).toBe('outcome_unknown')
+    expect((await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.id, orphan!.id) }))!.completedAt).toBeNull()
+  })
+
   it('reports console eligibility and revokes an unused grant only for its browser session', async () => {
     const p = await buy(); await activate(p)
     const url = `/api/servers/${p.server.id}`
