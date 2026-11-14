@@ -48,11 +48,20 @@ describe.skipIf(!dbAvailable)('site wallet gateway and ticket ownership integrat
     return { user, wallet, remoteAddress: `192.0.2.${sequence}`, headers: { authorization: `Bearer ${(await createSession(ctx.db, user.id, {})).token}` } }
   }
   async function intent(a: Awaited<ReturnType<typeof account>>, key = randomUUID()) {
-    const response = await app.inject({ method: 'POST', url: '/api/wallets/recharges', remoteAddress: a.remoteAddress, headers: { ...a.headers, 'idempotency-key': key }, payload: { walletId: a.wallet.id, amountToman: 20000 } })
+    const response = await app.inject({ method: 'POST', url: '/api/wallets/recharges', remoteAddress: a.remoteAddress, headers: { ...a.headers, 'idempotency-key': key }, payload: { amountToman: 20000 } })
     expect(response.statusCode).toBe(200)
     return response.json().data as { id: string; status: string; paymentUrl: string | null }
   }
   async function balance(walletId: string) { return (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, walletId) }))!.balanceRial }
+
+  it('provisions a single wallet at account creation and rejects legacy create requests', async () => {
+    const a = await account()
+    for (const isDefault of [true, false]) {
+      const response = await app.inject({ method: 'POST', url: '/api/wallets', headers: a.headers, payload: { name: 'second', isDefault } })
+      expect(response.statusCode).toBe(409)
+    }
+    expect((await app.inject({ url: '/api/wallets', headers: a.headers })).json().data).toEqual([expect.objectContaining({ id: a.wallet.id })])
+  })
 
   it('persists a single intent on concurrent retry and never credits on creation', async () => {
     const a = await account(), key = randomUUID()

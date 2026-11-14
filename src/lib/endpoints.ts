@@ -5,7 +5,6 @@ import type {
   ChargeRequest,
   CreateServerPayload,
   CreateTicketPayload,
-  CreateWalletPayload,
   DashboardSummary,
   Domain,
   DomainAvailability,
@@ -215,16 +214,6 @@ export async function listWallets(): Promise<Wallet[]> {
   if (noApi()) return []
   const payload = await apiGet<Paginated<Wallet> | Wallet[]>('/wallets')
   return unwrapList<Wallet>(payload)
-}
-
-export async function createWallet(payload: CreateWalletPayload): Promise<Wallet> {
-  return unwrapOne(await apiPost<Wallet | { data: Wallet }>('/wallets', payload), {
-    id: `wallet-${Date.now()}`,
-    name: payload.name,
-    balance: 0,
-    isDefault: payload.isDefault,
-    description: payload.description,
-  })
 }
 
 export async function listTransactions(): Promise<Transaction[]> {

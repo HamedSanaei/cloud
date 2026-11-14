@@ -230,18 +230,15 @@ export function AdminUserPage() {
     <State loading={result.loading} error={result.error} empty={!info} retry={result.refetch}>
       {info ? <div className="admin-detail-grid">
         <div className="admin-detail-content">
-          <Panel title="کیف پول‌ها" subtitle="موجودی‌ها از دفترکل خود سایت">
-            <div className="admin-wallet-total"><span>موجودی کل کیف پول‌ها</span><strong>{formatToman(info.balanceToman)}</strong></div>
-            {info.wallets.length ? <div className="admin-wallet-list">{info.wallets.map(w => <div key={w.id}>
-              <span>{w.name}{w.isDefault ? <small>پیش‌فرض</small> : null}</span><strong>{formatToman(w.balanceToman)}</strong>
-            </div>)}</div> : <p className="admin-muted">کیف پولی ثبت نشده است.</p>}
+          <Panel title="کیف پول">
+            <div className="admin-wallet-total"><span>موجودی</span><strong>{formatToman(info.balanceToman)}</strong></div>
           </Panel>
           <Panel title="تراکنش‌های اخیر">
             {info.transactions.length ? adminTableWrap(<table className="admin-table admin-ledger"><thead><tr><th scope="col">شرح</th><th scope="col">کیف پول</th>
               {movementHeaders.map(header => <th scope="col" key={header}>{header}</th>)}<th scope="col">تاریخ</th><th scope="col">وضعیت</th></tr></thead>
               <tbody>{info.transactions.map(tx => <tr key={tx.id}>
                 <td><WalletLedgerDescription admin transaction={{ ...tx, description: tx.description ?? '' }} /></td>
-                <td>{walletNames.get(tx.walletId) ?? emptyAmount}</td>
+                <td>{tx.wallet ?? walletNames.get(tx.walletId) ?? emptyAmount}</td>
                 <WalletLedgerAmountCells amounts={movementAmounts({ ...tx, amount: tx.amountToman, status: tx.status ?? 'success' })} />
                 <td><time dateTime={tx.createdAt}>{timeLabel(tx.createdAt)}</time></td><td>{transactionStatus(tx.status ?? 'success')}</td>
               </tr>)}</tbody></table>) : <p className="admin-muted">تراکنشی ثبت نشده است.</p>}

@@ -6,7 +6,7 @@ import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocat
 import { getProvider, registerProvider } from '../../src/modules/providers/registry.js'
 import { setFxRate } from '../../src/modules/pricing/service.js'
 import { registerUser, createSession } from '../../src/modules/auth/service.js'
-import { ensureDefaultWallet, createWallet, creditWallet, debitWallet } from '../../src/modules/wallets/service.js'
+import { ensureDefaultWallet, creditWallet, debitWallet } from '../../src/modules/wallets/service.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
 import { createOrderFromQuote } from '../../src/modules/orders/service.js'
 import { handleProvision, handleRenewalSweep, handleServerAction, handleServerSync } from '../../src/modules/provisioning/handlers.js'
@@ -123,9 +123,6 @@ describe.skipIf(!dbAvailable)('hourly funding safety', () => {
     expect((await panel(purchase)).power.canPowerOn).toBe(false)
     const startUrl = `/api/v1/servers/${purchase.server.id}/actions/power-on`
     expect((await app.inject({ method: 'POST', url: startUrl, headers: purchase.headers, payload: {} })).statusCode).toBe(422)
-    const spare = await createWallet(ctx.db, purchase.user.id, { name: 'unrelated funds' })
-    await creditWallet(ctx.db, purchase.user.id, spare.id, purchase.hourlyPriceRial * 100, { type: 'manual_credit' })
-    expect((await panel(purchase)).power.canPowerOn).toBe(false)
     await creditWallet(ctx.db, purchase.user.id, purchase.wallet.id, purchase.hourlyPriceRial, { type: 'manual_credit' })
     expect((await panel(purchase)).power.canPowerOn).toBe(true)
     const response = await app.inject({ method: 'POST', url: startUrl, headers: purchase.headers, payload: {} })

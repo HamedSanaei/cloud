@@ -17,6 +17,8 @@ import { sql } from 'drizzle-orm'
 import {
   bigint,
   boolean,
+  check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -247,10 +249,16 @@ export const wallets = pgTable(
     currency: text('currency').notNull().default('IRR'),
     balanceRial: bigint('balance_rial', { mode: 'number' }).notNull().default(0),
     isDefault: boolean('is_default').notNull().default(false),
+    mergedInto: uuid('merged_into'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('wallets_user_idx').on(t.userId)],
+  (t) => [index('wallets_user_idx').on(t.userId),
+    uniqueIndex('wallets_one_active_per_user').on(t.userId).where(sql`${t.mergedInto} is null`),
+    uniqueIndex('wallets_owner_identity_idx').on(t.id, t.userId, t.currency),
+    foreignKey({ columns: [t.mergedInto, t.userId, t.currency], foreignColumns: [t.id, t.userId, t.currency], name: 'wallets_merge_same_owner_fk' }),
+    check('wallets_merge_state', sql`${t.currency} = 'IRR' and ${t.balanceRial} between 0 and 9007199254740991 and (${t.mergedInto} is null or (${t.mergedInto} <> ${t.id} and ${t.balanceRial} = 0))`),
+  ],
 )
 
 export const walletTransactions = pgTable(
@@ -278,6 +286,7 @@ export const walletTransactions = pgTable(
   (t) => [
     index('wallet_tx_wallet_idx').on(t.walletId, t.createdAt),
     index('wallet_tx_user_idx').on(t.userId),
+    index('wallet_tx_owner_key_idx').on(t.userId, t.idempotencyKey).where(sql`${t.idempotencyKey} IS NOT NULL`),
     // Idempotency: one ledger row per (wallet, idempotency_key).
     uniqueIndex('wallet_tx_idempotency_idx').on(t.walletId, t.idempotencyKey).where(sql`${t.idempotencyKey} IS NOT NULL`),
   ],

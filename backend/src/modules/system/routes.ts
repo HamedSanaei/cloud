@@ -131,7 +131,7 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
   })
   app.get('/finance/adjustments', async request => {
     const q = parse(paging.extend({ walletId: z.string().uuid().optional() }), request.query)
-    const where = q.walletId ? eq(adminAdjustments.walletId, q.walletId) : undefined
+    const where = q.walletId ? sql`${adminAdjustments.walletId} in (select id from wallets where id=${q.walletId} or merged_into=${q.walletId})` : undefined
     const rows = await db.select({ adjustment: adminAdjustments, ownerEmail: users.email, ownerName: users.firstName, walletName: wallets.name }).from(adminAdjustments)
       .innerJoin(users, eq(adminAdjustments.userId, users.id)).innerJoin(wallets, eq(adminAdjustments.walletId, wallets.id)).where(where).orderBy(desc(adminAdjustments.createdAt)).limit(q.limit).offset((q.page - 1) * q.limit)
     const items = rows.map(({ adjustment, ...owner }) => ({ ...adjustment, ...owner }))

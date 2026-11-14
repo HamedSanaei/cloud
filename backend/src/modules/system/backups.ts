@@ -153,7 +153,12 @@ async function rehearse(client: PoolClient, source: string, job: BackupJob) {
       const restored = await currentSnapshot(temporary)
       if (restored.schemaHead !== header.schemaHead || restored.financialHash !== header.financialHash) throw new ConflictError('صحت‌سنجی دفتر مالی یا schema در بازیابی آزمایشی ناموفق بود.')
       // Ledger invariant: the last ledger balance must match its wallet.
-      const invalid = await temporary.query(`select 1 from wallets w join lateral (select balance_after_rial from wallet_transactions where wallet_id=w.id order by created_at desc,id desc limit 1) t on true where w.balance_rial<>t.balance_after_rial or w.balance_rial<0 limit 1`)
+      const invalid = await temporary.query(`select 1 from wallets w
+        left join lateral (select metadata from audit_logs where action='wallet.consolidated' and target_id=w.id order by id desc limit 1) m on true
+        left join lateral (select id, balance_after_rial from wallet_transactions where wallet_id=w.id order by created_at desc,id desc limit 1) t on true
+        where w.merged_into is null and (w.balance_rial<0 or w.balance_rial<>coalesce(
+          case when m.metadata is not null and (t.id is null or t.id::text=m.metadata->>'lastLegacyCanonicalLedgerId')
+            then (m.metadata->>'afterRial')::bigint else t.balance_after_rial end,w.balance_rial)) limit 1`)
       if (invalid.rowCount) throw new ConflictError('تطبیق دفتر مالی در بازیابی آزمایشی ناموفق بود.')
       job.snapshot = live; job.restored = restored
     } finally { temporary?.release(true); await isolated.end() }

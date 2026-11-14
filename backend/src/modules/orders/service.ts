@@ -97,13 +97,14 @@ export interface CreateOrderInput {
   userId: string
   quoteId: string
   walletId?: string
+  payFromWallet?: boolean
   hostname: string
   idempotencyKey?: string
 }
 
 export async function createOrderFromQuote(db: DbClient, input: CreateOrderInput) {
   let wallet = null
-  if (input.walletId) wallet = await getWallet(db, input.userId, input.walletId)
+  if (input.walletId || input.payFromWallet) wallet = await getWallet(db, input.userId, input.walletId)
 
   const result = await db.transaction(async (tx) => {
     if (input.idempotencyKey) {
@@ -243,7 +244,7 @@ export async function createOrderFromQuote(db: DbClient, input: CreateOrderInput
 // ---------------------------------------------------------------------------
 export async function payOrder(
   db: DbClient,
-  input: { userId: string; orderId: string; walletId: string; idempotencyKey?: string },
+  input: { userId: string; orderId: string; walletId?: string; idempotencyKey?: string },
 ) {
   const order = await db.query.orders.findFirst({ where: (t) => eq(t.id, input.orderId) })
   if (!order || order.userId !== input.userId) throw new NotFoundError('سفارش یافت نشد')
