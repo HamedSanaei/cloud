@@ -10,7 +10,7 @@ import { createLogger } from '../logger.js'
 import { retryStartup, startupFailure } from '../lib/startup.js'
 import { exclusive, writerLock } from '../modules/system/writer-gate.js'
 
-export async function assertWalletConsolidationApproved(client: PoolClient) {
+export async function assertWalletConsolidationApproved(client: Pick<PoolClient, 'query'>) {
   if (getConfig().NODE_ENV !== 'production' || process.env.WALLET_CONSOLIDATION_APPROVED === 'true') return
   const wallet = (await client.query(`select to_regclass('public.wallets') is not null as present,
     exists(select 1 from information_schema.columns where table_schema='public' and table_name='wallets' and column_name='merged_into') as migrated`)).rows[0]

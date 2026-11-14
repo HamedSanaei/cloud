@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import pg, { type PoolClient } from 'pg'
 import { getConfig } from '../config.js'
 
-export async function walletPreflight(client: PoolClient) {
+export async function walletPreflight(client: Pick<PoolClient, 'query'>) {
   const { rows } = await client.query(`
     WITH wallet_refs AS (
       SELECT 'ledger' AS kind,id,wallet_id,user_id FROM wallet_transactions UNION ALL

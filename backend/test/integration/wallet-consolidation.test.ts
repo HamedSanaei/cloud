@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import pg, { type PoolClient } from 'pg'
+import pg, { type Client } from 'pg'
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { migrate as drizzleMigrate } from 'drizzle-orm/node-postgres/migrator'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { createDb } from '../../src/db/index.js'
+import * as schema from '../../src/db/schema.js'
 import { assertWalletConsolidationApproved, migrate, resolveMigrationsFolder } from '../../src/db/migrate.js'
 import * as config from '../../src/config.js'
 import { walletPreflight } from '../../src/db/wallet-preflight.js'
@@ -17,13 +17,14 @@ import { DATABASE_URL, dbAvailable } from '../helpers.js'
 
 describe.skipIf(!dbAvailable)('single wallet cutover on legacy PostgreSQL data', () => {
   const dbName = `wallet_cutover_${randomUUID().replaceAll('-', '')}`
-  let root: pg.Pool, legacy: pg.Pool, client: PoolClient, url: URL
+  let root: pg.Pool, client: Client, url: URL
 
   beforeAll(async () => {
     root = new pg.Pool({ connectionString: DATABASE_URL })
     await root.query(`CREATE DATABASE "${dbName}"`)
     url = new URL(DATABASE_URL); url.pathname = `/${dbName}`
-    legacy = new pg.Pool({ connectionString: url.href }); client = await legacy.connect()
+    client = new pg.Client({ connectionString: url.href })
+    await client.connect()
     const folder = resolveMigrationsFolder(), preCutover = await mkdtemp(join(tmpdir(), 'wallet-legacy-'))
     try {
       const journal = JSON.parse(await readFile(join(folder, 'meta', '_journal.json'), 'utf8'))
@@ -35,8 +36,12 @@ describe.skipIf(!dbAvailable)('single wallet cutover on legacy PostgreSQL data',
     } finally { await rm(preCutover, { recursive: true, force: true }) }
   })
   afterAll(async () => {
-    client?.release(true); await legacy?.end()
-    if (root) { await root.query(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`); await root.end() }
+    try {
+      await client?.end()
+      // A forced drop can interrupt pg's asynchronous connection shutdown and
+      // emit an unhandled 57P01 after the assertions have already passed.
+      await root?.query(`DROP DATABASE IF EXISTS "${dbName}"`)
+    } finally { await root?.end() }
   })
 
   it('blocks bad ownership and balances, resumes after failure, and preserves ledger and executable references', async () => {
@@ -85,23 +90,28 @@ describe.skipIf(!dbAvailable)('single wallet cutover on legacy PostgreSQL data',
       { metadata: expect.objectContaining({ beforeRial: 123, afterRial: 123, currency: 'IRR', operationId: expect.any(String) }) },
     ])
 
-    const handle = createDb(url.href)
+    const handle = new pg.Pool({ connectionString: url.href })
+    const connections = new Set<Promise<void>>()
+    handle.on('connect', connection => {
+      connections.add(new Promise(resolve => connection.once('end', resolve)))
+    })
+    const db = drizzle(handle, { schema })
     try {
-      expect(await listWallets(handle.db, owner)).toEqual([expect.objectContaining({ id: canonical, balanceRial: 123 })])
-      expect((await listWallets(handle.db, emptyOwner))[0]?.balanceRial).toBe(0)
-      expect((await listWallets(handle.db, maxOwner))[0]?.balanceRial).toBe(Number.MAX_SAFE_INTEGER)
-      await expect(getWallet(handle.db, other, first)).rejects.toThrow()
+      expect(await listWallets(db, owner)).toEqual([expect.objectContaining({ id: canonical, balanceRial: 123 })])
+      expect((await listWallets(db, emptyOwner))[0]?.balanceRial).toBe(0)
+      expect((await listWallets(db, maxOwner))[0]?.balanceRial).toBe(Number.MAX_SAFE_INTEGER)
+      await expect(getWallet(db, other, first)).rejects.toThrow()
       await expect(client.query("INSERT INTO wallets (user_id,name) VALUES ($1,'second')", [owner])).rejects.toMatchObject({ code: '23505' })
-      const replay = await creditWallet(handle.db, owner, canonical, 123, { idempotencyKey: 'legacy-shared', referenceType: 'tabapay', referenceId: payment })
+      const replay = await creditWallet(db, owner, canonical, 123, { idempotencyKey: 'legacy-shared', referenceType: 'tabapay', referenceId: payment })
       expect(replay.transaction.walletId).toBe(first)
-      await expect(creditWallet(handle.db, owner, first, 99, { idempotencyKey: 'legacy-shared' })).rejects.toThrow()
+      await expect(creditWallet(db, owner, first, 99, { idempotencyKey: 'legacy-shared' })).rejects.toThrow()
       const writes = await Promise.all([first, canonical, first].map(walletId =>
-        creditWallet(handle.db, owner, walletId, 13, { idempotencyKey: 'new-retry' })))
+        creditWallet(db, owner, walletId, 13, { idempotencyKey: 'new-retry' })))
       expect(new Set(writes.map(write => write.transaction.id)).size).toBe(1)
-      expect((await getWallet(handle.db, owner, first)).balanceRial).toBe(136)
+      expect((await getWallet(db, owner, first)).balanceRial).toBe(136)
       const newUser = randomUUID()
       await client.query('INSERT INTO users (id,email,password_hash) VALUES ($1,$2,$3)', [newUser, `${newUser}@test.invalid`, 'fixture'])
-      const provisioned = await Promise.all(Array.from({ length: 5 }, () => ensureDefaultWallet(handle.db, newUser)))
+      const provisioned = await Promise.all(Array.from({ length: 5 }, () => ensureDefaultWallet(db, newUser)))
       expect(new Set(provisioned.map(wallet => wallet.id)).size).toBe(1)
       expect((await client.query('SELECT count(*) FROM wallets WHERE user_id=$1', [newUser])).rows[0].count).toBe('1')
 
@@ -110,11 +120,14 @@ describe.skipIf(!dbAvailable)('single wallet cutover on legacy PostgreSQL data',
       await client.query('UPDATE wallet_payments SET gateway_token=$1,merchant_fingerprint=$2 WHERE id=$3', [token, fingerprint(), payment])
       vi.stubGlobal('fetch', vi.fn(async () => Response.json({ responseCode: 2, status: 'success', token, amount: 200000, shaparakRefNumber: '123456789' })))
       try {
-        const results = await Promise.all([verifyRecharge(handle.db, payment), verifyRecharge(handle.db, payment)])
+        const results = await Promise.all([verifyRecharge(db, payment), verifyRecharge(db, payment)])
         expect(results.map(result => result.status)).toEqual(['succeeded', 'succeeded'])
-        expect((await getWallet(handle.db, owner)).balanceRial).toBe(200136)
+        expect((await getWallet(db, owner)).balanceRial).toBe(200136)
         expect((await client.query("SELECT count(*) FROM wallet_transactions WHERE idempotency_key=$1", [`tabapay:${payment}`])).rows[0].count).toBe('1')
       } finally { gateway.mockRestore(); vi.unstubAllGlobals() }
-    } finally { await handle.pool.end() }
+    } finally {
+      await handle.end()
+      await Promise.all(connections)
+    }
   })
 })
