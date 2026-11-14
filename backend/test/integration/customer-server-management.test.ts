@@ -341,4 +341,31 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     expect(stored.encrypted).toBeNull(); expect(stored.claimedAt).toBeTruthy()
     await expect(app.injectWS(path, upgrade(headers))).rejects.toThrow(/403/)
   })
+  it('reports console eligibility and revokes an unused grant only for its browser session', async () => {
+    const p = await buy(); await activate(p)
+    const url = `/api/servers/${p.server.id}`
+    const cookie = { cookie: `cloud_session=${p.session.token}` }
+    const browser = { headers: cookie, remoteAddress: p.remoteAddress }
+    const detail = (headers: Record<string, string>) => app.inject({ url: `${url}/management`, headers, remoteAddress: p.remoteAddress })
+    expect((await detail(p.headers)).json().data.consoleBlock).toBe('browser_session_required')
+    expect((await detail(cookie)).json().data.consoleBlock).toBeNull()
+    const second = await createSession(ctx.db, p.user.id, {})
+    const secondCookie = { cookie: `cloud_session=${second.token}` }
+    const mismatch = await app.inject({ method: 'POST', url: `${url}/console`, payload: {}, ...browser, headers: { ...secondCookie, ...p.headers } })
+    expect(mismatch.statusCode).toBe(403)
+    const created = await app.inject({ method: 'POST', url: `${url}/console`, payload: {}, ...browser })
+    expect(created.statusCode).toBe(200)
+    const { grantId } = created.json().data
+    const grantUrl = `${url}/console/${grantId}`
+    const loadGrant = () => ctx.db.query.serverSecrets.findFirst({ where: t => eq(t.id, grantId) })
+    await app.inject({ method: 'DELETE', url: grantUrl, ...browser, headers: secondCookie })
+    expect((await loadGrant())?.encrypted).toBeTruthy()
+    expect((await app.inject({ method: 'DELETE', url: grantUrl, ...browser })).statusCode).toBe(204)
+    expect((await loadGrant())?.encrypted).toBeNull()
+    await expect(app.injectWS(grantUrl, { headers: { ...cookie, origin: 'https://app.test', host: 'app.test' },
+      socket: Object.defineProperty(new Socket(), 'remoteAddress', { value: '192.0.2.113' }) })).rejects.toThrow(/403/)
+    await action(p, 'power_off')
+    expect((await detail(cookie)).json().data.consoleBlock).toBe('operation_pending')
+    expect((await app.inject({ method: 'POST', url: `${url}/console`, payload: {}, ...browser })).statusCode).toBe(409)
+  })
 })

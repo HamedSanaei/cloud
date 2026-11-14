@@ -70,7 +70,7 @@
 .server-password { display: block; overflow-wrap: anywhere; padding: 20px; font-family: monospace; font-size: 24px; background: #dbeafe; color: #111827; border-radius: 10px; margin: 20px 0; user-select: all; }
 .server-advanced-links { display: grid; gap: 16px; margin: 24px 0; }
 .server-console-viewer { background: #0f172a; min-height: 240px; height: 300px; border-radius: 9px; overflow: hidden; margin: 20px 0; }
-.server-console-viewer:empty::before { content: 'کنسول هنوز متصل نیست'; color: #94a3b8; display: block; text-align: center; padding-top: 100px; }
+.server-console-actions { margin-block: 12px; }
 @media (max-width: 1000px) { .server-detail-columns { grid-template-columns: 1fr; } .server-resize-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .Toastify__toast { font-family: Vazirmatn, sans-serif; font-size: 14px; border: 1px solid #d9e2ec; border-radius: 12px; line-height: 1.8; }
 @media (max-width: 640px) {

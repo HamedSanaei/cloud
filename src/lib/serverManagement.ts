@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from './apiClient'
+import { apiDelete, apiGet, apiPost } from './apiClient'
 import type { Server, ServerLifecycle } from './types'
 export type { ManagementAction } from '../../backend/src/modules/providers/customer.interface'
 import type { ManagementAction, ServerAccessBlock, ServerAccessEligibility, ServerMetrics } from '../../backend/src/modules/providers/customer.interface'
@@ -22,6 +22,7 @@ export interface ServerDetail extends Server {
     iso: boolean; snapshots: boolean; backups: boolean; volumes: boolean; networkMutations: boolean; unavailableReason: string }
   accessEligibility?: ServerAccessEligibility
   resizeBlock?: ServerAccessBlock | null
+  consoleBlock?: ServerAccessBlock | 'browser_session_required' | null
   operations: ServerOperation[]; credentials: Array<{ operationId: string | null; claimedAt: string | null; acknowledgedAt: string | null }>
 }
 export interface ResizeOption { type: string; architecture: string; storageType: string; vcpu: number; memoryMb: number; diskGb: number; available: boolean; offerId: string }
@@ -39,5 +40,7 @@ export const submitServerAction = async (id: string, hostname: string, action: M
   (await apiPost<{ data: ServerOperation }>(`/servers/${encodeURIComponent(id)}/management/actions`, { ...input, action, hostname, confirm: true }, { headers: { 'idempotency-key': key } })).data
 export const claimServerPassword = async (id: string, operationId: string) => (await apiPost<{ data: { password: string; expiresAt: string } }>(`/servers/${encodeURIComponent(id)}/credentials/claim`, { operationId })).data
 export const acknowledgeServerPassword = (id: string, operationId: string) => apiPost(`/servers/${encodeURIComponent(id)}/credentials/ack`, { operationId })
-export const requestServerConsole = async (id: string) => (await apiPost<{ data: { grantId: string; password: string; expiresAt: string; maxSessionSeconds: number } }>(`/servers/${encodeURIComponent(id)}/console`, {})).data
+export const requestServerConsole = async (id: string) => (await apiPost<{ data: { grantId: string; password: string; expiresAt: string; maxSessionSeconds: number } }>(`/servers/${encodeURIComponent(id)}/console`, {}, { timeoutMs: 35_000 })).data
+export const revokeServerConsole = (id: string, grantId: string) =>
+  apiDelete(`/servers/${encodeURIComponent(id)}/console/${encodeURIComponent(grantId)}`, { keepalive: true })
 export const actionLabels: Record<ManagementAction, string> = { power_on: 'روشن کردن', shutdown: 'خاموشی نرم (ACPI)', power_off: 'خاموشی اجباری', reboot: 'راه‌اندازی مجدد نرم', reset: 'ریست سخت‌افزاری', delete: 'حذف دائمی سرور', resize: 'تغییر پلن', rebuild: 'نصب مجدد سیستم‌عامل', reset_password: 'بازنشانی رمز عبور', enable_rescue: 'فعال‌سازی Rescue', disable_rescue: 'غیرفعال‌سازی Rescue', attach_iso: 'اتصال ISO', detach_iso: 'قطع ISO', change_protection: 'تغییر حفاظت سرور' }

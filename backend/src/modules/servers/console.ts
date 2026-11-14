@@ -6,11 +6,11 @@ import type { AppContext } from '../../app.js'
 import { serverSecrets } from '../../db/schema.js'
 import { getConfig } from '../../config.js'
 import { parse } from '../../http/validate.js'
-import { AUTH_COOKIE, requireUser } from '../../http/auth.js'
+import { AUTH_COOKIE, hasBrowserSession, requireUser } from '../../http/auth.js'
 import { ConflictError, ForbiddenError } from '../../lib/errors.js'
 import { authenticateToken } from '../auth/service.js'
 import { writeAudit } from '../audit/service.js'
-import { customerProvider } from './management.js'
+import { customerProvider, findBlockingManagementOperation, managementBlock, managementConflict } from './management.js'
 import { decryptOutput, encryptOutput } from './secrets.js'
 import { getServerForUser } from './service.js'
 import { connectConsole } from './console-transport.js'
@@ -25,9 +25,10 @@ function permittedUrl(value: string) {
 export const registerServerConsole: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
   app.post('/servers/:id/console', { config: { rateLimit: { max: 3, timeWindow: '1 minute' } } }, async (request, reply) => {
     const user = requireUser(request), { id } = parse(z.object({ id: z.string().uuid() }), request.params)
-    if (!request.cookies[AUTH_COOKIE]) throw new ForbiddenError('کنسول به نشست امن مرورگر نیاز دارد')
+    if (!hasBrowserSession(request)) throw new ForbiddenError('کنسول به نشست امن مرورگر نیاز دارد')
     const server = await getServerForUser(ctx.db, user.id, id)
-    if (server.terminatedAt || server.terminationState && server.terminationState !== 'delete_failed') throw new ConflictError('سرور در دسترس نیست یا حذف آن در جریان است')
+    const block = managementBlock(server, !!await findBlockingManagementOperation(ctx.db, server.id))
+    if (block) throw new ConflictError(managementConflict[block])
     const console = await customerProvider(server).console(server.providerServerId!)
     const [grant] = await ctx.db.insert(serverSecrets).values({ serverId: id, userId: user.id, sessionId: user.sessionId, kind: 'console',
       encrypted: encryptOutput(permittedUrl(console.url), `${user.id}:${id}:${user.sessionId}:console`), expiresAt: new Date(Date.now() + 90000) }).returning({ id: serverSecrets.id, expiresAt: serverSecrets.expiresAt })
@@ -35,10 +36,19 @@ export const registerServerConsole: FastifyPluginAsync<{ ctx: AppContext }> = as
     reply.header('Cache-Control', 'no-store'); reply.header('Pragma', 'no-cache')
     return { data: { grantId: grant!.id, expiresAt: grant!.expiresAt.toISOString(), password: console.password, maxSessionSeconds: 300 } }
   })
+  app.delete('/servers/:id/console/:grantId', async (request, reply) => {
+    const user = requireUser(request), { id, grantId } = parse(params, request.params)
+    if (!hasBrowserSession(request)) throw new ForbiddenError('کنسول به نشست امن مرورگر نیاز دارد')
+    await getServerForUser(ctx.db, user.id, id)
+    await ctx.db.update(serverSecrets).set({ encrypted: null }).where(and(eq(serverSecrets.id, grantId),
+      eq(serverSecrets.serverId, id), eq(serverSecrets.userId, user.id), eq(serverSecrets.sessionId, user.sessionId),
+      eq(serverSecrets.kind, 'console'), isNull(serverSecrets.claimedAt)))
+    return reply.header('Cache-Control', 'no-store').code(204).send()
+  })
   app.get('/servers/:id/console/:grantId', { websocket: true, preHandler: async request => {
     const user = requireUser(request), origin = request.headers.origin, host = request.headers.host
     const allowed = getConfig().CORS_ORIGIN.split(',').map(value => value.trim()).filter(Boolean)
-    if (!request.cookies[AUTH_COOKIE] || !origin || (!allowed.includes(origin) && origin !== `https://${host}` && origin !== `http://${host}`)) throw new ForbiddenError('مبدأ یا نشست کنسول معتبر نیست')
+    if (!hasBrowserSession(request) || !origin || (!allowed.includes(origin) && origin !== `https://${host}` && origin !== `http://${host}`)) throw new ForbiddenError('مبدأ یا نشست کنسول معتبر نیست')
     const { id, grantId } = parse(params, request.params), server = await getServerForUser(ctx.db, user.id, id)
     if (server.terminatedAt || server.terminationState && server.terminationState !== 'delete_failed') throw new ConflictError('سرور در دسترس نیست')
     const grant = await ctx.db.query.serverSecrets.findFirst({ where: t => and(eq(t.id, grantId), eq(t.serverId, id), eq(t.userId, user.id), eq(t.sessionId, user.sessionId), eq(t.kind, 'console'), isNull(t.claimedAt), gt(t.expiresAt, new Date())) })
@@ -72,7 +82,7 @@ export const registerServerConsole: FastifyPluginAsync<{ ctx: AppContext }> = as
     void (async () => {
       const user = requireUser(request), { id, grantId } = parse(params, request.params)
       const value = await ctx.db.transaction(async tx => {
-        const [grant] = await tx.select().from(serverSecrets).where(and(eq(serverSecrets.id, grantId), eq(serverSecrets.serverId, id), eq(serverSecrets.userId, user.id), eq(serverSecrets.sessionId, user.sessionId), isNull(serverSecrets.claimedAt), gt(serverSecrets.expiresAt, new Date()))).for('update')
+        const [grant] = await tx.select().from(serverSecrets).where(and(eq(serverSecrets.id, grantId), eq(serverSecrets.serverId, id), eq(serverSecrets.userId, user.id), eq(serverSecrets.sessionId, user.sessionId), eq(serverSecrets.kind, 'console'), isNull(serverSecrets.claimedAt), gt(serverSecrets.expiresAt, new Date()))).for('update')
         if (!grant?.encrypted || closed) throw new ForbiddenError('کنسول قابل اتصال نیست')
         const url = permittedUrl(decryptOutput(grant.encrypted, `${user.id}:${id}:${user.sessionId}:console`))
         await tx.update(serverSecrets).set({ encrypted: null, claimedAt: new Date() }).where(eq(serverSecrets.id, grantId))

@@ -84,6 +84,11 @@ export function ServerDetailsPage() {
   if (!server) return detail.loading ? <LoadingState label="دریافت اطلاعات معتبر سرور…" /> : <QueryError message={detail.error || missing} onRetry={refresh} />
   const disabled = busy || checking || pending || !['ready', 'delete_failed'].includes(server.lifecycle) || !server.providerAvailable
   const checkingState = checking || detail.loading
+  const consoleBlock = server.consoleBlock ?? (pending ? 'operation_pending'
+    : server.lifecycle === 'terminated' ? 'server_deleted'
+      : ['deletion_requested', 'deleting'].includes(server.lifecycle) ? 'deletion_pending'
+        : !['ready', 'delete_failed'].includes(server.lifecycle) ? 'server_not_ready'
+          : !server.capabilities.console ? 'unsupported' : !server.providerAvailable ? 'provider_unavailable' : null)
   const feedback = checked?.serverId === server.id && (!blockingOperation || checked.operationId === blockingOperation.id) ? checked.message : null
   const operationRecovery = blockingOperation && <div className="server-notice server-operation-recovery">
     <p>{`تا روشن شدن نتیجهٔ «${actionLabels[blockingOperation.action] ?? 'عملیات سرور'}»، عملیات جدید امکان‌پذیر نیست.`}</p>
@@ -115,7 +120,10 @@ export function ServerDetailsPage() {
       recovery={operationRecovery} recheck={recheck} checking={checkingState} openOperations={() => setSearch({ tab: 'operations' })} ask={ask} />}
     {tab === 'access' && <ServerAccess key={server.id} server={server} busy={busy} loading={detail.loading} stale={!!detail.error}
       ask={ask} reveal={setSecretOperation} recheck={recheck} openTab={tab => setSearch({ tab })} />}
-    {tab === 'console' && <div className="server-detail-columns"><ServerConsole serverId={server.id} disabled={disabled || !server.capabilities.console} /><Card><h2>امکانات پیشرفته</h2><div className="server-advanced-links"><Button variant="secondary" onClick={() => setSearch({ tab: 'storage' })}>Snapshot، Backup و Volume</Button><Button variant="secondary" onClick={() => setSearch({ tab: 'network' })}>شبکه، حفاظت و Rescue</Button></div><p>{server.capabilities.unavailableReason}</p></Card></div>}
+    {tab === 'console' && <div className="server-detail-columns"><ServerConsole key={server.id} serverId={server.id}
+      block={consoleBlock ?? (detail.error ? 'refresh_failed' : checkingState ? 'checking' : null)} recheck={recheck}
+      openOperations={() => setSearch({ tab: 'operations' })} />
+      <Card><h2>امکانات پیشرفته</h2><div className="server-advanced-links"><Button variant="secondary" onClick={() => setSearch({ tab: 'storage' })}>Snapshot، Backup و Volume</Button><Button variant="secondary" onClick={() => setSearch({ tab: 'network' })}>شبکه، حفاظت و Rescue</Button></div><p>{server.capabilities.unavailableReason}</p></Card></div>}
     {tab === 'storage' && <ServerStorage server={server} />}
     {tab === 'network' && <ServerNetwork server={server} disabled={disabled} ask={ask} />}
     {!['overview', 'monitoring', 'operations', 'resize', 'access', 'console', 'storage', 'network'].includes(tab) && <Card><p>این بخش یافت نشد.</p><Button onClick={() => setSearch({ tab: 'overview' })}>نمای کلی</Button></Card>}
