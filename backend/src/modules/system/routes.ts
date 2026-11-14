@@ -3,11 +3,12 @@ import type { FastifyPluginAsync } from 'fastify'
 import { and, desc, eq, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppContext } from '../../app.js'
-import { adminAdjustments, users, wallets } from '../../db/schema.js'
+import { adminAdjustments, settings, users, wallets } from '../../db/schema.js'
 import { getConfig } from '../../config.js'
 import { requireAdmin, extractToken } from '../../http/auth.js'
 import { parse } from '../../http/validate.js'
 import { ForbiddenError, NotFoundError, UnauthorizedError } from '../../lib/errors.js'
+import { iranTariffsKey, iranTariffSettings, iranTariffsSchema } from '../catalog/home-tariffs.js'
 import { isSiteAuthority } from '../integration/authority.js'
 import { writeAudit } from '../audit/service.js'
 import { issueAuthorization, consumeAuthorization, systemAdmin } from './security.js'
@@ -100,6 +101,18 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     return { data: await issueAuthorization(db, requireAdmin(request), input.action, input.payload) }
   })
   app.get('/gateway', async () => ({ data: await gatewayStatus(db) }))
+  app.get('/iran-tariffs', async () => ({ data: await iranTariffSettings(db) }))
+  app.post('/iran-tariffs', async request => {
+    const actor = requireAdmin(request)
+    const value = parse(iranTariffsSchema, request.body)
+    await db.transaction(async tx => {
+      await tx.insert(settings).values({ key: iranTariffsKey, value }).onConflictDoUpdate({
+        target: settings.key, set: { value, updatedAt: new Date() },
+      })
+      await writeAudit(tx, { actorId: actor.id, action: 'catalog.iran_tariffs_updated', metadata: value })
+    })
+    return { data: value }
+  })
   app.post('/gateway', { config: { rateLimit: { max: 10, timeWindow: '10 minutes' } } }, async request => {
     const { proof, ...input } = parse(gatewaySchema.extend({ proof: proofSchema }), request.body)
     return { data: await updateGateway(db, requireAdmin(request), input, proof) }

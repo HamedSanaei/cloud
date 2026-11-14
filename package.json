@@ -8,7 +8,7 @@
     "test:otp-browser": "node --test test/visual/auth-otp.mjs",
     "preview:design": "node scripts/preview-design.mjs",
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node build-tools/prerender-home.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "typecheck": "tsc -b --pretty false",
     "lint": "node backend/node_modules/eslint/bin/eslint.js --config backend/eslint.config.js src --max-warnings 0"

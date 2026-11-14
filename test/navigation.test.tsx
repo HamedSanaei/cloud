@@ -236,7 +236,7 @@ describe('Penpot routes with canonical integration ENABLED', () => {
 
   it('keeps the public landing accessible to an authenticated user', async () => {
     open('/')
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toContain('ایده‌های بزرگ شما')
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toContain('ایران و هتزنر')
     expect(await screen.findByRole('link', { name: 'ورود به پنل مدیریت' })).toBeTruthy()
     const cta = within(document.querySelector('.landing-cta') as HTMLElement)
     expect(cta.getByRole('link', { name: 'ایجاد سرور جدید' }).getAttribute('href')).toBe('/servers/create')

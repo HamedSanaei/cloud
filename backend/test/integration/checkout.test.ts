@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../../src/app.js'
 import * as configuration from '../../src/config.js'
-import { providers, users } from '../../src/db/schema.js'
+import { providerProducts, providers, settings, users } from '../../src/db/schema.js'
 import { createSession, registerUser } from '../../src/modules/auth/service.js'
 import { minimumCreationBalanceRial } from '../../src/modules/billing/creation-funding.js'
 import { enableAllOffersForSale, findOfferByProductAndLocation, syncProviderCatalog } from '../../src/modules/catalog/service.js'
@@ -11,7 +11,7 @@ import { createOrderFromQuote, payOrder } from '../../src/modules/orders/service
 import { handleProvision } from '../../src/modules/provisioning/handlers.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
 import { getProvider, registerProvider, registerConfiguredProviders } from '../../src/modules/providers/registry.js'
-import { setFxRate } from '../../src/modules/pricing/service.js'
+import { setFxRate, updatePricingRules } from '../../src/modules/pricing/service.js'
 import { creditWallet, ensureDefaultWallet } from '../../src/modules/wallets/service.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 
@@ -54,6 +54,46 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
   }
   const quoteFor = (userId: string) => createQuote(ctx.db, { userId, offerId: offer.id, locationCode: 'FRA-01', billingOption: { billingCycle: 'hourly' }, billingPeriod: 'hourly', operatingSystem: 'ubuntu-24.04' })
   const body = (walletId: string) => ({ name: 'checkout-server', walletId, offerId: offer.id, os: 'ubuntu-24.04', billingPeriod: 'hourly' })
+
+  it('publishes only current retail offers and approved independent Iran rates', async () => {
+    const admin = await account(true), customer = await account()
+    const read = async () => (await app.inject('/api/public/home-prices')).json().data
+    const iran = { rates: { outbound: 123450, inbound: 0, cpu: 250000, ram: null }, trafficUnit: 'TiB', tax: 'included', published: false }
+    const update = (headers: Record<string, string>, value: unknown) => app.inject({ method: 'POST', url: '/api/admin/settings/iran-tariffs', headers, payload: value as object })
+    const original = (await read()).hetzner.find((row: { id: string }) => row.id === offer.id)
+    expect(original).toMatchObject({ hourly: expect.any(Number), monthly: null })
+    expect(original).not.toHaveProperty('operatingSystems')
+    expect(original).not.toHaveProperty('canonicalPricing')
+    expect((await update(customer.headers, iran)).statusCode).toBe(403)
+    expect((await update(admin.headers, iran)).statusCode).toBe(200)
+    expect((await read()).iran).toBeNull()
+    expect((await update(admin.headers, { ...iran, published: true })).statusCode).toBe(200)
+    try {
+      expect((await read()).iran).toEqual({ rates: iran.rates, trafficUnit: 'TiB', tax: 'included' })
+      const html = await app.inject('/api/public/home-tariffs')
+      expect(html.headers['cache-control']).toBe('no-store')
+      expect(html.body).toContain('۱۲٬۳۴۵ تومان')
+      expect(html.body).toContain('هر TiB برابر ۱٬۰۲۴ GiB است.')
+      expect(html.body).toContain(`offer=${offer.id}&amp;period=hourly`)
+      await setFxRate(ctx.db, '720000')
+      const repriced = (await read()).hetzner.find((row: { id: string }) => row.id === offer.id)
+      expect(repriced.hourly).toBeGreaterThan(original.hourly)
+      const rule = await updatePricingRules(ctx.db, 'hetzner', { markupFixedRial: 150000 })
+      expect((await read()).hetzner.find((row: { id: string }) => row.id === offer.id).hourly).toBeGreaterThan(repriced.hourly)
+      expect(rule.markupFixedRial).toBe(150000)
+      await ctx.db.update(providerProducts).set({ lastSyncedAt: new Date(0) }).where(eq(providerProducts.id, offer.id))
+      expect((await read()).hetzner.some((row: { id: string }) => row.id === offer.id)).toBe(false)
+      await ctx.db.update(providers).set({ enabled: false }).where(eq(providers.id, 'hetzner'))
+      const authenticated = await app.inject({ url: '/api/public/home-prices', headers: admin.headers })
+      expect(authenticated.json().data.hetzner).toEqual([])
+    } finally {
+      await setFxRate(ctx.db, '620000')
+      await updatePricingRules(ctx.db, 'hetzner', { markupFixedRial: 0 })
+      await ctx.db.update(providerProducts).set({ lastSyncedAt: offer.lastSyncedAt }).where(eq(providerProducts.id, offer.id))
+      await ctx.db.update(providers).set({ enabled: true }).where(eq(providers.id, 'hetzner'))
+      await ctx.db.delete(settings).where(eq(settings.key, 'catalog.iran_monthly_tariffs'))
+    }
+  })
 
   it('returns structured shortfall and creates no order, invoice, debit, server or provider operation on insufficient balance', async () => {
     const a = await account()

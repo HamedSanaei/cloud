@@ -331,7 +331,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
                   {error && <p className="auth-error" role="alert">{error}</p>}
                   <button className="auth-primary-button" disabled={busy} type="submit">{busy ? <RefreshCw className="spin" size={19} /> : intent === 'register' ? 'ساخت حساب' : intent === 'forgot' ? 'ارسال کد بازیابی' : method === 'phone' ? 'ارسال کد پیامکی' : 'ورود به حساب'}</button>
                   {(intent === 'register' || (intent === 'login' && method === 'email')) && <button className="auth-google-button" disabled={busy} onClick={googleLogin} type="button"><GoogleIcon /> {intent === 'register' ? 'ادامه با گوگل' : 'ورود با حساب گوگل'}</button>}
-                  <p className="auth-switch-copy">{intent === 'register' ? <>حساب دارید؟ <Link to="/login">وارد شوید</Link></> : intent === 'login' ? <>حساب ندارید؟ <Link to="/register">ثبت‌نام کنید</Link></> : <Link to="/login"><ArrowLeft size={15} /> بازگشت به ورود</Link>}</p>
+                  <p className="auth-switch-copy">{intent === 'register' ? <>حساب دارید؟ <Link to="/login" state={location.state}>وارد شوید</Link></> : intent === 'login' ? <>حساب ندارید؟ <Link to="/register" state={location.state}>ثبت‌نام کنید</Link></> : <Link to="/login"><ArrowLeft size={15} /> بازگشت به ورود</Link>}</p>
                 </form>
               ) : (
                 <form className="auth-form" onSubmit={submitChallenge}>
