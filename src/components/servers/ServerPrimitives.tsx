@@ -1,6 +1,6 @@
 import { LoaderCircle } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { lifecycleLabels } from '../../lib/serverLifecycle'
+import { lifecycleLabels, serverAddressUnavailable } from '../../lib/serverLifecycle'
 import type { Server, ServerLifecycle } from '../../lib/types'
 import { CopyableIp } from '../ui/CopyableIp'
 
@@ -16,12 +16,13 @@ export function ServerResourceMetricCard({ label, value }: { label: string; valu
 export function ServerTableRow({ server, onPlatformManage }: { server: Server; onPlatformManage?: () => void }) {
   const state = server.lifecycle ?? server.tracking?.state ?? (server.status === 'building' ? 'provisioning' : 'ready')
   const ready = state === 'ready'
+  const addressUnavailable = serverAddressUnavailable(server)
   const inspectable = ready || ['delete_failed', 'deletion_requested', 'deleting', 'terminated'].includes(state)
   return <tr className={`server-table-row${!ready ? ' server-table-row--pending' : ''}`}>
     <td><strong>{server.name}</strong><small>{server.datacenter || 'در حال دریافت'}{server.os ? ` · ${server.os}` : ''}</small></td>
     <td data-label="وضعیت"><LifecycleBadge state={state} />{ready && server.status === 'inactive' && <small>خاموش</small>}</td>
     <td data-label="منابع">{[server.cpu, server.ram, server.disk].filter(Boolean).join(' · ') || 'در حال دریافت'}</td>
-    <td data-label="آدرس‌های آی‌پی"><CopyableIp value={server.ip} />{server.ipv6 && <CopyableIp value={server.ipv6} />}</td>
+    <td data-label="آدرس‌های آی‌پی"><CopyableIp value={server.ip} unavailableReason={addressUnavailable} />{!addressUnavailable && server.ipv6 && <CopyableIp value={server.ipv6} />}</td>
     <td>{(server.platformServerId ? ready : inspectable) ? server.platformServerId
       ? <button className="button button--secondary button--sm" onClick={onPlatformManage} disabled={!onPlatformManage}>مدیریت و نتیجه عملیات</button>
       : <Link className="button button--secondary button--sm" to={`/servers/${server.id}`}>مشاهده جزئیات</Link>

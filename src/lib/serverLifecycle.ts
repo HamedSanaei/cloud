@@ -1,4 +1,9 @@
 import type { Server } from './types'
+/** Historical IP fields are not proof of an active assignment after deletion. */
+export function serverAddressUnavailable(server: { lifecycle?: Server['lifecycle']; providerState?: string | null }) {
+  return server.lifecycle === 'terminated' || server.providerState === 'terminated'
+    ? 'سرور حذف شده؛ آدرس فعال ندارد' : undefined
+}
 export const isProvisioning = (server: Server) => !!server.tracking && ['queued', 'provisioning', 'requires_review', 'outcome_unknown'].includes(server.tracking.state)
 export const serverRowKey = (server: Server) => server.tracking ? `${server.tracking.source}:${server.tracking.reference}` : server.id
 export const lifecycleLabels = {

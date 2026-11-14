@@ -4,6 +4,7 @@ import { ArrowRight, HardDrive, RefreshCw } from 'lucide-react'
 import { Button, LinkButton } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { CopyableIp } from '../components/ui/CopyableIp'
+import { serverAddressUnavailable } from '../lib/serverLifecycle'
 import { Select } from '../components/ui/FormControls'
 import { PageHeader } from '../components/ui/PageHeader'
 import { LoadingState, QueryError } from '../components/ui/States'
@@ -94,6 +95,7 @@ export function ServerDetailsPage() {
   }
   if (!server) return detail.loading ? <LoadingState label="دریافت اطلاعات معتبر سرور…" /> : <QueryError message={detail.error || missing} onRetry={refresh} />
   const disabled = busy || checking || pending || !['ready', 'delete_failed'].includes(server.lifecycle) || !server.providerAvailable
+  const addressUnavailable = serverAddressUnavailable(server)
   const checkingState = checking || detail.loading
   const consoleBlock = server.consoleBlock ?? (pending ? 'operation_pending'
     : server.lifecycle === 'terminated' ? 'server_deleted'
@@ -113,7 +115,7 @@ export function ServerDetailsPage() {
     <PageHeader title="مشخصات و مدیریت سرور" subtitle={`${server.name} · ${server.provider ?? 'ارائه‌دهنده'}`} icon={<HardDrive />}
       actions={<><LinkButton to="/servers" variant="secondary" icon={<ArrowRight size={17} />}>بازگشت به سرورها</LinkButton><Button variant="secondary" disabled={detail.loading} icon={<RefreshCw size={16} />} onClick={recheck}>بروزرسانی</Button></>} />
     <Card className="server-identity"><div><h2>{server.name}</h2><p>{[server.facts?.location || server.datacenter, server.facts?.image || server.os, server.facts?.serverType || server.serverType].filter(Boolean).join(' · ')}</p></div>
-      <LifecycleBadge state={server.lifecycle} /><dl className="server-ip-list"><div><dt>IPv4</dt><dd><CopyableIp value={server.facts?.ipv4 ?? server.ip} /></dd></div><div><dt>IPv6</dt><dd><CopyableIp value={server.facts?.ipv6 ?? server.ipv6} /></dd></div></dl>
+      <LifecycleBadge state={server.lifecycle} /><dl className="server-ip-list"><div><dt>IPv4</dt><dd><CopyableIp value={server.facts?.ipv4 ?? server.ip} unavailableReason={addressUnavailable} /></dd></div><div><dt>IPv6</dt><dd><CopyableIp value={server.facts?.ipv6 ?? server.ipv6} unavailableReason={addressUnavailable} /></dd></div></dl>
     </Card>
     <nav className="server-detail-tabs" aria-label="مدیریت سرور">{tabs.map(([value, label]) => <button key={value} aria-current={(value === tab || value === 'console' && ['storage', 'network'].includes(tab)) ? 'page' : undefined} onClick={() => setSearch({ tab: value })}>{label}</button>)}</nav>
     {!server.providerAvailable && server.lifecycle !== 'terminated' && <p className="server-notice" role="status">اطلاعات زندهٔ ارائه‌دهنده فعلاً قابل دریافت نیست. نتیجهٔ عملیات یا مقدار مصرف حدس زده نمی‌شود.</p>}
@@ -138,7 +140,7 @@ export function ServerDetailsPage() {
     {tab === 'storage' && <ServerStorage server={server} />}
     {tab === 'network' && <><ServerNetwork server={server} disabled={disabled} ask={ask} />
       <Card><h2>تعویض IPv4 اصلی</h2>{server.primaryIpv4 ? <>
-        {server.provider === 'hetzner' && <><PrimaryIpv4Summary quote={server.primaryIpv4} /><PrimaryIpv4Warning /></>}
+        {server.provider === 'hetzner' && <><PrimaryIpv4Summary quote={server.primaryIpv4} unavailableReason={addressUnavailable} /><PrimaryIpv4Warning /></>}
         {server.primaryIpv4.reason && <p>{server.primaryIpv4.reason}</p>}
         {server.primaryIpv4.needsTopUp && <LinkButton variant="secondary" to="/wallet">افزایش موجودی</LinkButton>}
         <Button variant="secondary" disabled={disabled || detail.loading || !!detail.error || !!server.primaryIpv4.reason || !server.primaryIpv4.currentIp}
@@ -164,13 +166,13 @@ export function ServerDetailsPage() {
       </div>}
     </Card>
     {request && <DestructiveConfirmation key={key.current} server={server} action={request.action} busy={busy} error={error} onClose={() => setRequest(null)} onConfirm={() => { void confirm() }}>
-      {request.action === 'replace_primary_ipv4' && <><PrimaryIpv4Summary quote={request.quote} /><PrimaryIpv4Warning /></>}
+      {request.action === 'replace_primary_ipv4' && <><PrimaryIpv4Summary quote={request.quote} unavailableReason={addressUnavailable} /><PrimaryIpv4Warning /></>}
     </DestructiveConfirmation>}
     {secretOperation && <OneTimePassword server={server} operationId={secretOperation} onClose={() => { setSecretOperation(null); refresh() }} />}
   </div>
 }
-function PrimaryIpv4Summary({ quote }: { quote: PrimaryIpv4Quote }) {
-  return <dl className="server-facts"><div><dt>IPv4 فعلی</dt><dd><CopyableIp value={quote.currentIp} /></dd></div>
+function PrimaryIpv4Summary({ quote, unavailableReason }: { quote: PrimaryIpv4Quote; unavailableReason?: string }) {
+  return <dl className="server-facts"><div><dt>IPv4 فعلی</dt><dd><CopyableIp value={quote.currentIp} unavailableReason={unavailableReason} /></dd></div>
     <div><dt>هزینهٔ یک‌باره</dt><dd>{amount(quote.feeRial)}</dd></div><div><dt>موجودی کیف پول پرداخت سرور</dt><dd>{amount(quote.balanceRial)}</dd></div></dl>
 }
 function PrimaryIpv4Warning() {
@@ -253,8 +255,9 @@ function ServerStorage({ server }: { server: ServerDetail }) {
 }
 function ServerNetwork({ server, disabled, ask }: { server: ServerDetail; disabled: boolean; ask: (action: ManagementAction, input?: Record<string, unknown>) => void }) {
   const f = server.facts
-  return <div className="server-detail-columns"><Card><h2>شبکه و آدرس‌ها</h2><dl className="server-ip-list"><div><dt>IPv4</dt><dd><CopyableIp value={f?.ipv4 ?? server.ip} /></dd></div><div><dt>IPv6</dt><dd><CopyableIp value={f?.ipv6 ?? server.ipv6} /></dd></div>
-    {f?.privateNetworks.map(network => <div key={network.id}><dt>شبکهٔ خصوصی {network.id}</dt><dd><CopyableIp value={network.ip} /></dd></div>)}</dl>
+  const addressUnavailable = serverAddressUnavailable(server)
+  return <div className="server-detail-columns"><Card><h2>شبکه و آدرس‌ها</h2><dl className="server-ip-list"><div><dt>IPv4</dt><dd><CopyableIp value={f?.ipv4 ?? server.ip} unavailableReason={addressUnavailable} /></dd></div><div><dt>IPv6</dt><dd><CopyableIp value={f?.ipv6 ?? server.ipv6} unavailableReason={addressUnavailable} /></dd></div>
+    {!addressUnavailable && f?.privateNetworks.map(network => <div key={network.id}><dt>شبکهٔ خصوصی {network.id}</dt><dd><CopyableIp value={network.ip} /></dd></div>)}</dl>
     <dl className="server-facts"><div><dt>شناسه‌های Floating IP</dt><dd>{f ? f.floatingIps.join('، ') || 'گزارش نشده' : missing}</dd></div></dl><p className="server-muted">تغییر شبکه و منابع مشترک پروژه بدون اثبات مالکیت اختصاصی مجاز نیست.</p></Card>
     <Card><h2>Firewall، Rescue و حفاظت</h2>{f?.firewalls.map(firewall => <p key={firewall.id}>Firewall ID: {firewall.id} · {firewall.status}</p>)}<p>Rescue: {f?.rescueEnabled == null ? missing : f.rescueEnabled ? 'فعال' : 'غیرفعال'}</p>
       <div className="server-inline-actions"><Button variant="secondary" disabled={disabled || f?.rescueEnabled == null} onClick={() => ask(f?.rescueEnabled ? 'disable_rescue' : 'enable_rescue')}>{f?.rescueEnabled ? 'غیرفعال‌سازی Rescue' : 'فعال‌سازی Rescue'}</Button><Button variant="secondary" disabled={disabled || !f?.isoId} onClick={() => ask('detach_iso')}>قطع ISO متصل</Button></div><p>انتخاب و اتصال ISO جدید در این پروژه فعال نیست.</p>
