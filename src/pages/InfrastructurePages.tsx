@@ -30,6 +30,7 @@ import {
 } from '../lib/endpoints'
 import { formatCount } from '../lib/format'
 import { ServerManagement } from '../components/ui/ServerManagement'
+import { CopyableIp } from '../components/ui/CopyableIp'
 import { useAuth } from '../auth/AuthContext'
 import { HetznerInventoryPanel } from '../admin/HetznerInventoryPanel'
 import { getIntegrationStatus } from '../lib/platformClient'
@@ -125,7 +126,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
           <QueryError message={active.error} onRetry={active.refetch} />
         ) : server ? (
           filteredServers.length ? (
-            <Table headers={['نام سرور', 'وضعیت', 'پلن و منابع', 'IPv4', 'مدیریت']}>
+            <Table headers={['نام سرور', 'وضعیت', 'پلن و منابع', 'آدرس‌های آی‌پی', 'مدیریت']}>
               {filteredServers.map((item) => (
                 <ServerTableRow key={serverRowKey(item)} server={item} onPlatformManage={integration.data?.enabled && item.platformServerId ? () => setManagedId(item.platformServerId!) : undefined} />
               ))}
@@ -142,7 +143,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
           <Table headers={['آی‌پی', 'نوع', 'وضعیت', 'سرور']}>
             {filteredIps.map((item) => (
               <tr key={item.id}>
-                <td style={{ direction: 'ltr' }}>{item.address}</td>
+                <td><CopyableIp value={item.address} /></td>
                 <td><Badge tone="info">{item.version}</Badge></td>
                 <td><Badge>{item.status}</Badge></td>
                 <td>{item.server ?? '—'}</td>

@@ -1,4 +1,6 @@
-import { apiGet, apiPatch } from '../lib/apiClient'
+import { apiGet, apiPatch, apiPost } from '../lib/apiClient'
+import type { ServerOperation } from '../lib/serverManagement'
+import type { ServerActionEvidence } from '../../backend/src/modules/providers/customer.interface'
 import type { Ticket } from '../lib/types'
 
 export interface AdminUser {
@@ -116,7 +118,11 @@ export interface AdminOrderDetail {
 export interface AdminServerDetail {
   server: AdminServer
   owner: AdminUser | null
+  legacyPowerOperation?: ServerOperation | null
 }
+export interface LegacyPowerEvidence { state: string; candidates: ServerActionEvidence[] }
+const legacyPowerPath = (serverId: string, operationId: string) =>
+  `/admin/console/servers/${encodeURIComponent(serverId)}/legacy-power/${encodeURIComponent(operationId)}`
 export interface ListFilters { page: number; search: string; status: string; limit?: number }
 const prefix = '/admin/console'
 const fetchData = async <T>(path: string): Promise<T> =>
@@ -136,6 +142,9 @@ export const adminApi = {
   servers: (filter: ListFilters) => fetchData<Paged<AdminServer>>('/servers' + listQuery(filter)),
   hetznerInventory: async () => (await apiGet<{ data: HetznerFleet }>(prefix + '/hetzner/inventory', { timeoutMs: 120000 })).data,
   server: (id: string) => fetchData<AdminServerDetail>('/servers/' + encodeURIComponent(id)),
+  legacyPowerEvidence: async (serverId: string, operationId: string) => (await apiGet<{ data: LegacyPowerEvidence }>(legacyPowerPath(serverId, operationId), { timeoutMs: 65_000 })).data,
+  resolveLegacyPower: (serverId: string, operationId: string, actionId: number, note: string) =>
+    apiPost(legacyPowerPath(serverId, operationId), { actionId, note }, { timeoutMs: 65_000 }),
 }
 export const userName = (u?: Pick<AdminUser, 'firstName' | 'lastName' | 'email'> | null) =>
   u ? [u.firstName, u.lastName].filter(Boolean).join(' ') || u.email : '—'

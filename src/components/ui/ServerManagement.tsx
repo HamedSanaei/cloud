@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { platformGet, platformPost } from '../../lib/platformClient'
 import { Button } from './Button'
+import { CopyableIp } from './CopyableIp'
 import { Input, Select } from './FormControls'
 import { Modal } from './Modal'
 
@@ -89,7 +90,7 @@ export function ServerManagement({ serverId, onClose }: { serverId: string; onCl
   return <>
     <Modal open title={`مدیریت ${server?.display_name ?? 'سرور'}`} onClose={() => { if (!busy && !pending) onClose() }}>
       <div className="form-stack">
-        <p dir="ltr">{server?.ip} · {server?.state} · {server?.operating_system}</p>
+        <div><CopyableIp value={server?.ip} /><span dir="ltr">{server?.state} · {server?.operating_system}</span></div>
         {error && <p className="platform-error" role="alert">{error}</p>}{result && <p className="platform-result" role="status">{result}</p>}
         <div className="platform-inline">{operations.filter(op => actions[op] && op !== 'reinstall' && !(sharedTest && op === 'delete')).map(op => <Button key={op} disabled={busy || !!pending} variant={op === 'delete' ? 'danger' : 'secondary'} onClick={() => void prepare(actions[op])}>{labels[actions[op]]}</Button>)}</div>
         {operations.includes('reinstall') && <Button disabled={busy || !!pending} onClick={() => void perform(async () => setImages(await platformGet(`/servers/${serverId}/images`)))}>انتخاب سیستم‌عامل برای نصب مجدد</Button>}
@@ -99,7 +100,7 @@ export function ServerManagement({ serverId, onClose }: { serverId: string; onCl
         {secret && <div className="platform-result"><p>رمز فقط در حافظه صفحه است؛ آن را در محل امن ذخیره کنید.</p><p dir="ltr">{secret.username}: <code>{secret.password}</code></p><Button disabled={busy} onClick={() => void perform(async () => { await platformPost(`/servers/${serverId}/credentials/ack`, { claimId: secret.claimId }); setSecret(null) })}>ذخیره کردم؛ پاک کردن رمز</Button></div>}
         {pending && <section className="server-confirmation" aria-label="تأیید عملیات سرور">
           <h3>تأیید {labels[pending.action]}</h3><p>نصب مجدد و حذف، داده‌های سرور را پاک می‌کنند. پورت جدید، پورت قبلی را حذف نمی‌کند.</p>
-          <p dir="ltr">{server?.ip} {pending.body.image ? String(pending.body.image) : ''} {pending.body.port ? `SSH: ${String(pending.body.port)}` : ''}</p>
+          <div><CopyableIp value={server?.ip} /><span dir="ltr">{pending.body.image ? String(pending.body.image) : ''} {pending.body.port ? `SSH: ${String(pending.body.port)}` : ''}</span></div>
           <div className="platform-inline"><Button variant="secondary" disabled={busy} onClick={() => setPending(null)}>انصراف</Button><Button variant="danger" disabled={busy} onClick={() => void execute()}>تأیید اجرای عملیات</Button></div>
         </section>}
         <h3>سابقه و نتیجه عملیات</h3><p className="muted-copy">پذیرش درخواست به معنی موفقیت نهایی نیست. نتیجه واقعی و مجوزهای سرور خودکار تازه می‌شوند.</p>

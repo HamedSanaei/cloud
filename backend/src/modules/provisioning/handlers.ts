@@ -29,7 +29,7 @@ import { applyWalletTransaction } from '../wallets/service.js'
 import type { CloudQueues } from '../../jobs/queue.js'
 import type { ProviderBillingOption, ProviderServerView, RecoveryResult } from '../providers/provider.interface.js'
 import { assertPowerOnFunding, loadFundingFleet, warnLowBalance } from '../billing/funding.js'
-import { handleCustomerOperation, notifyDelayedOperations, reconcileCustomerOperations, recordOperationFailure } from '../servers/management.js'
+import { handleCustomerOperation, isOrphanedPowerOperation, notifyDelayedOperations, reconcileCustomerOperations, recordOperationFailure } from '../servers/management.js'
 import { notifyServerOperation, publishNotification } from '../notifications/service.js'
 import type { ManagementAction } from '../providers/customer.interface.js'
 import { purgeExpiredServerSecrets } from '../servers/secrets.js'
@@ -310,7 +310,7 @@ export async function handleReconcile(ctx: HandlerContext, data: { operationId?:
   const ops = data.operationId
     ? [await db.query.providerOperations.findFirst({ where: (t) => eq(t.id, data.operationId ?? '') })]
     : await db.query.providerOperations.findMany({
-        where: (t) => eq(t.status, 'unknown'),
+        where: (t) => and(eq(t.status, 'unknown'), eq(t.kind, 'provision'), eq(t.referenceType, 'order')),
         orderBy: (t, { asc }) => [asc(t.createdAt)],
         limit: 20,
       })
@@ -318,8 +318,7 @@ export async function handleReconcile(ctx: HandlerContext, data: { operationId?:
   let resolved = 0
   let underReview = 0
   for (const op of ops) {
-    if (!op) continue
-    if (op.status !== 'unknown') continue
+    if (!op || op.status !== 'unknown' || op.kind !== 'provision' || op.referenceType !== 'order') continue
     const provider = getProvider(op.provider)
     if (!provider.supports('reconcile') || !provider.reconcileOrder) {
       await markUnderReview(db, op.id, 'provider does not support order reconciliation')
@@ -390,6 +389,7 @@ export async function resolveOperationByAdmin(
 ): Promise<void> {
   const op = await db.query.providerOperations.findFirst({ where: (t) => eq(t.id, operationId) })
   if (!op) throw new AppError(404, 'not_found', 'عملیات سرویس‌دهنده یافت نشد')
+  if (op.kind !== 'provision' || op.referenceType !== 'order') throw new AppError(409, 'conflict', 'این مسیر فقط برای بررسی عملیات ساخت سرور است')
   if (op.status !== 'unknown' && op.status !== 'needs_reconciliation') {
     throw new AppError(409, 'conflict', `فقط عملیات‌های UNKNOWN قابل تعیین تکلیف دستی هستند (وضعیت فعلی: ${op.status})`)
   }
@@ -584,7 +584,12 @@ export async function handleServerAction(
   if (op.status === 'succeeded' || op.completedAt) return { status: 'already_done' }
   const server = await db.query.servers.findFirst({ where: (t) => eq(t.id, data.serverId) })
   if (!server?.providerServerId) return { status: 'server_not_ready' }
-  if (server.provider === 'hetzner') { await handleCustomerOperation(db, op.id); await queues.addServerSync(server.id, 5000); return { status: 'tracking_provider_action' } }
+  if (server.provider === 'hetzner') {
+    if (isOrphanedPowerOperation(op)) return { status: 'awaiting_provider_evidence' }
+    await handleCustomerOperation(db, op.id)
+    await queues.addServerSync(server.id, 5000)
+    return { status: 'tracking_provider_action' }
+  }
   if (op.status === 'running' || op.status === 'unknown') return { status: 'in_progress' }
   const latest = await db.query.providerOperations.findFirst({
     where: (t) => and(eq(t.kind, 'server_action'), eq(t.referenceId, server.id)),

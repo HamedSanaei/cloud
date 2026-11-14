@@ -1,4 +1,4 @@
-import type { CustomerProvider, ManagementAction } from '../customer.interface.js'
+import type { CustomerProvider, ManagementAction, ServerActionEvidence } from '../customer.interface.js'
 import type { ProviderServerView } from '../provider.interface.js'
 import { ProviderPermanentError, ProviderUnknownError } from '../../../lib/errors.js'
 import { HetznerApiError, object, type HetznerClient } from './client.js'
@@ -33,6 +33,30 @@ export function createCustomerProvider(resolve: (id: string) => { id: string; cl
       if (action.id !== actionId || !['running', 'success', 'error'].includes(String(action.status)) || typeof action.command !== 'string') throw new ProviderUnknownError('Provider action identity or state was not verified')
       return { status: action.status as 'running' | 'success' | 'error', command: action.command,
         ...(action.status === 'error' ? { errorCode: 'provider_action_failed' } : {}) }
+    },
+    async actionHistory(id, actionId) {
+      const route = resolve(id)
+      const base = `/servers/${route.id}/actions`
+      let data: { actions?: unknown }
+      if (actionId === undefined) {
+        data = await route.client.request('GET', `${base}?per_page=50&sort=started:desc`)
+      } else {
+        try { data = { actions: [(await route.client.request('GET', `${base}/${actionId}`)).action] } }
+        catch (error) {
+          if (error instanceof HetznerApiError && error.httpStatus === 404 && error.providerCode === 'not_found') return []
+          throw error
+        }
+      }
+      if (!Array.isArray(data.actions)) throw new ProviderUnknownError('Hetzner action history is unavailable')
+      return data.actions.map(object).flatMap(action => {
+        const { id, command, status, started, finished } = action
+        if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0 || typeof command !== 'string' ||
+          (status !== 'running' && status !== 'success' && status !== 'error') || typeof started !== 'string' ||
+          !Number.isFinite(Date.parse(started)) || !Array.isArray(action.resources) ||
+          !action.resources.map(object).some(resource => resource.type === 'server' && String(resource.id) === route.id)) return []
+        const finishedAt = typeof finished === 'string' && Date.parse(finished) >= Date.parse(started) ? finished : null
+        return [{ id, command, status, startedAt: started, finishedAt } satisfies ServerActionEvidence]
+      })
     },
     async absent(id) {
       try { await inspect(id); return false } catch (error) {

@@ -13,7 +13,8 @@ import { retailBilling, type RetailPeriod } from '../pricing/periods.js'
 import type { ProviderBillingOption, ProviderServerView } from '../providers/provider.interface.js'
 import type { CustomerProvider, ServerAccessBlock, ServerAccessEligibility } from '../providers/customer.interface.js'
 import { HetznerApiError } from '../providers/hetzner/client.js'
-import { customerProvider, findBlockingManagementOperation, managementBlock, managementConflict, managementDto, reconcileCustomerOperation, requestManagement } from './management.js'
+import { customerProvider, findBlockingManagementOperation, isOrphanedPowerOperation, managementBlock, managementConflict, managementDto, reconcileCustomerOperation, requestManagement } from './management.js'
+import { inspectLegacyPowerOperation } from './power-reconciliation.js'
 import { getServerForUser } from './service.js'
 import { claimServerPassword } from './secrets.js'
 
@@ -102,7 +103,10 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
     const operation = await findOperation()
     if (!operation) throw new NotFoundError('عملیات سرور یافت نشد')
     let checkFailed = false
-    try { await reconcileCustomerOperation(db, server, operation) } catch (error) {
+    try {
+      if (isOrphanedPowerOperation(operation)) await inspectLegacyPowerOperation(server, operation)
+      else await reconcileCustomerOperation(db, server, operation)
+    } catch (error) {
       if (!(error instanceof ProviderPermanentError || error instanceof ProviderRetryableError || error instanceof ProviderUnknownError)) throw error
       checkFailed = true
     }

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, ArrowRight, ClipboardList, HardDrive, Search, Server, ShieldCheck, Users } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ClipboardList, HardDrive, Search, Server, Users } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { formatCount, formatFaNumber, formatToman } from '../lib/format'
 import { adminApi, userName, type AdminUser, type ListFilters, type Paged } from './api'
 import { HetznerInventoryPanel } from './HetznerInventoryPanel'
+import { LegacyPowerReview } from './LegacyPowerReview'
 
 const dateLabel = (value?: string | null) => {
   if (!value) return '—'
@@ -346,7 +347,9 @@ export function AdminServerPage() {
               <Field label="آخرین همگام‌سازی" value={timeLabel(info.server.lastSyncedAt)} />
             </dl>
           </Panel>
-          <div className="admin-readonly"><ShieldCheck size={18} /> نسخه اولیه فقط برای مشاهده است؛ امکان تغییر موجودی یا روشن و خاموش‌کردن سرورها از این بخش وجود ندارد.</div>
+          {info.legacyPowerOperation && <Panel title="بررسی عملیات برق بدون رسید">
+            <LegacyPowerReview key={info.legacyPowerOperation.id} serverId={info.server.id} operation={info.legacyPowerOperation} onResolved={result.refetch} />
+          </Panel>}
         </div>
         <div className="admin-detail-side"><Panel title="مالک سرور"><Customer user={info.owner} /></Panel>
           <Panel title="ارتباط با سفارش">

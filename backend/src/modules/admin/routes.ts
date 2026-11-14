@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
-import { eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import type { AppContext } from '../../app.js'
 import { parse } from '../../http/validate.js'
 import { requireAdmin } from '../../http/auth.js'
@@ -170,6 +170,7 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
     const body = parse(z.object({ note: z.string().max(500).optional() }), request.body)
     const op = await db.query.providerOperations.findFirst({ where: (t) => eq(t.id, id) })
     if (!op) throw new NotFoundError('عملیات سرویس‌دهنده یافت نشد')
+    if (op.kind !== 'provision') throw new ConflictError('بازگشایی فقط برای عملیات ساخت سرور مجاز است')
     // NEVER reopen UNKNOWN operations: the provider may have processed the
     // original POST — a retry could create a second paid server.
     if (op.status === 'unknown') {
@@ -200,6 +201,9 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
   app.post('/admin/provider-operations/:id/reconcile', async (request) => {
     requireAdmin(request)
     const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
+    const op = await db.query.providerOperations.findFirst({ where: t => eq(t.id, id) })
+    if (!op) throw new NotFoundError('عملیات سرویس‌دهنده یافت نشد')
+    if (op.kind !== 'provision' || op.referenceType !== 'order') throw new ConflictError('عملیات برق را از جزئیات سرور بررسی کنید')
     await queues.addReconcile(id)
     return { data: { ok: true, queued: true } }
   })
@@ -222,7 +226,11 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
       }
       await queues.addProvision(op.referenceId)
     } else if (op.kind === 'server_action') {
-      await db.update(providerOperations).set({ status: 'pending', lastError: null, updatedAt: new Date() }).where(eq(providerOperations.id, id))
+      if (op.status !== 'failed' || op.completedAt) throw new ConflictError('این عملیات برق قابل ارسال مجدد نیست')
+      const [changed] = await db.update(providerOperations).set({ status: 'pending', lastError: null, updatedAt: new Date() })
+        .where(and(eq(providerOperations.id, id), eq(providerOperations.status, 'failed'), isNull(providerOperations.completedAt)))
+        .returning({ id: providerOperations.id })
+      if (!changed) throw new ConflictError('وضعیت عملیات تغییر کرده است')
       await queues.addServerAction({ operationId: op.id, serverId: op.referenceId, action: (op.action as 'power_on' | 'power_off' | 'reboot') ?? 'reboot' })
     }
     await writeAudit(db, { actorId: admin.id, action: 'admin.provider_operation_retried', targetType: 'provider_operation', targetId: op.id })
