@@ -132,6 +132,10 @@ A confirmed resize changes the subscription price for future invoices and record
 - A stale queued start after termination is rejected. Loss of funding before start dispatch terminally fails that operation without calling Hetzner.
 - Power Off does not stop Hetzner compute charges. The project's existing hourly customer-billing/suspension policy remains separate from provider billing.
 
+### Legacy power operations without a receipt
+
+The customer's Delete section shows the blocking operation ID, request time, live power state, recheck, and support link. In Admin → Servers → server details, **بررسی عملیات برق بدون رسید** reads state and action history through the owning Hetzner project. Match the original dispatch to a terminal Action ID and record how it was matched. The API verifies the server resource, command, dispatch window, terminal status, and that the receipt has not been used before. It records the evidence and audit entry once and releases the lock without reissuing the power command. If the history has no match, ask Hetzner support for a verifiable Action ID and leave the operation unresolved. A current power state or an empty action list cannot establish the original outcome.
+
 ### Credentials and console
 
 New reset/rebuild/rescue secrets use AES-256-GCM with an HKDF-derived context-specific key from AUTH_SECRET. They are bound to server/user/session/operation, expire in five minutes, and are consumed atomically after provider-confirmed completion. Claiming wipes ciphertext and the browser keeps plaintext only in memory for at most 60 seconds; hidden/unmounted views clear it. Existing passwords are not presented as retrievable. There are no secrets in histories, persistent browser storage or backup table data.

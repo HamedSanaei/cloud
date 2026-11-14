@@ -7,6 +7,7 @@ export type { ServerMetrics }
 export interface ServerOperation {
   id: string; action: ManagementAction; status: 'queued' | 'dispatching' | 'provider_accepted' | 'confirmed' | 'outcome_unknown' | 'failed'
   actionId: number | null; createdAt: string; updatedAt: string; completedAt: string | null; message: string | null
+  needsOperator?: boolean
 }
 export interface ServerDetail extends Server {
   lifecycle: ServerLifecycle; providerAvailable: boolean; providerIdentity: string; providerState: string | null

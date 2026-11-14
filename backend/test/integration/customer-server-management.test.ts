@@ -12,8 +12,8 @@ import { createSession, registerUser } from '../../src/modules/auth/service.js'
 import { creditWallet, ensureDefaultWallet } from '../../src/modules/wallets/service.js'
 import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
 import { setFxRate } from '../../src/modules/pricing/service.js'
-import { handleProvision, handleRenewalSweep, handleServerAction, handleServerSync } from '../../src/modules/provisioning/handlers.js'
-import { idempotencyKeys, providerOperations, subscriptions, wallets } from '../../src/db/schema.js'
+import { handleProvision, handleReconcile, handleRenewalSweep, handleServerAction, handleServerSync } from '../../src/modules/provisioning/handlers.js'
+import { idempotencyKeys, providerOperations, subscriptions, users, wallets } from '../../src/db/schema.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 import type { ManagementAction } from '../../src/modules/providers/customer.interface.js'
 
@@ -42,6 +42,11 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     if (path === '/pricing') return json({ pricing: { currency: 'EUR', primary_ips: [{ type: 'ipv4', prices: [{ location: 'hel1', price_hourly: { gross: '0.0008' } }] }] } })
     if (path === '/images') return json({ images: [{ id: 11, name: 'ubuntu-24.04', architecture: 'x86', type: 'system', status: 'available' }] })
     if (/^\/servers\/\d+\/metrics$/.test(path)) return json({ metrics: { time_series: { cpu: { values: [[100, '15'], [160, null], [220, 'NaN'], [280, '0']] }, 'network.0.bandwidth.in': { values: [[100, '42']] } } } })
+    if (method === 'GET' && /^\/servers\/\d+\/actions$/.test(path)) {
+      const id = Number(path.split('/')[2]), actionId = request.searchParams.get('id')
+      return json({ actions: [...actions.values()].filter(action => (actionId === null || String(action.id) === actionId) &&
+        (action.resources as Array<{ id: number }> | undefined)?.some(resource => resource.id === id)) })
+    }
     if (method === 'POST' && path === '/servers') {
       const body = JSON.parse(String(init?.body)), id = ++sequence
       const machine = { id, name: body.name, status: 'initializing', created: new Date().toISOString(), server_type: type, primary_disk_size: 40,
@@ -340,6 +345,61 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     const stored = (await ctx.db.query.serverSecrets.findFirst({ where: t => eq(t.id, grant.grantId) }))!
     expect(stored.encrypted).toBeNull(); expect(stored.claimedAt).toBeTruthy()
     await expect(app.injectWS(path, upgrade(headers))).rejects.toThrow(/403/)
+  })
+  it('keeps receipt-less legacy shutdown locked until an admin verifies terminal evidence, then allows safe owner deletion', async () => {
+    const p = await buy(); await activate(p)
+    const admin = await registerUser(ctx.db, { email: `operator-${randomUUID()}@fixture.test`, password: 'Fixture-customer-123!' })
+    await ctx.db.update(users).set({ role: 'admin' }).where(eq(users.id, admin.id))
+    const adminSession = await createSession(ctx.db, admin.id, {})
+    const adminHeaders = { authorization: `Bearer ${adminSession.token}` }
+    const started = new Date(Date.now() - 3_600_000)
+    const [op] = await ctx.db.insert(providerOperations).values({ provider: 'hetzner', kind: 'server_action', action: 'power_off',
+      referenceType: 'server', referenceId: p.server.id, businessKey: randomUUID(), status: 'unknown', attemptCount: 1,
+      createdAt: started, updatedAt: new Date(started.getTime() + 30_000), lastError: 'Hetzner mutation outcome is unknown' }).returning()
+    const opId = op!.id, actionId = 424242
+    const owner = { headers: p.headers, remoteAddress: p.remoteAddress }
+    const serverUrl = `/api/servers/${p.server.id}`, adminUrl = `/api/admin/console/servers/${p.server.id}/legacy-power/${opId}`
+    const review = () => app.inject({ url: adminUrl, headers: adminHeaders })
+    const resolve = () => app.inject({ method: 'POST', url: adminUrl, headers: adminHeaders, payload: { actionId, note: 'Verified owning project receipt and original dispatch time' } })
+    const recheck = () => app.inject({ method: 'POST', url: `${serverUrl}/management/operations/${opId}/recheck`, ...owner })
+    const worker = () => handleServerAction(ctx, { operationId: opId, serverId: p.server.id, action: 'power_off' })
+    const requestDelete = () => app.inject({ method: 'POST', url: `${serverUrl}/management/actions`, ...owner,
+      headers: { ...p.headers, 'idempotency-key': randomUUID() }, payload: { action: 'delete', hostname: 'fixture-server', confirm: true } })
+    expect((await requestDelete()).statusCode).toBe(409)
+    expect((await app.inject({ url: adminUrl, ...owner })).statusCode).toBe(403)
+    expect((await review()).json().data).toEqual({ state: 'active', candidates: [] })
+    expect((await resolve()).statusCode).toBe(409)
+    expect((await app.inject({ method: 'POST', url: `/api/admin/provider-operations/${opId}/mark-rejected`, headers: adminHeaders, payload: {} })).statusCode).toBe(409)
+    expect(await handleReconcile(ctx, { operationId: opId })).toEqual({ resolved: 0, underReview: 0 })
+    const [checkA, checkB] = await Promise.all([recheck(), recheck(), worker()])
+    for (const result of [checkA, checkB]) expect(result.json().data.operation).toMatchObject({ status: 'outcome_unknown', needsOperator: true })
+    actions.set(actionId, { id: actionId, command: 'stop_server', status: 'running', started: started.toISOString(), resources: [{ type: 'server', id: p.providerId }] })
+    expect((await resolve()).statusCode).toBe(409)
+    Object.assign(actions.get(actionId)!, { status: 'error', finished: new Date(started.getTime() + 5_000).toISOString() })
+    const [first, second] = await Promise.all([resolve(), resolve(), recheck(), worker()])
+    expect([first, second].map(result => result.statusCode)).toEqual([200, 200])
+    expect((await recheck()).json().data.operation.status).toBe('failed')
+    expect(await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.id, opId) })).toMatchObject({
+      status: 'failed', attemptCount: 1, responseMetadata: { operatorResolution: { actionId, actorId: admin.id, providerStatus: 'error', observedState: 'active' } },
+    })
+    expect((await ctx.db.query.auditLogs.findMany({ where: t => eq(t.targetId, opId) })).filter(row => row.action === 'admin.legacy_power_operation.resolved')).toHaveLength(1)
+    expect((await app.inject({ method: 'POST', url: `/api/admin/provider-operations/${opId}/retry`, headers: adminHeaders })).statusCode).toBe(409)
+    expect(calls.filter(c => c.path === `/servers/${p.providerId}/actions`).every(c => c.method === 'GET' && c.account === 'Bearer fixture-project-secret')).toBe(true)
+    expect(calls.filter(c => c.path === `/servers/${p.providerId}/actions/poweroff`)).toHaveLength(0)
+    const deleted = await requestDelete()
+    expect(deleted.statusCode, deleted.body).toBe(202)
+    const deletionId = deleted.json().data.id
+    const balance = (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, p.wallet.id) }))!.balanceRial
+    try {
+      loseDeleteResponse = true
+      await handleServerAction(ctx, { operationId: deletionId, serverId: p.server.id, action: 'delete' })
+    } finally { loseDeleteResponse = false }
+    await handleServerSync(ctx, { serverId: p.server.id })
+    expect((await ctx.db.query.servers.findFirst({ where: t => eq(t.id, p.server.id) }))?.status).toBe('terminated')
+    expect(await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.serverId, p.server.id) })).toMatchObject({ status: 'cancelled', autoRenew: false })
+    expect((await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, p.wallet.id) }))?.balanceRial).toBe(balance)
+    expect((await ctx.db.query.invoices.findFirst({ where: t => eq(t.orderId, p.orderId) }))?.status).toBe('paid')
+    expect(calls.filter(c => c.method === 'DELETE' && c.path === `/servers/${p.providerId}`)).toHaveLength(1)
   })
   it('reports console eligibility and revokes an unused grant only for its browser session', async () => {
     const p = await buy(); await activate(p)

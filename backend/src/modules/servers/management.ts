@@ -63,7 +63,17 @@ export function managementDto(op: Operation) {
   return { id: op.id, action: op.action, status: op.status === 'succeeded' ? 'confirmed' : op.status === 'failed' ? 'failed'
     : unknown ? 'outcome_unknown' : op.status === 'pending' ? 'queued' : meta?.accepted ? 'provider_accepted' : 'dispatching',
     actionId: meta?.actionId ?? null, createdAt: op.createdAt.toISOString(), updatedAt: op.updatedAt.toISOString(),
-    completedAt: op.completedAt?.toISOString() ?? null, message: op.status === 'failed' ? 'عملیات انجام نشد؛ حفاظت، وضعیت سرور یا دسترسی پروژه را بررسی کنید.' : unknown ? 'نتیجهٔ ارائه‌دهنده هنوز قابل تأیید نیست؛ وضعیت را دوباره بررسی کنید.' : null }
+    completedAt: op.completedAt?.toISOString() ?? null, needsOperator: isOrphanedPowerOperation(op),
+    message: op.status === 'failed' ? 'عملیات انجام نشد؛ حفاظت، وضعیت سرور یا دسترسی پروژه را بررسی کنید.' : isOrphanedPowerOperation(op)
+      ? 'این درخواست رسید قابل پیگیری ندارد. شناسهٔ عملیات را برای بررسی سابقهٔ ارائه‌دهنده به پشتیبانی بدهید.'
+      : unknown ? 'نتیجهٔ ارائه‌دهنده هنوز قابل تأیید نیست؛ وضعیت را دوباره بررسی کنید.' : null }
+}
+
+export function isOrphanedPowerOperation(op: Operation) {
+  const receipt = op.responseMetadata as { actionId?: unknown; accepted?: unknown; command?: unknown } | null
+  return op.provider === 'hetzner' && op.kind === 'server_action' && op.referenceType === 'server' &&
+    (op.action === 'power_off' || op.action === 'power_on') && (op.status === 'unknown' || op.status === 'needs_reconciliation') && !op.completedAt &&
+    op.attemptCount > 0 && !receipt?.actionId && !receipt?.accepted && !receipt?.command && !op.providerRequestId && !op.providerCorrelationId
 }
 function inputHash(value: unknown) { return createHash('sha256').update(JSON.stringify(value)).digest('hex') }
 
@@ -178,7 +188,7 @@ export async function handleCustomerOperation(db: DbClient, operationId: string)
       }
     }
     return !!(await tx.update(providerOperations).set({ status: 'running', attemptCount: sql`${providerOperations.attemptCount} + 1`, updatedAt: new Date() })
-      .where(and(eq(providerOperations.id, operation.id), eq(providerOperations.status, 'pending'))).returning({ id: providerOperations.id }))[0]
+      .where(and(eq(providerOperations.id, operation.id), eq(providerOperations.status, 'pending'), isNull(providerOperations.completedAt))).returning({ id: providerOperations.id }))[0]
   })
   if (!claim) return
   let dispatched = false, accepted = false

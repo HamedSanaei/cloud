@@ -1,6 +1,5 @@
 /**
- * Admin console backed by the website PostgreSQL DB. Sales switches are the
- * only mutations here and are authorized, transactional and audited.
+ * Admin console backed by the website PostgreSQL DB, with audited operator actions.
  * No provider credentials, password hashes, TOTP material or platform tokens
  * are returned. The canonical site-authority guard runs before these routes.
  */
@@ -19,6 +18,8 @@ import { rialToToman } from '../../lib/money.js'
 import { isSiteAuthority } from '../integration/authority.js'
 import { writeAudit } from '../audit/service.js'
 import { listProviders } from '../providers/registry.js'
+import { findBlockingManagementOperation, isOrphanedPowerOperation, managementDto } from '../servers/management.js'
+import { inspectLegacyPowerOperation, resolveLegacyPowerOperation } from '../servers/power-reconciliation.js'
 
 const paging = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),
@@ -297,6 +298,28 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
     const s = await ctx.db.query.servers.findFirst({ where: t => eq(t.id, id) })
     if (!s) throw new NotFoundError('سرور یافت نشد')
     const owner = await ctx.db.query.users.findFirst({ where: t => eq(t.id, s.userId) })
-    return { data: { server: serverDto(s), owner: owner ? userDto(owner) : null } }
+    const operation = s.provider === 'hetzner' ? await findBlockingManagementOperation(ctx.db, s.id) : null
+    return { data: { server: serverDto(s), owner: owner ? userDto(owner) : null,
+      legacyPowerOperation: operation && isOrphanedPowerOperation(operation) ? managementDto(operation) : null } }
+  })
+
+  const operationParams = idParam.extend({ operationId: z.string().uuid() })
+  app.get('/servers/:id/legacy-power/:operationId', { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const { id, operationId } = parse(operationParams, request.params)
+    const server = await ctx.db.query.servers.findFirst({ where: t => eq(t.id, id) })
+    const operation = await ctx.db.query.providerOperations.findFirst({ where: t => and(eq(t.id, operationId), eq(t.referenceId, id)) })
+    if (!server || !operation) throw new NotFoundError('عملیات سرور یافت نشد')
+    const { view, candidates } = await inspectLegacyPowerOperation(server, operation)
+    reply.header('Cache-Control', 'no-store')
+    return { data: { state: view.state, candidates } }
+  })
+  app.post('/servers/:id/legacy-power/:operationId', { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async request => {
+    const admin = requireAdmin(request)
+    const { id, operationId } = parse(operationParams, request.params)
+    const input = parse(z.object({ actionId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), note: z.string().trim().min(1).max(500) }).strict(), request.body)
+    const server = await ctx.db.query.servers.findFirst({ where: t => eq(t.id, id) })
+    if (!server) throw new NotFoundError('سرور یافت نشد')
+    await resolveLegacyPowerOperation(ctx.db, server, operationId, admin.id, input)
+    return { data: { ok: true } }
   })
 }

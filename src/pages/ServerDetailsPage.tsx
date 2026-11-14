@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { ArrowRight, HardDrive, RefreshCw } from 'lucide-react'
 import { Button, LinkButton } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import { CopyableIp } from '../components/ui/CopyableIp'
 import { Select } from '../components/ui/FormControls'
 import { PageHeader } from '../components/ui/PageHeader'
 import { LoadingState, QueryError } from '../components/ui/States'
@@ -25,6 +26,7 @@ type ActionRequest = { action: ManagementAction; input: Record<string, unknown> 
 export function ServerDetailsPage() {
   const { id = '' } = useParams(), [search, setSearch] = useSearchParams(), tab = search.get('tab') || 'overview'
   const fresh = useRef(false)
+  const deleteBlockId = useId()
   const detail = useApiQuery(() => {
     const refresh = fresh.current
     fresh.current = false
@@ -46,7 +48,8 @@ export function ServerDetailsPage() {
       const result = await recheckServerOperation(id, operation.id)
       const message = result.operation.status === 'confirmed' ? 'ارائه‌دهنده انجام عملیات را تأیید کرد.'
         : result.operation.status === 'failed' ? 'عملیات ناموفق بود. وضعیت فعلی سرور را بررسی کنید.'
-          : result.checkFailed ? 'تأیید نتیجه از ارائه‌دهنده ممکن نشد. دوباره بررسی کنید یا با پشتیبانی تماس بگیرید.'
+          : result.operation.needsOperator ? 'این عملیات همچنان به بررسی پشتیبانی نیاز دارد. شناسهٔ عملیات را در تیکت وارد کنید.'
+            : result.checkFailed ? 'تأیید نتیجه از ارائه‌دهنده ممکن نشد. دوباره بررسی کنید یا با پشتیبانی تماس بگیرید.'
             : 'نتیجه هنوز نهایی نشده است. اگر این وضعیت ادامه داشت، با پشتیبانی تماس بگیرید.'
       setChecked({ serverId: id, operationId: operation.id, message })
     } catch {
@@ -102,12 +105,12 @@ export function ServerDetailsPage() {
     <PageHeader title="مشخصات و مدیریت سرور" subtitle={`${server.name} · ${server.provider ?? 'ارائه‌دهنده'}`} icon={<HardDrive />}
       actions={<><LinkButton to="/servers" variant="secondary" icon={<ArrowRight size={17} />}>بازگشت به سرورها</LinkButton><Button variant="secondary" disabled={detail.loading} icon={<RefreshCw size={16} />} onClick={recheck}>بروزرسانی</Button></>} />
     <Card className="server-identity"><div><h2>{server.name}</h2><p>{[server.facts?.location || server.datacenter, server.facts?.image || server.os, server.facts?.serverType || server.serverType].filter(Boolean).join(' · ')}</p></div>
-      <LifecycleBadge state={server.lifecycle} /><div><p>IPv4: <bdi>{server.facts?.ipv4 ?? missing}</bdi></p><p>IPv6: <bdi>{server.facts?.ipv6 ?? missing}</bdi></p></div>
+      <LifecycleBadge state={server.lifecycle} /><dl className="server-ip-list"><div><dt>IPv4</dt><dd><CopyableIp value={server.facts?.ipv4 ?? server.ip} /></dd></div><div><dt>IPv6</dt><dd><CopyableIp value={server.facts?.ipv6 ?? server.ipv6} /></dd></div></dl>
     </Card>
     <nav className="server-detail-tabs" aria-label="مدیریت سرور">{tabs.map(([value, label]) => <button key={value} aria-current={(value === tab || value === 'console' && ['storage', 'network'].includes(tab)) ? 'page' : undefined} onClick={() => setSearch({ tab: value })}>{label}</button>)}</nav>
     {!server.providerAvailable && server.lifecycle !== 'terminated' && <p className="server-notice" role="status">اطلاعات زندهٔ ارائه‌دهنده فعلاً قابل دریافت نیست. نتیجهٔ عملیات یا مقدار مصرف حدس زده نمی‌شود.</p>}
     {detail.error && <QueryError message={detail.error} onRetry={refresh} />}
-    {(tab === 'operations' || tab === 'resize') && feedback && <p className="server-notice" role="status">{feedback}</p>}
+    {(tab === 'operations' || tab === 'resize' || !blockingOperation) && feedback && <p className="server-notice" role="status">{feedback}</p>}
     {tab === 'overview' && <ServerOverview server={server} />}
     {tab === 'monitoring' && <ServerMonitoring server={server} />}
     {tab === 'operations' && <><Card><h2>عملیات برق سرور</h2><p className="server-notice">خاموشی نرم با خاموشی اجباری متفاوت است. خاموش‌کردن VM هزینهٔ Hetzner را متوقف نمی‌کند.</p>
@@ -128,7 +131,21 @@ export function ServerDetailsPage() {
     {tab === 'network' && <ServerNetwork server={server} disabled={disabled} ask={ask} />}
     {!['overview', 'monitoring', 'operations', 'resize', 'access', 'console', 'storage', 'network'].includes(tab) && <Card><p>این بخش یافت نشد.</p><Button onClick={() => setSearch({ tab: 'overview' })}>نمای کلی</Button></Card>}
     <ServerBillingTerminationState server={server} />
-    <Card className="server-danger-zone"><div><h3>حذف دائمی سرور</h3><p>داده‌ها از بین می‌روند. حذف باید در ارائه‌دهنده تأیید شود.</p></div><Button variant="danger" disabled={disabled} onClick={() => ask('delete')}>حذف دائمی سرور</Button></Card>
+    <Card className="server-danger-zone">
+      <div><h3>حذف دائمی سرور</h3><p>داده‌ها از بین می‌روند. حذف باید در ارائه‌دهنده تأیید شود.</p></div>
+      <Button variant="danger" disabled={disabled} aria-describedby={blockingOperation ? deleteBlockId : undefined} onClick={() => ask('delete')}>حذف دائمی سرور</Button>
+      {blockingOperation && <div className="server-notice server-operation-recovery server-delete-block" id={deleteBlockId}>
+        <p>حذف تا مشخص‌شدن نتیجهٔ «{actionLabels[blockingOperation.action] ?? 'عملیات سرور'}» در دسترس نیست.</p>
+        <p>زمان درخواست <time dateTime={blockingOperation.createdAt}>{formatFaDateTime(blockingOperation.createdAt)}</time> · وضعیت برق {server.providerState === 'active' ? 'روشن' : server.providerState === 'suspended' ? 'خاموش' : 'نامشخص'}</p>
+        <p>شناسهٔ عملیات <bdi>{blockingOperation.id}</bdi></p>
+        {blockingOperation.needsOperator && <p>رسید این درخواست ثبت نشده است. برای بررسی سابقهٔ ارائه‌دهنده، شناسهٔ عملیات را در تیکت پشتیبانی وارد کنید.</p>}
+        {feedback && tab !== 'operations' && tab !== 'resize' && <p role="status">{feedback}</p>}
+        <div className="server-inline-actions">
+          <Button variant="secondary" size="sm" disabled={checkingState} onClick={() => void checkOperation(blockingOperation)}>بررسی دوبارهٔ عملیات</Button>
+          <LinkButton variant="secondary" size="sm" to="/tickets">تماس با پشتیبانی</LinkButton>
+        </div>
+      </div>}
+    </Card>
     {request && <DestructiveConfirmation key={key.current} server={server} action={request.action} busy={busy} error={error} onClose={() => setRequest(null)} onConfirm={() => { void confirm() }} />}
     {secretOperation && <OneTimePassword server={server} operationId={secretOperation} onClose={() => { setSecretOperation(null); refresh() }} />}
   </div>
@@ -210,7 +227,9 @@ function ServerStorage({ server }: { server: ServerDetail }) {
 }
 function ServerNetwork({ server, disabled, ask }: { server: ServerDetail; disabled: boolean; ask: (action: ManagementAction, input?: Record<string, unknown>) => void }) {
   const f = server.facts
-  return <div className="server-detail-columns"><Card><h2>شبکه و آدرس‌ها</h2><dl className="server-facts"><div><dt>IPv4</dt><dd><bdi>{f?.ipv4 ?? missing}</bdi></dd></div><div><dt>IPv6</dt><dd><bdi>{f?.ipv6 ?? missing}</bdi></dd></div><div><dt>Floating IP</dt><dd>{f ? f.floatingIps.join('، ') || 'گزارش نشده' : missing}</dd></div></dl>{f?.privateNetworks.map(network => <p key={network.id}>شبکهٔ خصوصی {network.id}: <bdi>{network.ip}</bdi></p>)}<p className="server-muted">تغییر شبکه و منابع مشترک پروژه بدون اثبات مالکیت اختصاصی مجاز نیست.</p></Card>
+  return <div className="server-detail-columns"><Card><h2>شبکه و آدرس‌ها</h2><dl className="server-ip-list"><div><dt>IPv4</dt><dd><CopyableIp value={f?.ipv4 ?? server.ip} /></dd></div><div><dt>IPv6</dt><dd><CopyableIp value={f?.ipv6 ?? server.ipv6} /></dd></div>
+    {f?.privateNetworks.map(network => <div key={network.id}><dt>شبکهٔ خصوصی {network.id}</dt><dd><CopyableIp value={network.ip} /></dd></div>)}</dl>
+    <dl className="server-facts"><div><dt>شناسه‌های Floating IP</dt><dd>{f ? f.floatingIps.join('، ') || 'گزارش نشده' : missing}</dd></div></dl><p className="server-muted">تغییر شبکه و منابع مشترک پروژه بدون اثبات مالکیت اختصاصی مجاز نیست.</p></Card>
     <Card><h2>Firewall، Rescue و حفاظت</h2>{f?.firewalls.map(firewall => <p key={firewall.id}>Firewall ID: {firewall.id} · {firewall.status}</p>)}<p>Rescue: {f?.rescueEnabled == null ? missing : f.rescueEnabled ? 'فعال' : 'غیرفعال'}</p>
       <div className="server-inline-actions"><Button variant="secondary" disabled={disabled || f?.rescueEnabled == null} onClick={() => ask(f?.rescueEnabled ? 'disable_rescue' : 'enable_rescue')}>{f?.rescueEnabled ? 'غیرفعال‌سازی Rescue' : 'فعال‌سازی Rescue'}</Button><Button variant="secondary" disabled={disabled || !f?.isoId} onClick={() => ask('detach_iso')}>قطع ISO متصل</Button></div><p>انتخاب و اتصال ISO جدید در این پروژه فعال نیست.</p>
       {f?.protection && <><p>حفاظت حذف: {f.protection.delete ? 'فعال' : 'غیرفعال'} · حفاظت Rebuild: {f.protection.rebuild ? 'فعال' : 'غیرفعال'}</p><div className="server-inline-actions"><Button variant="secondary" disabled={disabled} onClick={() => ask('change_protection', { delete: !f.protection!.delete, rebuild: f.protection!.rebuild })}>تغییر حفاظت حذف</Button><Button variant="secondary" disabled={disabled} onClick={() => ask('change_protection', { delete: f.protection!.delete, rebuild: !f.protection!.rebuild })}>تغییر حفاظت Rebuild</Button></div></>}

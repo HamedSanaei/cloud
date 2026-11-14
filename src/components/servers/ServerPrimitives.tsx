@@ -2,6 +2,7 @@ import { LoaderCircle } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { lifecycleLabels } from '../../lib/serverLifecycle'
 import type { Server, ServerLifecycle } from '../../lib/types'
+import { CopyableIp } from '../ui/CopyableIp'
 
 export function LifecycleBadge({ state }: { state: ServerLifecycle }) {
   const busy = state === 'queued' || state === 'provisioning' || state === 'deleting'
@@ -20,7 +21,7 @@ export function ServerTableRow({ server, onPlatformManage }: { server: Server; o
     <td><strong>{server.name}</strong><small>{server.datacenter || 'در حال دریافت'}{server.os ? ` · ${server.os}` : ''}</small></td>
     <td data-label="وضعیت"><LifecycleBadge state={state} />{ready && server.status === 'inactive' && <small>خاموش</small>}</td>
     <td data-label="منابع">{[server.cpu, server.ram, server.disk].filter(Boolean).join(' · ') || 'در حال دریافت'}</td>
-    <td data-label="IPv4"><bdi>{server.ip || 'در حال دریافت'}</bdi></td>
+    <td data-label="آدرس‌های آی‌پی"><CopyableIp value={server.ip} />{server.ipv6 && <CopyableIp value={server.ipv6} />}</td>
     <td>{(server.platformServerId ? ready : inspectable) ? server.platformServerId
       ? <button className="button button--secondary button--sm" onClick={onPlatformManage} disabled={!onPlatformManage}>مدیریت و نتیجه عملیات</button>
       : <Link className="button button--secondary button--sm" to={`/servers/${server.id}`}>مشاهده جزئیات</Link>

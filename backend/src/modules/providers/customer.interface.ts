@@ -10,11 +10,13 @@ export interface ServerAccessEligibility {
 }
 export interface ManagementResult { actionId: number; command?: string; secret?: string }
 export interface ManagementObservation { status: 'running' | 'success' | 'error'; command: string; errorCode?: string }
+export interface ServerActionEvidence extends ManagementObservation { id: number; startedAt: string; finishedAt: string | null }
 export interface ServerMetrics { start: string; end: string; step: number; series: Record<string, Array<[number, number | null]>> }
 export interface CustomerProvider {
   inspect(id: string): Promise<ProviderServerView>
   submit(id: string, action: ManagementAction, input: Record<string, unknown>): Promise<ManagementResult>
   observe(id: string, actionId: number): Promise<ManagementObservation>
+  actionHistory(id: string, actionId?: number): Promise<ServerActionEvidence[]>
   absent(id: string): Promise<boolean>
   metrics(id: string, start: Date, end: Date, step: number): Promise<ServerMetrics>
   images(id: string): Promise<Array<{ id: string; name: string; architecture: string; minDiskGb: number }>>

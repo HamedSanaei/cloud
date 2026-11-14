@@ -1,5 +1,6 @@
 import { Clock3, Inbox, LifeBuoy, MessageCircleReply, Plus, SearchCheck } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
+import { CopyableIp } from '../components/ui/CopyableIp'
 import { useSearchParams } from 'react-router-dom'
 import { Button } from '../components/ui/Button'
 import { Card, SectionHeading } from '../components/ui/Card'
@@ -155,7 +156,7 @@ export function TicketsPage() {
       </Modal>
       <Modal open={!!selected || !!linkedId} onClose={closeDetail} title={selected?.title || 'جزئیات تیکت'}>
         {selected ? <div className="form-stack"><p>{selected.description}</p><strong>سرور مربوطه: {selected.relatedServer?.name ?? 'سفارشی ندارم'}</strong>
-          {selected.relatedServer ? <><p dir="ltr">{selected.relatedServer.ip || selected.relatedServer.id}</p>{!selected.serverId ? <p>این سرور حذف شده است؛ اطلاعات زمان ثبت درخواست نگه داشته شده است.</p> : null}</> : null}</div>
+          {selected.relatedServer ? <><CopyableIp value={selected.relatedServer.ip} />{!selected.serverId ? <p>این سرور حذف شده است؛ اطلاعات زمان ثبت درخواست نگه داشته شده است.</p> : null}</> : null}</div>
           : linked.error ? <QueryError message={linked.error} onRetry={linked.refetch} /> : <LoadingState label="در حال دریافت تیکت…" />}
       </Modal>
     </div>
