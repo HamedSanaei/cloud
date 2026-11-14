@@ -22,7 +22,7 @@ import { checkDomainAvailability, createServer, getOfferImages, getStorefrontCat
 import { claimLifecycleNotice, rememberAcceptedServer } from '../lib/serverLifecycle'
 import { formatFaNumber } from '../lib/format'
 import { useApiQuery } from '../hooks/useApiQuery'
-import type { BillingPeriod } from '../lib/types'
+import type { BillingPeriod, DomainAvailability } from '../lib/types'
 import { useAuth } from '../auth/AuthContext'
 import { LocationCards } from '../components/ui/LocationCards'
 import { checkoutFailure, clearCheckoutDraft, minimumCreationBalance, readCheckoutDraft, saveCheckoutDraft } from '../lib/serverCheckout'
@@ -254,41 +254,51 @@ const domainSteps = ['انتخاب دامنه', 'مالی', 'تایید نهای
 export function RegisterDomainPage() {
   const [step, setStep] = useState(0)
   const [domain, setDomain] = useState('')
-  const [searched, setSearched] = useState(false)
+  const [availability, setAvailability] = useState<DomainAvailability | null>(null)
+  const availabilityRequest = useRef(0)
   const [checking, setChecking] = useState(false)
-  const [available, setAvailable] = useState(true)
-  const [price, setPrice] = useState('۹۹۰ هزار تومان')
   const [period, setPeriod] = useState('1')
   const [submitting, setSubmitting] = useState(false)
   const navigate = useNavigate()
   const { showToast } = useToast()
   const normalizedDomain = useMemo(() => domain.trim().replace(/^https?:\/\//, '').replace(/\/$/, ''), [domain])
+  const searched = availability?.domain === normalizedDomain
+  const available = searched && availability?.available === true
+  const canContinue = available && !checking && !submitting
+  const price = availability && availability.pricePerYear > 0 ? `${formatFaNumber(availability.pricePerYear)} تومان / سال` : 'در دسترس نیست'
+
+  useEffect(() => () => { availabilityRequest.current++ }, [])
+
+  const changeDomain = (value: string) => {
+    availabilityRequest.current++
+    setDomain(value)
+    setAvailability(null)
+    setChecking(false)
+  }
 
   const checkAvailability = async () => {
+    const request = ++availabilityRequest.current
+    const requestedDomain = normalizedDomain
+    setAvailability(null)
     setChecking(true)
     try {
-      const result = await checkDomainAvailability(normalizedDomain)
-      setAvailable(result.available)
-      setSearched(true)
-      if (result.available && result.pricePerYear > 0) {
-        setPrice(`${formatFaNumber(result.pricePerYear)} تومان / سال`)
-      }
+      const result = await checkDomainAvailability(requestedDomain)
+      if (request !== availabilityRequest.current) return
+      if (result.domain !== requestedDomain) throw new Error('پاسخ بررسی با دامنهٔ درخواستی مطابقت ندارد؛ دوباره بررسی کنید.')
+      setAvailability(result)
       if (!result.available) showToast('این دامنه برای ثبت در دسترس نیست.')
     } catch (error) {
+      if (request !== availabilityRequest.current) return
       showToast(error instanceof Error ? error.message : 'بررسی دامنه ناموفق بود.')
     } finally {
-      setChecking(false)
+      if (request === availabilityRequest.current) setChecking(false)
     }
   }
 
   const finish = async () => {
+    if (!canContinue) return
     if (step < 2) {
       setStep((value) => value + 1)
-      return
-    }
-    if (!isApiConfigured()) {
-      showToast('سفارش دامنه نمونه ثبت شد.')
-      navigate('/domains')
       return
     }
     setSubmitting(true)
@@ -313,7 +323,7 @@ export function RegisterDomainPage() {
           {step === 0 ? (
             <div className="domain-search-step">
               <div className="domain-search-row">
-                <Input label="جستجوی دامنه" value={domain} onChange={(event) => { setDomain(event.target.value); setSearched(false) }} placeholder="example.com" />
+                <Input label="جستجوی دامنه" value={domain} onChange={(event) => changeDomain(event.target.value)} placeholder="example.com" />
                 <Button icon={<Search size={18} />} disabled={!normalizedDomain.includes('.') || checking} onClick={checkAvailability}>{checking ? 'در حال بررسی...' : 'بررسی'}</Button>
               </div>
               {searched ? (
@@ -340,7 +350,7 @@ export function RegisterDomainPage() {
             </div>
           ) : null}
         </div>
-        <div className="wizard-card__footer"><Button variant="secondary" disabled={step === 0 || submitting} onClick={() => setStep((value) => Math.max(0, value - 1))}>مرحله قبل</Button><Button onClick={finish} disabled={(step === 0 && !searched) || submitting}>{submitting ? 'در حال ثبت...' : step === 2 ? 'تایید و ثبت دامنه' : 'مرحله بعد'}</Button></div>
+        <div className="wizard-card__footer"><Button variant="secondary" disabled={step === 0 || submitting} onClick={() => setStep((value) => Math.max(0, value - 1))}>مرحله قبل</Button><Button onClick={finish} disabled={!canContinue}>{submitting ? 'در حال ثبت...' : step === 2 ? 'تایید و ثبت دامنه' : 'مرحله بعد'}</Button></div>
       </Card>
     </div>
   )

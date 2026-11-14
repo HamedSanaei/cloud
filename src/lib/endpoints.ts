@@ -199,11 +199,10 @@ export async function listDomainOrders(): Promise<DomainOrder[]> {
 }
 
 export async function checkDomainAvailability(domain: string): Promise<DomainAvailability> {
-  if (noApi()) return { domain, available: true, pricePerYear: 990000 }
   const payload = await apiGet<DomainAvailability | { data: DomainAvailability }>(
     `/domains/availability?domain=${encodeURIComponent(domain)}`,
   )
-  return unwrapOne(payload, { domain, available: true, pricePerYear: 990000 })
+  return unwrapOne(payload, { domain, available: false, pricePerYear: 0 })
 }
 
 export async function registerDomain(payload: { domain: string; periodYears: number; walletId?: string }): Promise<DomainOrder> {
