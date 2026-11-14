@@ -25,7 +25,7 @@ export const registerPaymentRoutes: FastifyPluginAsync<{ ctx: AppContext }> = as
   })
   app.post('/wallets/recharges', { config: { rateLimit: { max: 10, timeWindow: '10 minutes' } } }, async request => {
     const user = requireUser(request)
-    const input = parse(z.object({ walletId: z.string().uuid(), amountToman: z.number().int().min(10000).max(50000000) }).strict(), request.body)
+    const input = parse(z.object({ walletId: z.string().uuid().optional(), amountToman: z.number().int().min(10000).max(50000000) }).strict(), request.body)
     const key = parse(z.string().min(8).max(200), request.headers['idempotency-key'])
     return { data: await createRecharge(db, user.id, input.walletId, input.amountToman * 10, key) }
   })

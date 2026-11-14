@@ -13,7 +13,7 @@ const createOrderSchema = z.object({
 })
 
 const paySchema = z.object({
-  walletId: z.string().uuid(),
+  walletId: z.string().uuid().optional(),
 })
 
 export const registerOrderRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {

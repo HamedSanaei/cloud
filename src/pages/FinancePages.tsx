@@ -5,26 +5,22 @@ import {
   Download,
   FileText,
   Plus,
-  ReceiptText,
   WalletCards,
 } from 'lucide-react'
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Button, LinkButton } from '../components/ui/Button'
 import { Card, SectionHeading } from '../components/ui/Card'
 import { FilterPanel } from '../components/ui/FilterPanel'
-import { Input, Select, Toggle } from '../components/ui/FormControls'
+import { Select } from '../components/ui/FormControls'
 import { MetricCard } from '../components/ui/MetricCard'
-import { Modal } from '../components/ui/Modal'
 import { PageHeader } from '../components/ui/PageHeader'
 import { EmptyState, LoadingState, QueryError } from '../components/ui/States'
 import { Badge, Table } from '../components/ui/Table'
-import { useToast } from '../components/ui/Toast'
 import { useApiQuery } from '../hooks/useApiQuery'
-import { ApiError, isApiConfigured } from '../lib/apiClient'
-import { createWallet, getWalletSummary, listChargeRequests, listInvoices, listTransactions, listWallets } from '../lib/endpoints'
-import { formatCount, formatFaDateTime, formatToman } from '../lib/format'
-import { getIntegrationStatus } from '../lib/platformClient'
+import { ApiError } from '../lib/apiClient'
+import { getWalletSummary, listChargeRequests, listInvoices, listTransactions } from '../lib/endpoints'
+import { formatFaDateTime, formatToman } from '../lib/format'
 import { WalletRecharge } from '../components/ui/WalletRecharge'
 import { WalletPaymentStatus } from '../components/ui/WalletPaymentStatus'
 import { useAuth } from '../auth/AuthContext'
@@ -41,60 +37,25 @@ export function WalletPage() {
   const { user } = useAuth()
   const [searchParams] = useSearchParams()
   const returnToCheckout = searchParams.get('returnTo') === 'server-checkout'
-  const [modalOpen, setModalOpen] = useState(false)
-  const [defaultWallet, setDefaultWallet] = useState(true)
-  const [walletName, setWalletName] = useState('')
-  const [walletDescription, setWalletDescription] = useState('')
-  const [creating, setCreating] = useState(false)
   const [period, setPeriod] = useState('24h')
-  const [walletFilter, setWalletFilter] = useState('')
-  const { showToast } = useToast()
 
   const summary = useApiQuery(getWalletSummary)
-  const wallets = useApiQuery(listWallets)
   const transactions = useApiQuery(listTransactions)
-  const integration = useApiQuery(getIntegrationStatus)
-  const legacyWallets = integration.data?.enabled === false
-  const refreshWallets = wallets.refetch, refreshSummary = summary.refetch, refreshTransactions = transactions.refetch
+  const refreshSummary = summary.refetch, refreshTransactions = transactions.refetch
   useEffect(() => {
-    const refresh = () => { refreshWallets(); refreshSummary(); refreshTransactions() }
+    const refresh = () => { refreshSummary(); refreshTransactions() }
     window.addEventListener('focus', refresh)
     return () => window.removeEventListener('focus', refresh)
-  }, [refreshWallets, refreshSummary, refreshTransactions])
-
-  const createWalletSubmit = async (event: FormEvent) => {
-    event.preventDefault()
-    if (!isApiConfigured()) {
-      setModalOpen(false)
-      setWalletName('')
-      setWalletDescription('')
-      showToast('کیف پول نمونه ایجاد شد.')
-      return
-    }
-    setCreating(true)
-    try {
-      await createWallet({ name: walletName, description: walletDescription || undefined, isDefault: defaultWallet })
-      setModalOpen(false)
-      setWalletName('')
-      setWalletDescription('')
-      wallets.refetch()
-      summary.refetch()
-      showToast('کیف پول با موفقیت ایجاد شد.')
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : 'ایجاد کیف پول ناموفق بود.')
-    } finally {
-      setCreating(false)
-    }
-  }
+  }, [refreshSummary, refreshTransactions])
 
   const summaryData = summary.data
   const visibleTransactions = useMemo(() => {
     const since = Date.now() - (period === '24h' ? 1 : 7) * 86400000
     return (transactions.data ?? []).filter(item => {
       const date = Date.parse(item.date)
-      return Number.isFinite(date) && date >= since && (!walletFilter || item.walletId === walletFilter)
+      return Number.isFinite(date) && date >= since
     })
-  }, [transactions.data, period, walletFilter])
+  }, [transactions.data, period])
   const downloadTransactions = () => {
     const url = URL.createObjectURL(new Blob([transactionsCsv(visibleTransactions, user?.timezone)], { type: 'text/csv;charset=utf-8' }))
     const link = document.createElement('a'); link.href = url; link.download = 'wallet-transactions.csv'; link.click()
@@ -103,47 +64,17 @@ export function WalletPage() {
 
   return (
     <div className="page-stack wallet-page">
-      <PageHeader title="کیف پول 💰" subtitle="مدیریت کیف پول‌ها و موجودی حساب کاربری" icon={<WalletCards />} actions={<><WalletRecharge />{legacyWallets && <Button icon={<Plus size={18} />} onClick={() => setModalOpen(true)}>کیف پول جدید</Button>}</>} />
+      <PageHeader title="کیف پول 💰" subtitle="موجودی و گردش حساب" icon={<WalletCards />} actions={<WalletRecharge />} />
       {returnToCheckout ? <div className="info-box checkout-return"><span>انتخاب‌های سرور شما برای بازگشت از شارژ نگه داشته شده‌اند.</span><LinkButton to="/servers/create" variant="secondary">بازگشت به سفارش سرور</LinkButton></div> : null}
-      {searchParams.get('payment') ? <WalletPaymentStatus id={searchParams.get('payment')!} onVerified={() => { wallets.refetch(); summary.refetch(); transactions.refetch() }} /> : null}
+      {searchParams.get('payment') ? <WalletPaymentStatus id={searchParams.get('payment')!} onVerified={() => { summary.refetch(); transactions.refetch() }} /> : null}
       {summary.error && <QueryError message={summary.error} onRetry={summary.refetch} />}
-      <div className="metrics-grid metrics-grid--four">
-        <MetricCard label="موجودی کل" value={summary.loading ? '...' : summary.error ? 'دریافت نشد' : formatToman(summaryData?.totalBalance ?? 0)} icon={CircleDollarSign} accent="green" />
-        <MetricCard label="کیف پول‌ها" value={summary.loading ? '...' : formatCount(summaryData?.wallets ?? wallets.data?.length ?? 0)} icon={WalletCards} />
-        <MetricCard label="کیف پول پیش‌فرض" value={summaryData?.defaultWallet ?? 'پیش‌فرض'} icon={CreditCard} accent="cyan" />
-        <MetricCard label="محصول متصل‌شده" value={summary.loading ? '...' : formatCount(summaryData?.connectedProducts ?? 0)} icon={ReceiptText} accent="purple" />
-      </div>
-
-      <Card className="wallet-balances">
-        <SectionHeading title="کیف پول‌ها" action={legacyWallets ? <Button size="sm" icon={<Plus size={16} />} onClick={() => setModalOpen(true)}>ایجاد کیف پول</Button> : undefined} />
-        {wallets.loading ? (
-          <LoadingState label="در حال دریافت کیف پول‌ها..." />
-        ) : wallets.error ? (
-          <QueryError message={wallets.error} onRetry={wallets.refetch} />
-        ) : !wallets.data?.length ? (
-          <EmptyState compact icon={WalletCards} title="هیچ کیف پولی یافت نشد" description="برای شروع، یک کیف پول جدید ایجاد کنید." />
-        ) : (
-          <Table headers={['نام', 'موجودی', 'وضعیت']}>
-            {wallets.data.map((wallet) => (
-              <tr key={wallet.id}>
-                <td>{wallet.name}</td>
-                <td>{formatToman(wallet.balance)}</td>
-                <td>{wallet.isDefault ? <Badge tone="info">پیش‌فرض</Badge> : <Badge>عادی</Badge>}</td>
-              </tr>
-            ))}
-          </Table>
-        )}
-      </Card>
+      <MetricCard label="موجودی کل" value={summary.loading ? '...' : summary.error ? 'دریافت نشد' : formatToman(summaryData?.totalBalance ?? 0)} icon={CircleDollarSign} accent="green" />
 
       <Card className="wallet-transactions">
         <SectionHeading title="تراکنش‌ها" action={<Button variant="secondary" size="sm" icon={<Download size={16} />} disabled={!visibleTransactions.length || transactions.loading || !!transactions.error} onClick={downloadTransactions}>دانلود</Button>} />
         <div className="segmented-filter">
           <button type="button" className={period === '24h' ? 'active' : ''} onClick={() => setPeriod('24h')}>۲۴ ساعت اخیر</button>
           <button type="button" className={period === '7d' ? 'active' : ''} onClick={() => setPeriod('7d')}>۷ روز اخیر</button>
-          <Select aria-label="کیف پول" value={walletFilter} onChange={event => setWalletFilter(event.target.value)}>
-            <option value="">همه کیف پول‌ها</option>
-            {wallets.data?.map(wallet => <option key={wallet.id} value={wallet.id}>{wallet.name}</option>)}
-          </Select>
         </div>
         {transactions.loading ? (
           <LoadingState label="در حال دریافت تراکنش‌ها..." />
@@ -167,20 +98,6 @@ export function WalletPage() {
           </Table>
         )}
       </Card>
-
-      <Modal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        title="ایجاد کیف پول جدید"
-        description="برای تفکیک هزینه‌ها یک کیف پول مستقل بسازید."
-        footer={<><Button variant="secondary" onClick={() => setModalOpen(false)}>انصراف</Button><Button type="submit" form="wallet-form" disabled={creating}>{creating ? 'در حال ایجاد...' : 'ایجاد کیف پول'}</Button></>}
-      >
-        <form id="wallet-form" className="form-stack" onSubmit={createWalletSubmit}>
-          <Input label="نام کیف پول" placeholder="مثلاً پروژه اصلی" required value={walletName} onChange={(event) => setWalletName(event.target.value)} />
-          <Input label="توضیحات" placeholder="توضیح اختیاری" value={walletDescription} onChange={(event) => setWalletDescription(event.target.value)} />
-          <Toggle checked={defaultWallet} onChange={setDefaultWallet} label="به عنوان کیف پول پیش‌فرض انتخاب شود" />
-        </form>
-      </Modal>
     </div>
   )
 }

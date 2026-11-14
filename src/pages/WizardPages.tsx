@@ -45,7 +45,6 @@ export function CreateServerPage() {
   const [offerId, setOfferId] = useState(draft?.offerId ?? '')
   const [os, setOs] = useState(draft?.os ?? '')
   const [name, setName] = useState(draft?.name ?? '')
-  const [walletId, setWalletId] = useState(draft?.walletId ?? '')
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod | ''>(draft?.billingPeriod ?? '')
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<ReturnType<typeof checkoutFailure> | null>(null)
@@ -59,12 +58,12 @@ export function CreateServerPage() {
     appliedLink.current = true
     const selected = catalog.data.offers.find(item => item.id === linkedOffer && item.provider === 'hetzner')
     if (!selected || (linkedPeriod !== 'hourly' && linkedPeriod !== 'monthly') || !selected.prices.some(price => price.period === linkedPeriod)) {
-      setLinkUnavailable(true); setStep(0); setProviderId(''); setLocation(''); setBillingPeriod(''); setOfferId(''); setOs(''); setWalletId('')
+      setLinkUnavailable(true); setStep(0); setProviderId(''); setLocation(''); setBillingPeriod(''); setOfferId(''); setOs('')
       return
     }
     if (draft?.offerId === linkedOffer && draft.billingPeriod === linkedPeriod) return
     setProviderId(selected.provider); setLocation(selected.location); setBillingPeriod(linkedPeriod); setOfferId(selected.id)
-    setOs(''); setWalletId(''); purchaseKey.current = crypto.randomUUID(); setStep(3)
+    setOs(''); purchaseKey.current = crypto.randomUUID(); setStep(3)
   }, [catalog.data, catalog.error, catalog.loading, draft, linkedOffer, linkedPeriod])
   const wallets = useApiQuery(listWallets)
   const datacenters = catalog.data?.datacenters ?? []
@@ -81,7 +80,7 @@ export function CreateServerPage() {
   const operatingSystems = shared ? images.loading || images.error ? [] : images.data ?? [] : offer?.operatingSystems ?? []
   const selectedOs = operatingSystems.find((item) => item.id === os)
   const price = offer?.prices.find((item) => item.period === billingPeriod)
-  const wallet = wallets.data?.find((item) => item.id === walletId)
+  const wallet = wallets.data?.[0]
   const catalogReady = isApiConfigured() && !catalog.loading && !catalog.error && !!catalog.data
   const locationValid = !!provider && !!selectedLocation
   const periodValid = billingPeriod !== '' && periods.includes(billingPeriod)
@@ -102,8 +101,8 @@ export function CreateServerPage() {
     locationValid && periodValid && offerValid && !!selectedOs && walletValid,
     allValid,
   ][step]
-  const resetOffer = () => { setOfferId(''); setOs(''); setWalletId(''); setSubmitError(null); purchaseKey.current = crypto.randomUUID() }
-  const preserveOrder = () => saveCheckoutDraft(user?.id, { step, providerId, location, offerId, os, name, walletId, billingPeriod, purchaseKey: purchaseKey.current })
+  const resetOffer = () => { setOfferId(''); setOs(''); setSubmitError(null); purchaseKey.current = crypto.randomUUID() }
+  const preserveOrder = () => saveCheckoutDraft(user?.id, { step, providerId, location, offerId, os, name, billingPeriod, purchaseKey: purchaseKey.current })
   const refreshWallets = wallets.refetch
   useEffect(() => {
     const refresh = () => { refreshWallets(); setSubmitError(null) }
@@ -121,7 +120,7 @@ export function CreateServerPage() {
     submitLock.current = true
     setSubmitError(null)
     try {
-      const result = await createServer({ name: name.trim(), offerId: offer.id, os: selectedOs.id, walletId: wallet.id, billingPeriod, pricing: offer.canonicalPricing, idempotencyKey: purchaseKey.current })
+      const result = await createServer({ name: name.trim(), offerId: offer.id, os: selectedOs.id, billingPeriod, pricing: offer.canonicalPricing, idempotencyKey: purchaseKey.current })
       const accepted = { ...result, name: result.name || name.trim(), datacenter: result.datacenter || location, os: result.os || selectedOs.label || selectedOs.id, serverType: result.serverType || offer.name }
       rememberAcceptedServer(user?.id ?? '', accepted)
       if (accepted.tracking?.source === 'platform') {
@@ -148,7 +147,7 @@ export function CreateServerPage() {
       <Card padding="none" className="wizard-card">
         <div className="wizard-card__header">
           <SectionHeading title={serverSteps[step]} />
-          <p>{['دیتاسنتر فعال و سپس موقعیت واقعی سرور را انتخاب کنید.', 'دوره پرداخت را پیش از انتخاب منابع مشخص کنید.', 'فقط محصولات قابل سفارش در موقعیت و دوره انتخاب‌شده نمایش داده می‌شوند.', 'سیستم عامل قابل نصب روی محصول انتخابی را مشخص کنید.', 'کیف پول پرداخت سفارش را انتخاب کنید.', 'نام سرور و جزئیات سفارش را بررسی و تایید کنید.'][step]}</p>
+          <p>{['دیتاسنتر فعال و سپس موقعیت واقعی سرور را انتخاب کنید.', 'دوره پرداخت را پیش از انتخاب منابع مشخص کنید.', 'فقط محصولات قابل سفارش در موقعیت و دوره انتخاب‌شده نمایش داده می‌شوند.', 'سیستم عامل قابل نصب روی محصول انتخابی را مشخص کنید.', 'موجودی کیف پول را برای پرداخت بررسی کنید.', 'نام سرور و جزئیات سفارش را بررسی و تایید کنید.'][step]}</p>
         </div>
         <Stepper steps={serverSteps} current={step} />
         <div className="wizard-card__content" aria-busy={catalog.loading || submitting}>
@@ -205,11 +204,9 @@ export function CreateServerPage() {
               {!images.loading && !images.error && !operatingSystems.length ? <div className="storefront-state"><p>سیستم عامل قابل نصبی برای این محصول موجود نیست؛ محصول دیگری انتخاب کنید.</p><Button variant="secondary" onClick={reloadCatalog}>دریافت دوباره کاتالوگ</Button></div> : null}
             </div> : null}
             {step === 4 ? <div className="storefront-stack">
-              {wallets.loading ? <div className="storefront-state" role="status">در حال دریافت کیف پول‌ها…</div> : wallets.error ? <div className="storefront-state" role="alert"><p>{wallets.error}</p><Button variant="secondary" onClick={wallets.refetch}>تلاش دوباره</Button></div> : !wallets.data?.length ? <div className="storefront-state"><p>برای ثبت سفارش ابتدا یک کیف پول ایجاد و شارژ کنید.</p><LinkButton to="/wallet" variant="secondary">مدیریت کیف پول‌ها</LinkButton><Button variant="secondary" onClick={wallets.refetch}>دریافت دوباره کیف پول‌ها</Button></div> :
-                <Select label="کیف پول پرداخت" value={walletId} onChange={(event) => { if (walletId !== event.target.value) purchaseKey.current = crypto.randomUUID(); setWalletId(event.target.value); setSubmitError(null) }}>
-                  <option value="">کیف پول را انتخاب کنید</option>
-                  {wallets.data.map((item) => <option key={item.id} value={item.id}>{item.name} — {formatFaNumber(item.balance)} تومان</option>)}
-                </Select>}
+              {wallets.loading ? <div className="storefront-state" role="status">در حال دریافت کیف پول…</div> : wallet && !wallets.error
+                ? <ReviewRow label="موجودی کیف پول" value={`${formatFaNumber(wallet.balance)} تومان`} />
+                : <div className="storefront-state" role="alert"><p>{wallets.error || 'کیف پول در دسترس نیست.'}</p><Button variant="secondary" onClick={wallets.refetch}>تلاش دوباره</Button></div>}
               <div className="info-box"><WalletCards size={20} /><span>{price ? `مبلغ ${priceLabel(price.totalRial)} برای دوره ${billingPeriod ? periodLabels[billingPeriod] : ''} پرداخت می‌شود. حداقل اعتبار این سرور برای ۷ روز: ${priceLabel(requiredBalanceRial)}. تعهد سرورهای دیگر هنگام ثبت سفارش بررسی می‌شود؛ اعتبار اضافه برداشت نمی‌شود.` : 'ابتدا محصول و دوره پرداخت معتبر انتخاب کنید.'}</span></div>
             </div> : null}
             {step === 5 ? <div className="review-grid">
@@ -266,8 +263,6 @@ export function RegisterDomainPage() {
   const navigate = useNavigate()
   const { showToast } = useToast()
   const normalizedDomain = useMemo(() => domain.trim().replace(/^https?:\/\//, '').replace(/\/$/, ''), [domain])
-  const wallets = useApiQuery(listWallets)
-  const [walletId, setWalletId] = useState('')
 
   const checkAvailability = async () => {
     setChecking(true)
@@ -298,7 +293,7 @@ export function RegisterDomainPage() {
     }
     setSubmitting(true)
     try {
-      await registerDomain({ domain: normalizedDomain, periodYears: Number(period), walletId: walletId || undefined })
+      await registerDomain({ domain: normalizedDomain, periodYears: Number(period) })
       showToast('سفارش دامنه با موفقیت ثبت شد.')
       navigate('/domains')
     } catch (error) {
@@ -333,13 +328,7 @@ export function RegisterDomainPage() {
           {step === 1 ? (
             <div className="wizard-form">
               <Select label="دوره ثبت" value={period} onChange={(event) => setPeriod(event.target.value)}><option value="1">یک سال</option><option value="2">دو سال</option><option value="5">پنج سال</option></Select>
-              <Select label="کیف پول پرداخت" value={walletId} onChange={(event) => setWalletId(event.target.value)}>
-                <option value="">کیف پول پیش‌فرض — ۰ تومان</option>
-                {(wallets.data ?? []).map((wallet) => (
-                  <option key={wallet.id} value={wallet.id}>{wallet.name}</option>
-                ))}
-              </Select>
-              <div className="info-box"><WalletCards size={20} /><span>{isApiConfigured() ? 'مبلغ سفارش از کیف پول انتخاب‌شده کسر خواهد شد.' : 'در نسخه واقعی، مبلغ از کیف پول انتخاب‌شده کسر خواهد شد.'}</span></div>
+              <div className="info-box"><WalletCards size={20} /><span>مبلغ سفارش از کیف پول حساب کسر می‌شود.</span></div>
             </div>
           ) : null}
           {step === 2 ? (
@@ -347,7 +336,7 @@ export function RegisterDomainPage() {
               <ReviewRow label="دامنه" value={normalizedDomain || 'example.com'} />
               <ReviewRow label="دوره ثبت" value={`${period} سال`} />
               <ReviewRow label="هزینه نهایی" value={price} />
-              <ReviewRow label="پرداخت" value="کیف پول پیش‌فرض" />
+              <ReviewRow label="پرداخت" value="کیف پول" />
             </div>
           ) : null}
         </div>

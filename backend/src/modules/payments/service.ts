@@ -14,14 +14,14 @@ export function paymentDto(payment: typeof walletPayments.$inferSelect) {
   return { id: payment.id, walletId: payment.walletId, amountRial: payment.amountRial, status: payment.status,
     paymentUrl: payment.status === 'pending' && payment.gatewayToken ? paymentLink(payment.gatewayToken, payment.sandbox) : null }
 }
-export async function createRecharge(db: DbClient, userId: string, walletId: string, amountRial: number, key: string) {
+export async function createRecharge(db: DbClient, userId: string, walletId: string | undefined, amountRial: number, key: string) {
   if (!Number.isSafeInteger(amountRial) || amountRial < 100000 || amountRial > 500000000) throw new ValidationError('مبلغ شارژ مجاز نیست.')
-  await getWallet(db, userId, walletId)
+  const wallet = await getWallet(db, userId, walletId)
   const attempt = await db.transaction(async tx => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`recharge:${userId}:${key}`}, 0))`)
     const previous = await tx.query.walletPayments.findFirst({ where: t => and(eq(t.userId, userId), eq(t.idempotencyKey, key)) })
     if (previous) {
-      if (previous.amountRial !== amountRial || previous.walletId !== walletId) throw new ConflictError('این کلید قبلاً برای درخواست دیگری استفاده شده است.')
+      if (previous.amountRial !== amountRial || (await getWallet(tx, userId, previous.walletId)).id !== wallet.id) throw new ConflictError('این کلید قبلاً برای درخواست دیگری استفاده شده است.')
       return { payment: previous, created: false, merchant: '' }
     }
     await gatewayLock(tx)
@@ -29,7 +29,7 @@ export async function createRecharge(db: DbClient, userId: string, walletId: str
     if (!gateway.enabled || !validToken(gateway.merchant)) throw new AppError(503, 'payment_gateway_unavailable', 'درگاه شارژ کیف پول پیکربندی نشده است.')
     const id = randomUUID()
     const [charge] = await tx.insert(chargeRequests).values({ userId, number: `PAY-${id}`, amountRial, status: 'processing' }).returning()
-    const [payment] = await tx.insert(walletPayments).values({ id, userId, walletId, chargeRequestId: charge!.id,
+    const [payment] = await tx.insert(walletPayments).values({ id, userId, walletId: wallet.id, chargeRequestId: charge!.id,
       idempotencyKey: key, amountRial, sandbox: gateway.sandbox, merchantFingerprint: gateway.fingerprint }).returning()
     await writeAudit(tx, { actorId: userId, action: 'wallet.recharge_created', targetType: 'wallet_payment', targetId: id, metadata: { amountRial, walletId } })
     return { payment: payment!, created: true, merchant: gateway.merchant }
@@ -83,7 +83,7 @@ export async function verifyRecharge(db: DbClient, id: string) {
   } else await db.transaction(async tx => {
     const [locked] = await tx.select().from(walletPayments).where(eq(walletPayments.id, id)).for('update')
     if (locked!.status === 'succeeded') return
-    await applyWalletTransaction(tx, payment.userId, payment.walletId, { type: 'deposit', amountRial: payment.amountRial,
+    await applyWalletTransaction(tx, locked!.userId, locked!.walletId, { type: 'deposit', amountRial: locked!.amountRial,
       referenceType: 'tabapay', referenceId: payment.id, idempotencyKey: `tabapay:${payment.id}`, description: 'شارژ کیف پول با تاباپی' })
     await tx.update(walletPayments).set({ status: 'succeeded', providerReference: reference as string, updatedAt: new Date() }).where(eq(walletPayments.id, id))
     await tx.update(chargeRequests).set({ status: 'approved', invoiceNumber: reference as string, updatedAt: new Date() }).where(eq(chargeRequests.id, payment.chargeRequestId))

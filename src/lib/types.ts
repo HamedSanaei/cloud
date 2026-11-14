@@ -211,12 +211,6 @@ export interface CreateTicketPayload {
   serverId?: string | null
 }
 
-export interface CreateWalletPayload {
-  name: string
-  description?: string
-  isDefault: boolean
-}
-
 export interface Profile {
   firstName: string
   lastName: string

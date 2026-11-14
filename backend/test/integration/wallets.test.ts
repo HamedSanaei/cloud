@@ -5,7 +5,7 @@ import { registerUser } from '../../src/modules/auth/service.js'
 import {
   applyWalletTransaction,
   creditWallet,
-  createWallet,
+  ensureDefaultWallet,
   listTransactions,
 } from '../../src/modules/wallets/service.js'
 import { InsufficientFundsError } from '../../src/lib/errors.js'
@@ -31,7 +31,7 @@ describe.skipIf(skip)('wallets + ledger (integration)', () => {
 
   it('creates a default wallet and credits it with ledger rows', async () => {
     const user = await makeUser('wallet1@test.local')
-    const wallet = await createWallet(ctx.db, user.id, { name: 'کیف پول' })
+    const wallet = await ensureDefaultWallet(ctx.db, user.id)
     const credit = await creditWallet(ctx.db, user.id, wallet.id, 1_000_000, { type: 'manual_credit', description: 'شارژ' })
     expect(credit.balanceAfterRial).toBe(1_000_000)
     expect(credit.transaction.amountRial).toBe(1_000_000)
@@ -41,7 +41,7 @@ describe.skipIf(skip)('wallets + ledger (integration)', () => {
 
   it('debits and refuses overdraft', async () => {
     const user = await makeUser('wallet2@test.local')
-    const wallet = await createWallet(ctx.db, user.id, { name: 'کیف پول' })
+    const wallet = await ensureDefaultWallet(ctx.db, user.id)
     await creditWallet(ctx.db, user.id, wallet.id, 500_000, { type: 'deposit' })
 
     const debit = await applyWalletTransaction(ctx.db, user.id, wallet.id, {
@@ -65,7 +65,7 @@ describe.skipIf(skip)('wallets + ledger (integration)', () => {
 
   it('serializes concurrent debits so the balance never goes negative', async () => {
     const user = await makeUser('wallet3@test.local')
-    const wallet = await createWallet(ctx.db, user.id, { name: 'کیف پول' })
+    const wallet = await ensureDefaultWallet(ctx.db, user.id)
     await creditWallet(ctx.db, user.id, wallet.id, 100_000, { type: 'deposit' })
 
     // 3 parallel debits of 40,000 against 100,000 — exactly two may succeed.
@@ -91,7 +91,7 @@ describe.skipIf(skip)('wallets + ledger (integration)', () => {
 
   it('enforces idempotency — the same key cannot debit twice', async () => {
     const user = await makeUser('wallet4@test.local')
-    const wallet = await createWallet(ctx.db, user.id, { name: 'کیف پول' })
+    const wallet = await ensureDefaultWallet(ctx.db, user.id)
     await creditWallet(ctx.db, user.id, wallet.id, 100_000, { type: 'deposit' })
 
     const first = await applyWalletTransaction(ctx.db, user.id, wallet.id, {
@@ -115,7 +115,7 @@ describe.skipIf(skip)('wallets + ledger (integration)', () => {
 
   it('refunds by crediting with a reference', async () => {
     const user = await makeUser('wallet5@test.local')
-    const wallet = await createWallet(ctx.db, user.id, { name: 'کیف پول' })
+    const wallet = await ensureDefaultWallet(ctx.db, user.id)
     await creditWallet(ctx.db, user.id, wallet.id, 100_000, { type: 'deposit' })
     await applyWalletTransaction(ctx.db, user.id, wallet.id, {
       amountRial: 100_000,

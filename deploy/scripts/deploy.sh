@@ -140,6 +140,11 @@ backup_database() {
     return 1
   fi
   chmod 0600 "$backup"
+  if ! GNUPGHOME="$GPG_HOME" gpg --batch --no-symkey-cache --pinentry-mode loopback --passphrase-fd 3 --decrypt "$backup" 3<<<"$BACKUP_ENCRYPTION_KEY" |
+    compose "$CANDIDATE" exec -T cloud-postgres pg_restore --file=/dev/null; then
+    die "Encrypted backup verification failed; migration was not started"
+    return 1
+  fi
   unset BACKUP_ENCRYPTION_KEY
   good "Encrypted pre-migration backup: $backup"
 }
@@ -251,6 +256,7 @@ services:
 ${platform_net_api}
     environment:
       NODE_ENV: production
+      WALLET_CONSOLIDATION_APPROVED: \${WALLET_CONSOLIDATION_APPROVED:-false}
       APP_ENV: production
       HOST: 0.0.0.0
       PORT: "8000"
@@ -707,10 +713,13 @@ compose "$CANDIDATE" run --rm --no-deps cloud-api node --input-type=module -e '
   import {createDb} from "./dist/db/index.js";
   import {assertUnifiedCutoverReady} from "./dist/modules/integration/platform.js";
   import {assertSiteAuthorityReady} from "./dist/modules/integration/authority.js";
+  import {assertWalletConsolidationApproved} from "./dist/db/migrate.js";
   const handle = createDb();
   try {
     await assertUnifiedCutoverReady(handle.db);
     await assertSiteAuthorityReady(handle.db);
+    const client = await handle.pool.connect();
+    try { await assertWalletConsolidationApproved(client); } finally { client.release(); }
   } finally { await handle.pool.end(); }
 '
 DB_HEAD_BEFORE="$(database_head "$CANDIDATE")"

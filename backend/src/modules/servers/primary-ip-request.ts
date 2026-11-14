@@ -7,7 +7,7 @@ import type { SessionUser } from '../auth/service.js'
 import { assertPowerOnFunding, serverPowerPolicy, type FundingFleet } from '../billing/funding.js'
 import { isSiteAuthority } from '../integration/authority.js'
 import type { ProviderServerView } from '../providers/provider.interface.js'
-import { debitWallet } from '../wallets/service.js'
+import { debitWallet, getWallet } from '../wallets/service.js'
 import { customerProvider, findBlockingManagementOperation, managementBlock, managementConflict } from './management.js'
 import { lockPrimaryIpv4Fee, primaryIpv4Fee } from './primary-ip-pricing.js'
 import { getServerForUser } from './service.js'
@@ -23,7 +23,7 @@ export interface IpRequest {
 async function billingWallet(db: DbOrTx, server: IpServer) {
   const order = await db.query.orders.findFirst({ where: t => and(eq(t.id, server.orderId), eq(t.userId, server.userId)) })
   if (!order) return undefined
-  return db.query.wallets.findFirst({ where: t => and(eq(t.userId, server.userId), order.walletId ? eq(t.id, order.walletId) : eq(t.isDefault, true)) })
+  return getWallet(db, server.userId, order.walletId ?? undefined)
 }
 
 export async function ipv4Baseline(server: IpServer, view: ProviderServerView) {

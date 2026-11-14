@@ -83,6 +83,7 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
       userId: user.id,
       quoteId: quote.id,
       walletId: input.walletId,
+      payFromWallet: true,
       hostname: input.name ?? '',
       idempotencyKey,
     })

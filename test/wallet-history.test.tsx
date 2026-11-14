@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WalletPage } from '../src/pages/FinancePages'
@@ -48,7 +48,7 @@ describe('wallet transaction columns', () => {
     expect(failed).toContain('"ناموفق"')
   })
 
-  it('renders mixed movements, status, reference links and the wallet filter', async () => {
+  it('keeps history from previous wallet IDs visible without a wallet selector', async () => {
     const entries = [
       entry({ id: 'ip', description: 'تعویض سرور آزمایشی', amountRial: -1500000, type: 'purchase', referenceType: 'primary_ipv4_replacement', referenceId: 'server-id' }),
       entry({ id: 'refund', description: 'جبران هزینه', walletId: 'other', wallet: 'کیف دوم', type: 'refund' }),
@@ -69,8 +69,9 @@ describe('wallet transaction columns', () => {
     expect(row('مصرف مازاد آزمایشی').getByText('ترافیک مازاد')).toBeTruthy()
     expect(amounts('پرداخت آزمایشی')).toEqual(['—', '—'])
     expect(row('پرداخت آزمایشی').getByText('ناموفق')).toBeTruthy()
-    fireEvent.change(screen.getByRole('combobox', { name: 'کیف پول' }), { target: { value: 'other' } })
-    expect(screen.queryByText('تعویض سرور آزمایشی')).toBeNull()
+    expect(screen.queryByRole('combobox', { name: 'کیف پول' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'ایجاد کیف پول' })).toBeNull()
+    expect(screen.getByText('تعویض سرور آزمایشی')).toBeTruthy()
     expect(screen.getByText('جبران هزینه')).toBeTruthy()
   })
 })

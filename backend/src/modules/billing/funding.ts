@@ -44,7 +44,7 @@ function renewable(subscription: SubscriptionRecord): boolean {
 
 /** Use the order's wallet, never the user's unrelated wallets or a paginated server list. */
 export async function loadFundingFleet(db: DbOrTx, userId: string, lockWallets = false): Promise<FundingFleet> {
-  const walletQuery = db.select().from(wallets).where(eq(wallets.userId, userId)).orderBy(wallets.id)
+  const walletQuery = db.select().from(wallets).where(and(eq(wallets.userId, userId), isNull(wallets.mergedInto))).orderBy(wallets.id)
   const ownedWallets = await (lockWallets ? walletQuery.for('update') : walletQuery)
   const ownedServers = await db.query.servers.findMany({ where: (t) => eq(t.userId, userId) })
   const operations = ownedServers.length ? await db.query.providerOperations.findMany({
@@ -55,12 +55,12 @@ export async function loadFundingFleet(db: DbOrTx, userId: string, lockWallets =
     .innerJoin(subscriptions, eq(servers.subscriptionId, subscriptions.id))
     .innerJoin(orders, eq(servers.orderId, orders.id))
     .where(and(eq(servers.userId, userId), inArray(servers.status, ['active', 'suspended'])))
-  const fallback = ownedWallets.find((wallet) => wallet.isDefault)
+  const canonical = ownedWallets[0]
   const groups = new Map<string, FundingGroup>()
   const prepaid: FundingFleet['prepaid'] = []
   for (const row of billable) {
     if (row.server.terminationState && row.server.terminationState !== 'delete_failed') continue
-    const walletId = row.walletId ?? fallback?.id ?? null
+    const walletId = row.walletId ?? canonical?.id ?? null
     const wallet = ownedWallets.find((item) => item.id === walletId)
     if (row.subscription.billingInterval !== 'HOURLY') {
       prepaid.push({ ...row, walletId, balanceRial: wallet?.balanceRial ?? 0 })

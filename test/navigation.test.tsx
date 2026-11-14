@@ -32,7 +32,7 @@ async function reviewOrder(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
   await user.click(await screen.findByRole('button', { name: 'Ubuntu 24.04' }))
   await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
-  await user.selectOptions(screen.getByLabelText('کیف پول پرداخت'), 'platform')
+  await screen.findByText('موجودی کیف پول')
   await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
 }
 

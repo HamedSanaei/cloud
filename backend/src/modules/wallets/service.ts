@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 import type { DbClient, DbOrTx } from '../../db/index.js'
 import { invoices, walletTransactions, wallets } from '../../db/schema.js'
 import { ConflictError, InsufficientFundsError, NotFoundError } from '../../lib/errors.js'
@@ -21,44 +21,32 @@ export interface WalletTxInput {
 const DEBIT_TYPES: WalletTxType[] = ['purchase', 'renewal', 'manual_debit']
 const CREDIT_TYPES: WalletTxType[] = ['deposit', 'refund', 'manual_credit', 'adjustment']
 
-export async function createWallet(
-  db: DbClient,
-  userId: string,
-  input: { name: string; description?: string; isDefault?: boolean },
-): Promise<typeof wallets.$inferSelect> {
-  const existing = await db.query.wallets.findMany({
-    where: (t) => eq(t.userId, userId),
-    limit: 1,
-  })
-  const isDefault = input.isDefault ?? existing.length === 0
-  if (input.isDefault) {
-    await db.update(wallets).set({ isDefault: false }).where(eq(wallets.userId, userId))
-  }
-  const [wallet] = await db
-    .insert(wallets)
-    .values({ userId, name: input.name, description: input.description ?? null, isDefault })
-    .returning()
-  if (!wallet) throw new Error('failed to create wallet')
-  await writeAudit(db, { actorId: userId, action: 'wallet.created', targetType: 'wallet', targetId: wallet.id })
-  return wallet
-}
-
-export async function ensureDefaultWallet(db: DbClient, userId: string) {
-  const existing = await db.query.wallets.findFirst({ where: (t) => eq(t.userId, userId) })
+export async function ensureDefaultWallet(db: DbOrTx, userId: string) {
+  const active = () => db.query.wallets.findFirst({ where: t => and(eq(t.userId, userId), isNull(t.mergedInto)) })
+  const existing = await active()
   if (existing) return existing
-  return createWallet(db, userId, { name: 'کیف پول پیش‌فرض' })
+  await db.insert(wallets).values({ userId, name: 'کیف پول', isDefault: true }).onConflictDoNothing()
+  const created = await active()
+  if (!created) throw new NotFoundError('کیف پول یافت نشد')
+  return created
 }
 
 export async function listWallets(db: DbClient, userId: string) {
+  return [await ensureDefaultWallet(db, userId)]
+}
+
+export function listWalletRecords(db: DbOrTx, userId: string) {
   return db.query.wallets.findMany({
     where: (t) => eq(t.userId, userId),
     orderBy: (t, { desc }) => [desc(t.isDefault), t.createdAt],
   })
 }
 
-export async function getWallet(db: DbClient, userId: string, walletId: string) {
-  const wallet = await db.query.wallets.findFirst({ where: (t) => eq(t.id, walletId) })
-  if (!wallet || wallet.userId !== userId) throw new NotFoundError('کیف پول یافت نشد')
+export async function getWallet(db: DbOrTx, userId: string, walletId?: string) {
+  if (!walletId) return ensureDefaultWallet(db, userId)
+  const source = await db.query.wallets.findFirst({ where: t => and(eq(t.id, walletId), eq(t.userId, userId)) })
+  const wallet = source?.mergedInto ? await db.query.wallets.findFirst({ where: t => and(eq(t.id, source.mergedInto!), eq(t.userId, userId), isNull(t.mergedInto)) }) : source
+  if (!wallet) throw new NotFoundError('کیف پول یافت نشد')
   return wallet
 }
 
@@ -87,10 +75,11 @@ export async function applyWalletTransaction(
 
   const result = await db.transaction(async (tx) => {
     // Row lock — serialize concurrent transactions on this wallet.
+    const canonical = await getWallet(tx, userId, walletId)
     const locked = await tx
       .select({ id: wallets.id, balanceRial: wallets.balanceRial, userId: wallets.userId })
       .from(wallets)
-      .where(eq(wallets.id, walletId))
+      .where(and(eq(wallets.id, canonical.id), isNull(wallets.mergedInto)))
       .for('update')
       .limit(1)
     const wallet = locked[0]
@@ -98,14 +87,18 @@ export async function applyWalletTransaction(
 
     // Idempotency check inside the lock.
     if (input.idempotencyKey) {
-      const dup = await tx.query.walletTransactions.findFirst({
-        where: (t) => and(eq(t.walletId, walletId), eq(t.idempotencyKey, input.idempotencyKey ?? '')),
+      const matches = await tx.query.walletTransactions.findMany({
+        where: t => and(eq(t.userId, userId), eq(t.idempotencyKey, input.idempotencyKey!)),
       })
+      const dup = matches.find(row => row.type === input.type && row.amountRial === signed &&
+        row.referenceType === (input.referenceType ?? null) && row.referenceId === (input.referenceId ?? null))
       if (dup) return { transaction: dup, balanceAfterRial: dup.balanceAfterRial, duplicate: true as const }
+      if (matches.length) throw new ConflictError('این کلید قبلاً برای گردش دیگری استفاده شده است')
     }
 
     const balanceBefore = wallet.balanceRial
     const balanceAfter = balanceBefore + signed
+    if (!Number.isSafeInteger(balanceAfter)) throw new ConflictError('موجودی کیف پول خارج از محدودهٔ مجاز است')
     if (balanceAfter < 0) {
       throw new InsufficientFundsError(
         `موجودی کیف پول کافی نیست (نیازمند ${Math.ceil(input.amountRial / 10).toLocaleString('fa-IR')} تومان، موجودی ${Math.floor(balanceBefore / 10).toLocaleString('fa-IR')} تومان)`,
@@ -115,7 +108,7 @@ export async function applyWalletTransaction(
     const [txRow] = await tx
       .insert(walletTransactions)
       .values({
-        walletId,
+        walletId: wallet.id,
         userId,
         amountRial: signed,
         type: input.type,
@@ -130,7 +123,7 @@ export async function applyWalletTransaction(
       .returning()
     if (!txRow) throw new Error('failed to insert wallet transaction')
 
-    await tx.update(wallets).set({ balanceRial: balanceAfter }).where(eq(wallets.id, walletId))
+    await tx.update(wallets).set({ balanceRial: balanceAfter }).where(eq(wallets.id, wallet.id))
     const titles = { deposit: 'کیف پول شارژ شد', refund: 'مبلغ به کیف پول بازگشت', manual_credit: 'موجودی کیف پول افزایش یافت',
       manual_debit: 'از کیف پول برداشت شد', adjustment: 'موجودی کیف پول اصلاح شد', renewal: 'پرداخت تمدید تأیید شد' } as const
     if (input.type !== 'purchase' && input.amountRial > 0) {
@@ -145,7 +138,7 @@ export async function applyWalletTransaction(
       actorId: userId,
       action: isDebit ? 'wallet.debit' : 'wallet.credit',
       targetType: 'wallet',
-      targetId: walletId,
+      targetId: result.transaction.walletId,
       metadata: {
         amountRial: signed,
         type: input.type,
@@ -215,6 +208,6 @@ export async function totalBalanceRial(db: DbClient, userId: string): Promise<nu
   const rows = await db
     .select({ total: sql<number>`coalesce(sum(${wallets.balanceRial}), 0)` })
     .from(wallets)
-    .where(eq(wallets.userId, userId))
+    .where(and(eq(wallets.userId, userId), isNull(wallets.mergedInto)))
   return Number(rows[0]?.total ?? 0)
 }

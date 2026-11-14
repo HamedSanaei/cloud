@@ -105,7 +105,7 @@ export interface AdminUserDetail {
   balanceToman: number
   wallets: Array<{ id: string; name: string; currency: string; isDefault: boolean; balanceRial: number; balanceToman: number }>
   transactions: Array<{ id: string; walletId: string; type: string; description: string | null; amountRial: number; amountToman: number; createdAt: string;
-    status?: string; direction?: 'credit' | 'debit' | null; referenceType?: string | null; referenceId?: string | null }>
+    status?: string; wallet?: string; direction?: 'credit' | 'debit' | null; referenceType?: string | null; referenceId?: string | null }>
   servers: AdminServer[]
   orders: AdminOrder[]
 }
