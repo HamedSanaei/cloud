@@ -81,7 +81,7 @@ export async function failServer(db: DbClient, serverId: string, error: string) 
   await db.update(servers).set({ status: 'failed', providerMetadata: { error } as never, lastSyncedAt: new Date() }).where(eq(servers.id, serverId))
 }
 
-export async function updateServerFromView(db: DbOrTx, serverId: string, view: ProviderServerView) {
+export async function updateServerFromView(db: DbOrTx, serverId: string, view: ProviderServerView, observed?: { ipv4: string | null }) {
   const owner = await db.query.servers.findFirst({ where: (t) => eq(t.id, serverId) })
   if (!owner) return
   await db.transaction(async (tx) => {
@@ -89,6 +89,10 @@ export async function updateServerFromView(db: DbOrTx, serverId: string, view: P
     const [server] = await tx.select().from(servers).where(eq(servers.id, serverId)).for('update')
     if (!server) return
     if (server.terminatedAt || server.status === 'terminated') return
+    if (observed && server.ipv4 !== observed.ipv4) return
+    const ipOperation = await tx.query.providerOperations.findFirst({ where: t => and(eq(t.referenceId, server.id),
+      eq(t.kind, 'server_management'), eq(t.action, 'replace_primary_ipv4'), inArray(t.status, ['pending', 'running', 'unknown', 'needs_reconciliation'])) })
+    if (ipOperation) return
     const update: Partial<typeof servers.$inferInsert> = { lastSyncedAt: new Date() }
     if (view.state === 'active' && view.ipv4) update.ipv4 = view.ipv4
     if (view.state === 'active' && view.ipv6) update.ipv6 = view.ipv6

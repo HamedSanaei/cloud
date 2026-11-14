@@ -7,7 +7,7 @@ import { adminAdjustments, users, wallets } from '../../db/schema.js'
 import { getConfig } from '../../config.js'
 import { requireAdmin, extractToken } from '../../http/auth.js'
 import { parse } from '../../http/validate.js'
-import { ForbiddenError, UnauthorizedError } from '../../lib/errors.js'
+import { ForbiddenError, NotFoundError, UnauthorizedError } from '../../lib/errors.js'
 import { isSiteAuthority } from '../integration/authority.js'
 import { writeAudit } from '../audit/service.js'
 import { issueAuthorization, consumeAuthorization, systemAdmin } from './security.js'
@@ -16,6 +16,11 @@ import { safeMetadata } from './events.js'
 import { diagnoseGateway, gatewayStatus, updateGateway } from './gateway.js'
 import { adjustmentSchema, approveAdjustment, findFinancialUser, requestAdjustment } from './finance.js'
 import { approveRestore, backupFile, getBackupJob, importBackup, listBackupJobs, removeBackup, requestBackupJob, requestRestore, waitBackupJobs, initializeBackupJobs } from './backups.js'
+import { maxPrimaryIpv4FeeRial, primaryIpv4Pricing, setPrimaryIpv4Fee } from '../servers/primary-ip-pricing.js'
+import { confirmPrimaryIpv4Rollback } from '../servers/primary-ip-operation.js'
+
+const canManagePrimaryIpv4Pricing = (user: ReturnType<typeof requireAdmin>) =>
+  user.status === 'active' && getConfig().PRIMARY_IPV4_SUPER_ADMIN_IDS.includes(user.id)
 
 const idParam = z.object({ id: z.string().uuid() })
 const proofSchema = z.string().uuid()
@@ -62,9 +67,33 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     const c = getConfig(), user = requireAdmin(request)
     let allowed = true
     try { systemAdmin(user) } catch { allowed = false }
-    return { data: { allowed, encryptionReady: /^[a-f0-9]{64}$/i.test(c.STORE_SECRET_KEY), backupsEnabled: c.SYSTEM_BACKUP_ENABLED,
+    return { data: { allowed, primaryIpv4Pricing: canManagePrimaryIpv4Pricing(user), encryptionReady: /^[a-f0-9]{64}$/i.test(c.STORE_SECRET_KEY), backupsEnabled: c.SYSTEM_BACKUP_ENABLED,
       restoreEnabled: c.SYSTEM_RESTORE_ENABLED, maxUploadBytes: max, dualApprovalRial: c.SYSTEM_DUAL_APPROVAL_RIAL,
       requirements: ['STORE_SECRET_KEY', 'SYSTEM_BACKUP_KEY', 'SYSTEM_INSTANCE_ID', 'SYSTEM_BACKUP_ENABLED'] } }
+  })
+  const pricingParams = z.object({ provider: z.literal('hetzner') })
+  app.get('/primary-ipv4-pricing/:provider', async request => {
+    if (!canManagePrimaryIpv4Pricing(requireAdmin(request))) throw new ForbiddenError('این تنظیم فقط برای سوپرادمین مجاز است.')
+    const { provider } = parse(pricingParams, request.params)
+    return { data: await primaryIpv4Pricing(db, provider) }
+  })
+  app.post('/primary-ipv4-pricing/:provider', async request => {
+    const admin = requireAdmin(request)
+    if (!canManagePrimaryIpv4Pricing(admin)) throw new ForbiddenError('این تنظیم فقط برای سوپرادمین مجاز است.')
+    const { provider } = parse(pricingParams, request.params)
+    const { feeRial } = parse(z.object({ feeRial: z.number().int().positive().max(maxPrimaryIpv4FeeRial).multipleOf(10), confirm: z.literal(true) }).strict(), request.body)
+    return { data: await setPrimaryIpv4Fee(db, admin.id, provider, feeRial) }
+  })
+  app.post('/primary-ipv4-operations/:id/confirm-rollback', async request => {
+    const admin = requireAdmin(request)
+    if (!canManagePrimaryIpv4Pricing(admin)) throw new ForbiddenError('این عملیات فقط برای سوپرادمین مجاز است.')
+    const { id } = parse(idParam, request.params)
+    const { note } = parse(z.object({ note: z.string().trim().min(1).max(500), confirm: z.literal(true) }).strict(), request.body)
+    const operation = await db.query.providerOperations.findFirst({ where: t => and(eq(t.id, id), eq(t.action, 'replace_primary_ipv4')) })
+    const server = operation && await db.query.servers.findFirst({ where: t => eq(t.id, operation.referenceId) })
+    if (!operation || !server) throw new NotFoundError()
+    await confirmPrimaryIpv4Rollback(db, server, operation, { id: admin.id, note })
+    return { data: { confirmed: true } }
   })
   app.post('/authorize', { config: { rateLimit: { max: 5, timeWindow: '10 minutes' } } }, async request => {
     const input = parse(z.object({ action: actions, payload: z.unknown() }).strict(), request.body)

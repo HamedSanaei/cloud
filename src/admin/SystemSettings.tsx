@@ -7,6 +7,7 @@ import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Input, Select, Toggle } from '../components/ui/FormControls'
 import { Modal } from '../components/ui/Modal'
+import { formatToman } from '../lib/format'
 import './system-settings.css'
 
 const base = '/admin/settings'
@@ -20,7 +21,7 @@ const rial = (value: number) => new Intl.NumberFormat('fa-IR').format(value) + '
 const countLabel: Record<string,string> = { users: 'کاربران', tickets: 'تیکت‌ها', wallets: 'کیف پول‌ها', wallet_transactions: 'گردش‌های مالی', orders: 'سفارش‌ها', order_items: 'اقلام سفارش', order_events: 'رویدادهای سفارش', invoices: 'فاکتورها', invoice_items: 'اقلام فاکتور', subscriptions: 'اشتراک‌ها', subscription_events: 'رویدادهای اشتراک', renewal_attempts: 'تلاش‌های تمدید', servers: 'سرورها', provider_operations: 'عملیات سرویس‌دهنده', wallet_payments: 'پرداخت‌ها', gateway_credentials: 'نسخه‌های مرچنت', admin_adjustments: 'تعدیل‌های مالی', pricing_rules: 'قواعد قیمت‌گذاری' }
 const label = (value: string) => ({ active: 'فعال', disabled: 'غیرفعال', pending: 'در انتظار', backup: 'پشتیبان', upload: 'فایل بارگذاری‌شده', rehearsal: 'آزمایش بازیابی', restore: 'بازیابی', completed: 'تکمیل‌شده', failed: 'ناموفق', running: 'در حال اجرا', queued: 'در صف', awaiting_approval: 'در انتظار تکمیل', interrupted: 'قطع‌شده؛ نیازمند بررسی', rolled_back: 'بازگردانی ایمن انجام شد', deleted: 'حذف‌شده', preflight: 'پیش‌بررسی', dumping: 'تهیه پشتیبان', encrypted: 'رمزگذاری‌شده', authenticated: 'اصالت تأیید شد', verified: 'صحت‌سنجی موفق', pre_backup: 'پشتیبان پیش از بازیابی', restoring: 'در حال بازیابی', rollback: 'بازگردانی ایمن', retention_expired: 'پایان دوره نگهداری' } as Record<string,string>)[value] || value
 function date(value: string) { return new Date(value).toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' }) }
-interface Capabilities { allowed: boolean; encryptionReady: boolean; backupsEnabled: boolean; restoreEnabled: boolean; maxUploadBytes: number; dualApprovalRial: number }
+interface Capabilities { allowed: boolean; primaryIpv4Pricing?: boolean; encryptionReady: boolean; backupsEnabled: boolean; restoreEnabled: boolean; maxUploadBytes: number; dualApprovalRial: number }
 function SimpleAdminActions({ children }: { children: ReactNode }) {
   const [error, setError] = useState('')
   const inFlight = useRef(false)
@@ -50,9 +51,42 @@ export function SystemSettingsLayout() {
     <nav className="system-tabs" aria-label="بخش‌های تنظیمات فروشگاه">{[
       { to: 'gateway', label: 'درگاه‌ها', icon: CreditCard }, { to: 'logs', label: 'لاگ‌ها', icon: FileClock },
       { to: 'backups', label: 'پشتیبان‌گیری و بازیابی', icon: Database }, { to: 'finance', label: 'عملیات مالی کاربران', icon: WalletCards },
+      ...(capabilities.data?.primaryIpv4Pricing ? [{ to: 'primary-ipv4', label: 'تعرفهٔ تعویض IPv4', icon: Settings2 }] : []),
     ].map(({ to, label, icon: Icon }) => <NavLink key={to} to={to}><Icon size={19} />{label}</NavLink>)}</nav>
     {capabilities.loading ? <p role="status">در حال بررسی دسترسی…</p> : capabilities.error ? <p role="alert">{capabilities.error}</p> : !capabilities.data?.allowed ? <Card><h2>دسترسی مدیریت مجاز نیست</h2><p>این بخش فقط برای حساب‌های مدیر فعال فروشگاه قابل استفاده است.</p></Card> : <SimpleAdminActions>{!capabilities.data.encryptionReady ? <Card><h2>کلید رمزگذاری آماده نیست</h2><p>برای تغییر مرچنت TabaPay باید STORE_SECRET_KEY مستقل و پایدار در تنظیمات محافظت‌شده سرور ثبت شود. سایر بخش‌های مدیریتی قابل مشاهده و استفاده هستند و عملیات Backup نیز به تنظیمات مستقل خود نیاز دارد.</p></Card> : null}<Outlet context={capabilities.data} /></SimpleAdminActions>}
   </div>
+}
+type IpPricing = { feeRial: number; history: Array<{ actorId: string; createdAt: string; metadata: { previousRial: number; feeRial: number } }> }
+export function SystemPrimaryIpv4Pricing() {
+  const capabilities = useOutletContext<Capabilities>()
+  return capabilities.primaryIpv4Pricing ? <PrimaryIpv4PricingForm /> : <p role="alert">این تنظیم فقط برای سوپرادمین مجاز است.</p>
+}
+
+function PrimaryIpv4PricingForm() {
+  const path = '/primary-ipv4-pricing/hetzner'
+  const query = useApiQuery(() => get<IpPricing>(path))
+  const [draft, setDraft] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('')
+  const value = Number(draft)
+  if (query.loading && !query.data) return <p role="status">در حال دریافت تعرفه…</p>
+  if (query.error || !query.data) return <p role="alert">{query.error || 'تعرفه دریافت نشد.'}</p>
+  return <Card><h2>تعرفهٔ تعویض IPv4 اصلی هتزنر</h2><p>هزینهٔ فعلی {formatToman(query.data.feeRial / 10)} است. درخواست‌های ثبت‌شده با همان مبلغ قبلی ادامه پیدا می‌کنند.</p>
+    <form className="form-stack" onSubmit={async event => {
+      event.preventDefault()
+      if (busy || !Number.isInteger(value) || value < 1 || value > 100_000_000) return
+      setBusy(true); setError('')
+      try { await post(path, { feeRial: value * 10, confirm: true }); setDraft(''); query.refetch() }
+      catch (failure) { setError(errorText(failure)) }
+      finally { setBusy(false) }
+    }}>
+      <Input label="تعرفهٔ جدید (تومان)" type="number" min={1} max={100_000_000} step={1} required value={draft} onChange={event => setDraft(event.target.value)} />
+      <Button type="submit" disabled={busy || !draft}>تأیید و ثبت تعرفه</Button>
+      {error && <p role="alert">{error}</p>}
+    </form>
+    <h3>آخرین تغییرات تعرفه</h3>
+    {query.data.history.length ? <ul>{query.data.history.map(entry => <li key={`${entry.actorId}:${entry.createdAt}`}>
+      {date(entry.createdAt)} · <bdi>{entry.actorId}</bdi> · {formatToman(entry.metadata.previousRial / 10)} ← {formatToman(entry.metadata.feeRial / 10)}
+    </li>)}</ul> : <p>تغییری ثبت نشده است.</p>}
+  </Card>
 }
 interface Gateway { enabled: boolean; sandbox: boolean; configured: boolean; source: string; maskedMerchant: string; domain: string; callbackUrl: string; returnUrl: string; versions: Array<{ fingerprint: string; suffix: string; createdAt: string }> }
 export function SystemGateway() {

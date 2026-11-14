@@ -1,14 +1,16 @@
 import { apiDelete, apiGet, apiPost } from './apiClient'
 import type { Server, ServerLifecycle } from './types'
 export type { ManagementAction } from '../../backend/src/modules/providers/customer.interface'
-import type { ManagementAction, ServerAccessBlock, ServerAccessEligibility, ServerMetrics } from '../../backend/src/modules/providers/customer.interface'
+import type { ManagementAction, ServerAccessBlock, ServerAccessEligibility, ServerMetrics, ServerOperationAction } from '../../backend/src/modules/providers/customer.interface'
 export type { ServerAccessBlock } from '../../backend/src/modules/providers/customer.interface'
 export type { ServerMetrics }
 export interface ServerOperation {
-  id: string; action: ManagementAction; status: 'queued' | 'dispatching' | 'provider_accepted' | 'confirmed' | 'outcome_unknown' | 'failed'
+  id: string; action: ServerOperationAction; status: 'queued' | 'dispatching' | 'provider_accepted' | 'confirmed' | 'outcome_unknown' | 'failed'
   actionId: number | null; createdAt: string; updatedAt: string; completedAt: string | null; message: string | null
   needsOperator?: boolean
+  primaryIpv4?: { oldIp: string; newIp: string | null; step: string | null; feeRial: number; ledgerId: string; refundId: string | null }
 }
+export interface PrimaryIpv4Quote { currentIp: string | null; feeRial: number; version: string; balanceRial: number; reason: string | null; needsTopUp: boolean }
 export interface ServerDetail extends Server {
   lifecycle: ServerLifecycle; providerAvailable: boolean; providerIdentity: string; providerState: string | null
   facts: null | { hostname: string | null; vcpu: number | null; memoryMb: number | null; diskGb: number | null; ipv4: string | null; ipv6: string | null;
@@ -24,6 +26,7 @@ export interface ServerDetail extends Server {
   accessEligibility?: ServerAccessEligibility
   resizeBlock?: ServerAccessBlock | null
   consoleBlock?: ServerAccessBlock | 'browser_session_required' | null
+  primaryIpv4?: PrimaryIpv4Quote
   operations: ServerOperation[]; credentials: Array<{ operationId: string | null; claimedAt: string | null; acknowledgedAt: string | null }>
 }
 export interface ResizeOption { type: string; architecture: string; storageType: string; vcpu: number; memoryMb: number; diskGb: number; available: boolean; offerId: string }
@@ -39,9 +42,13 @@ export const getServerImages = async (id: string) => (await apiGet<{ data: Array
 export const previewResize = async (id: string, offerId: string, upgradeDisk: boolean) => (await apiPost<{ data: ResizePreview }>(`/servers/${encodeURIComponent(id)}/resize-preview`, { offerId, upgradeDisk })).data
 export const submitServerAction = async (id: string, hostname: string, action: ManagementAction, input: Record<string, unknown>, key: string) =>
   (await apiPost<{ data: ServerOperation }>(`/servers/${encodeURIComponent(id)}/management/actions`, { ...input, action, hostname, confirm: true }, { headers: { 'idempotency-key': key } })).data
+export const submitPrimaryIpv4 = async (id: string, hostname: string, quote: PrimaryIpv4Quote, key: string) =>
+  (await apiPost<{ data: ServerOperation }>(`/servers/${encodeURIComponent(id)}/primary-ipv4`, {
+    hostname, currentIp: quote.currentIp, version: quote.version, feeRial: quote.feeRial, confirm: true,
+  }, { headers: { 'idempotency-key': key } })).data
 export const claimServerPassword = async (id: string, operationId: string) => (await apiPost<{ data: { password: string; expiresAt: string } }>(`/servers/${encodeURIComponent(id)}/credentials/claim`, { operationId })).data
 export const acknowledgeServerPassword = (id: string, operationId: string) => apiPost(`/servers/${encodeURIComponent(id)}/credentials/ack`, { operationId })
 export const requestServerConsole = async (id: string) => (await apiPost<{ data: { grantId: string; password: string; expiresAt: string; maxSessionSeconds: number } }>(`/servers/${encodeURIComponent(id)}/console`, {}, { timeoutMs: 35_000 })).data
 export const revokeServerConsole = (id: string, grantId: string) =>
   apiDelete(`/servers/${encodeURIComponent(id)}/console/${encodeURIComponent(grantId)}`, { keepalive: true })
-export const actionLabels: Record<ManagementAction, string> = { power_on: 'روشن کردن', shutdown: 'خاموشی نرم (ACPI)', power_off: 'خاموشی اجباری', reboot: 'راه‌اندازی مجدد نرم', reset: 'ریست سخت‌افزاری', delete: 'حذف دائمی سرور', resize: 'تغییر پلن', rebuild: 'نصب مجدد سیستم‌عامل', reset_password: 'بازنشانی رمز عبور', enable_rescue: 'فعال‌سازی Rescue', disable_rescue: 'غیرفعال‌سازی Rescue', attach_iso: 'اتصال ISO', detach_iso: 'قطع ISO', change_protection: 'تغییر حفاظت سرور' }
+export const actionLabels: Record<ServerOperationAction, string> = { power_on: 'روشن کردن', shutdown: 'خاموشی نرم (ACPI)', power_off: 'خاموشی اجباری', reboot: 'راه‌اندازی مجدد نرم', reset: 'ریست سخت‌افزاری', delete: 'حذف دائمی سرور', resize: 'تغییر پلن', rebuild: 'نصب مجدد سیستم‌عامل', reset_password: 'بازنشانی رمز عبور', enable_rescue: 'فعال‌سازی Rescue', disable_rescue: 'غیرفعال‌سازی Rescue', attach_iso: 'اتصال ISO', detach_iso: 'قطع ISO', change_protection: 'تغییر حفاظت سرور', replace_primary_ipv4: 'تعویض IPv4 اصلی' }

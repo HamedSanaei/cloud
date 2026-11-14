@@ -4,7 +4,7 @@ import { EventEmitter, once } from 'node:events'
 import { Socket } from 'node:net'
 import { eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
-import type { HetznerConfig } from '../../src/config.js'
+import { getConfig, type HetznerConfig } from '../../src/config.js'
 import { buildApp } from '../../src/app.js'
 import { createHetznerProvider } from '../../src/modules/providers/hetzner/live.js'
 import { registerProvider } from '../../src/modules/providers/registry.js'
@@ -13,7 +13,7 @@ import { creditWallet, ensureDefaultWallet } from '../../src/modules/wallets/ser
 import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
 import { setFxRate } from '../../src/modules/pricing/service.js'
 import { handleProvision, handleReconcile, handleRenewalSweep, handleServerAction, handleServerSync } from '../../src/modules/provisioning/handlers.js'
-import { idempotencyKeys, providerOperations, subscriptions, users, wallets } from '../../src/db/schema.js'
+import { idempotencyKeys, providerOperations, servers, settings, subscriptions, users, wallets } from '../../src/db/schema.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 import type { ManagementAction } from '../../src/modules/providers/customer.interface.js'
 
@@ -29,6 +29,8 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
   let ctx: Awaited<ReturnType<typeof getTestContext>>, app: FastifyInstance, sequence = 100
   const machines = new Map<number, Json>(), actions = new Map<number, Json>(), calls: Array<{ method: string; path: string; account: string }> = []
   let loseDeleteResponse = false
+  const primaryIps = new Map<number, Json>()
+  let ipSequence = 10000, rejectNextAssignment: number | null = null, loseNextIpCreate: 'before' | 'after' | null = null
   const type = { id: 1, name: 'cx-fixture', architecture: 'x86', storage_type: 'local', cores: 2, memory: 4, disk: 40,
     locations: [{ name: 'hel1', available: true }], prices: [{ location: 'hel1', price_hourly: { gross: '0.0044' }, price_monthly: { gross: '3.79' } }] }
   const largerType = { ...type, id: 2, name: 'cx-fixture-large', cores: 4, memory: 8, disk: 80, prices: [{ location: 'hel1', price_hourly: { gross: '0.0088' }, price_monthly: { gross: '7.58' } }] }
@@ -37,6 +39,49 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     const path = request.pathname.replace('/v1', ''), method = init?.method ?? 'GET', account = new Headers(init?.headers).get('authorization') ?? ''
     calls.push({ method, path, account })
     const json = (data: unknown) => Response.json(data)
+    const missing = () => Response.json({ error: { code: 'not_found' } }, { status: 404 })
+    const receipt = (command: string, type: 'server' | 'primary_ip', id: number) => {
+      const action = { id: 1000 + calls.length, command, status: 'success', resources: [{ id, type }] }
+      actions.set(action.id, action)
+      return action
+    }
+    if (/^\/(servers|primary_ips)\/actions\/\d+$/.test(path)) return json({ action: actions.get(Number(path.split('/').at(-1))) })
+    if (path === '/primary_ips' && method === 'POST') {
+      if (loseNextIpCreate === 'before') { loseNextIpCreate = null; throw new Error('fixture lost request before creation') }
+      const body = JSON.parse(String(init?.body)), id = ++ipSequence
+      expect(body).toMatchObject({ type: 'ipv4', location: 'hel1', auto_delete: true })
+      const ip = { id, ip: `198.51.100.${id - 10000}`, type: 'ipv4', location: { name: body.location }, labels: body.labels,
+        assignee_id: null, assignee_type: 'unassigned', auto_delete: true, blocked: false, protection: { delete: false } }
+      primaryIps.set(id, ip)
+      if (loseNextIpCreate === 'after') { loseNextIpCreate = null; throw new Error('fixture lost create receipt') }
+      return json({ primary_ip: ip, action: null })
+    }
+    if (path === '/primary_ips') {
+      const label = request.searchParams.get('label_selector')?.split('=')[1]
+      return json({ primary_ips: [...primaryIps.values()].filter(ip => (ip.labels as Json)?.['parserver-ip-operation'] === label) })
+    }
+    const ipPath = path.match(/^\/primary_ips\/(\d+)(?:\/actions\/(assign|unassign))?$/)
+    if (ipPath) {
+      const id = Number(ipPath[1]), ip = primaryIps.get(id), command = ipPath[2]
+      if (!ip) return missing()
+      if (method === 'GET') return json({ primary_ip: ip })
+      if (method === 'DELETE') {
+        expect(ip.assignee_id).toBeNull()
+        primaryIps.delete(id)
+        return new Response(null, { status: 204 })
+      }
+      const serverId = command === 'assign' ? JSON.parse(String(init?.body)).assignee_id : Number(ip.assignee_id)
+      if (command === 'assign' && rejectNextAssignment === serverId) {
+        rejectNextAssignment = null
+        return Response.json({ error: { code: 'invalid_input' } }, { status: 422 })
+      }
+      const machine = machines.get(serverId)!
+      expect(machine.status).toBe('off')
+      ip.assignee_id = command === 'assign' ? serverId : null
+      ip.assignee_type = command === 'assign' ? 'server' : 'unassigned'
+      ;(machine.public_net as Json).ipv4 = command === 'assign' ? { id, ip: ip.ip } : null
+      return json({ action: receipt(`${command}_primary_ip`, 'primary_ip', id) })
+    }
     if (path === '/server_types') return json({ server_types: [type, largerType] })
     if (path === '/locations') return json({ locations: [{ name: 'hel1', country: 'FI', city: 'Helsinki' }] })
     if (path === '/pricing') return json({ pricing: { currency: 'EUR', primary_ips: [{ type: 'ipv4', prices: [{ location: 'hel1', price_hourly: { gross: '0.0008' } }] }] } })
@@ -59,6 +104,10 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     if (method === 'GET' && command && /^\d+$/.test(command)) return json({ action: actions.get(Number(command)) })
     if (!machines.has(id)) return Response.json({ error: { code: 'not_found' } }, { status: 404 })
     if (method === 'GET') return json({ server: machines.get(id) })
+    if (['shutdown', 'poweron'].includes(command ?? '') && (machines.get(id)!.public_net as Json).ipFixture === true) {
+      machines.get(id)!.status = command === 'shutdown' ? 'off' : 'running'
+      return json({ action: receipt(command === 'shutdown' ? 'shutdown_server' : 'start_server', 'server', id) })
+    }
     if (command === 'request_console') return json({ action: { id: 8, status: 'success' }, wss_url: 'wss://console.hetzner.cloud/fixture?ticket=fixture-ticket', password: 'fixture-console-password' })
     const actionId = 1000 + calls.length
     actions.set(actionId, { id: actionId, status: 'running', command: method === 'DELETE' ? 'delete_server' : command === 'poweroff' ? 'stop_server' : command })
@@ -90,6 +139,143 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     const response = await app.inject({ method: 'POST', remoteAddress: p.remoteAddress, url: `/api/servers/${p.server.id}/management/actions`, headers: { ...p.headers, 'idempotency-key': key }, payload: { action: command, hostname: 'fixture-server', confirm: true } })
     expect(response.statusCode, response.body).toBe(202); return response.json().data.id as string
   }
+  async function ipServer() {
+    const p = await buy(), id = ++ipSequence
+    primaryIps.set(id, { id, ip: '192.0.2.10', type: 'ipv4', location: { name: 'hel1' }, labels: {}, assignee_id: p.providerId,
+      assignee_type: 'server', auto_delete: true, blocked: false, protection: { delete: false } })
+    const network = machines.get(p.providerId)!.public_net as Json
+    network.ipv4 = { id, ip: '192.0.2.10' }
+    network.ipFixture = true
+    await activate(p)
+    return { ...p, oldIpId: id }
+  }
+  async function ipQuote(p: Purchase) {
+    return (await app.inject({ url: `/api/servers/${p.server.id}/management`, remoteAddress: p.remoteAddress, headers: p.headers })).json().data.primaryIpv4
+  }
+  function requestIp(p: Purchase, quote: { currentIp: string; feeRial: number; version: string }, key = randomUUID()) {
+    return app.inject({ method: 'POST', remoteAddress: p.remoteAddress, url: `/api/servers/${p.server.id}/primary-ipv4`,
+      headers: { ...p.headers, 'idempotency-key': key }, payload: { currentIp: quote.currentIp, feeRial: quote.feeRial, version: quote.version, hostname: 'fixture-server', confirm: true } })
+  }
+  async function driveIp(p: Purchase, operationId: string, target: string) {
+    for (let step = 0; step < 12; step++) {
+      await Promise.all([handleServerSync(ctx, { serverId: p.server.id }), handleServerSync(ctx, { serverId: p.server.id })])
+      const operation = (await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.id, operationId) }))!
+      if (operation.status === target) return operation
+    }
+    throw new Error(`Primary IPv4 operation never reached ${target}`)
+  }
+  const ipLedger = (p: Purchase) => ctx.db.query.walletTransactions.findMany({ where: (t, { and }) => and(eq(t.walletId, p.wallet.id), eq(t.referenceType, 'primary_ipv4_replacement')) })
+
+  it('locks a verified server, accepts concurrent retries once, and settles the accepted fee after provider confirmation', async () => {
+    const p = await ipServer(), quote = await ipQuote(p), key = randomUUID()
+    expect(quote).toMatchObject({ currentIp: '192.0.2.10', feeRial: 1500000, reason: null })
+    const responses = await Promise.all([requestIp(p, quote, key), requestIp(p, quote, key)])
+    expect(responses.map(response => response.statusCode)).toEqual([202, 202])
+    const id = responses[0].json().data.id
+    expect(responses[1].json().data.id).toBe(id)
+    expect((await requestIp(p, quote)).statusCode).toBe(409)
+    const blocked = await app.inject({ method: 'POST', remoteAddress: p.remoteAddress, url: `/api/servers/${p.server.id}/management/actions`,
+      headers: { ...p.headers, 'idempotency-key': randomUUID() }, payload: { hostname: 'fixture-server', action: 'delete', confirm: true } })
+    expect(blocked.statusCode).toBe(409)
+    const admin = await registerUser(ctx.db, { email: 'ip-super-admin@fixture.test', password: 'Fixture-admin-123!' })
+    await ctx.db.update(users).set({ role: 'admin' }).where(eq(users.id, admin.id))
+    const session = await createSession(ctx.db, admin.id, {}), headers = { authorization: `Bearer ${session.token}` }
+    const pricing = '/api/admin/settings/primary-ipv4-pricing/hetzner'
+    expect((await app.inject({ method: 'POST', url: pricing, headers, payload: { confirm: true, feeRial: 2000000 } })).statusCode).toBe(403)
+    const allowlist = getConfig().PRIMARY_IPV4_SUPER_ADMIN_IDS
+    allowlist.push(admin.id)
+    try {
+      expect((await app.inject({ method: 'POST', url: pricing, headers, payload: { confirm: true, feeRial: 0 } })).statusCode).toBe(422)
+      expect((await app.inject({ method: 'POST', url: pricing, headers, payload: { confirm: true, feeRial: 2000000 } })).statusCode).toBe(200)
+      const result = (await app.inject({ url: pricing, headers })).json().data
+      expect(result).toMatchObject({ feeRial: 2000000, history: [{ actorId: admin.id, metadata: { previousRial: 1500000, feeRial: 2000000 } }] })
+      const before = calls.length
+      const operation = await driveIp(p, id, 'succeeded')
+      const updates = calls.slice(before).filter(call => call.method !== 'GET')
+      expect(updates.every(call => call.account === 'Bearer fixture-project-secret')).toBe(true)
+      expect(updates.map(call => call.path)).toEqual([`/servers/${p.providerId}/actions/shutdown`, '/primary_ips',
+        `/primary_ips/${p.oldIpId}/actions/unassign`, expect.stringMatching(/\/primary_ips\/\d+\/actions\/assign/),
+        `/servers/${p.providerId}/actions/poweron`, `/primary_ips/${p.oldIpId}`])
+      expect(await ipLedger(p)).toEqual([expect.objectContaining({ amountRial: -1500000, referenceId: p.server.id, description: 'تعویض IPv4 اصلی — fixture-server' })])
+      const listed = (await app.inject({ url: '/api/servers', headers: p.headers })).json().data
+      expect(listed.find((s: { id: string }) => s.id === p.server.id).ip).toBe((operation.responseMetadata as Json).newIp)
+      expect((await requestIp(p, quote, key)).json().data.id).toBe(id)
+      expect((await requestIp(p, { ...quote, currentIp: (operation.responseMetadata as Json).newIp as string })).statusCode).toBe(409)
+    } finally {
+      allowlist.pop()
+      await ctx.db.delete(settings).where(eq(settings.key, 'primary_ipv4.fee.hetzner'))
+    }
+  })
+
+  it('rejects other owners and unsupported providers, and never dispatches with insufficient funds', async () => {
+    const p = await ipServer(), quote = await ipQuote(p), other = await buy()
+    const writes = calls.filter(call => call.method !== 'GET').length
+    expect((await requestIp({ ...p, headers: other.headers }, quote)).statusCode).toBe(404)
+    await ctx.db.update(wallets).set({ balanceRial: 0 }).where(eq(wallets.id, p.wallet.id))
+    expect((await ipQuote(p)).needsTopUp).toBe(true)
+    const insufficient = await requestIp(p, quote)
+    expect(insufficient.statusCode).toBe(422)
+    expect(insufficient.json().error).toBe('insufficient_funds')
+    await ctx.db.update(servers).set({ provider: 'asiatech' }).where(eq(servers.id, p.server.id))
+    try {
+      expect((await ipQuote(p)).reason).toContain('پشتیبانی')
+      expect((await requestIp(p, quote)).statusCode).toBe(409)
+      expect(await ipLedger(p)).toEqual([])
+      expect(calls.filter(call => call.method !== 'GET')).toHaveLength(writes)
+    } finally {
+      await ctx.db.update(servers).set({ provider: 'hetzner' }).where(eq(servers.id, p.server.id))
+    }
+  })
+
+  it('reattaches the original IP, restores power, cleans up and refunds once on rejected attachment', async () => {
+    const p = await ipServer(), quote = await ipQuote(p)
+    rejectNextAssignment = p.providerId
+    const accepted = await requestIp(p, quote), id = accepted.json().data.id
+    expect(accepted.statusCode).toBe(202)
+    const operation = await driveIp(p, id, 'failed')
+    expect(operation.responseMetadata).toMatchObject({ step: 'remove_new', refundId: expect.any(String) })
+    expect(machines.get(p.providerId)).toMatchObject({ status: 'running', public_net: { ipv4: { id: p.oldIpId, ip: '192.0.2.10' } } })
+    expect(primaryIps.has((operation.responseMetadata as Json).ipId as number)).toBe(false)
+    expect((await ipLedger(p)).map(row => row.amountRial).sort()).toEqual([-1500000, 1500000])
+  })
+
+  it('recovers a lost create receipt by its exact project label without another purchase or retaining the fee', async () => {
+    const p = await ipServer(), quote = await ipQuote(p)
+    loseNextIpCreate = 'after'
+    const accepted = await requestIp(p, quote), id = accepted.json().data.id
+    expect(accepted.statusCode).toBe(202)
+    const before = calls.length
+    await driveIp(p, id, 'needs_reconciliation')
+    expect((await ipLedger(p)).map(row => row.amountRial).sort()).toEqual([-1500000, 1500000])
+    const operation = await driveIp(p, id, 'succeeded')
+    expect(operation.responseMetadata).toMatchObject({ refundId: expect.any(String), newIp: expect.any(String) })
+    expect(calls.slice(before).filter(call => call.method === 'POST' && call.path === '/primary_ips')).toHaveLength(1)
+    expect(await ipLedger(p)).toHaveLength(2)
+  })
+
+  it('lets only an authorized operator release an ambiguous operation after verifying original power and IP', async () => {
+    const p = await ipServer(), quote = await ipQuote(p)
+    loseNextIpCreate = 'before'
+    const id = (await requestIp(p, quote)).json().data.id
+    await driveIp(p, id, 'needs_reconciliation')
+    const admin = await registerUser(ctx.db, { email: 'ip-operator@fixture.test', password: 'Fixture-admin-123!' })
+    await ctx.db.update(users).set({ role: 'admin' }).where(eq(users.id, admin.id))
+    const session = await createSession(ctx.db, admin.id, {})
+    const submit = () => app.inject({ method: 'POST', url: `/api/admin/settings/primary-ipv4-operations/${id}/confirm-rollback`,
+      headers: { authorization: `Bearer ${session.token}` }, payload: { note: 'Reviewed project history', confirm: true } })
+    expect((await submit()).statusCode).toBe(403)
+    const allowlist = getConfig().PRIMARY_IPV4_SUPER_ADMIN_IDS
+    allowlist.push(admin.id)
+    try {
+      await ctx.db.update(providerOperations).set({ updatedAt: new Date(0) }).where(eq(providerOperations.id, id))
+      expect((await submit()).statusCode).toBe(409)
+      machines.get(p.providerId)!.status = 'running'
+      expect((await submit()).statusCode).toBe(200)
+      expect((await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.id, id) }))?.status).toBe('failed')
+      expect(await ipLedger(p)).toHaveLength(2)
+      expect((await ipQuote(p)).reason).toBeNull()
+    } finally { allowlist.pop() }
+  })
   it('recovers one owned pending row and never labels an accepted create as ready', async () => {
     const p = await buy()
     const notices = async () => (await app.inject({ url: '/api/notifications', headers: p.headers })).json().data as Array<{ id: string; title: string; read: boolean; href: string }>

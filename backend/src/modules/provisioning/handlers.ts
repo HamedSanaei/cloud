@@ -29,7 +29,9 @@ import { applyWalletTransaction } from '../wallets/service.js'
 import type { CloudQueues } from '../../jobs/queue.js'
 import type { ProviderBillingOption, ProviderServerView, RecoveryResult } from '../providers/provider.interface.js'
 import { assertPowerOnFunding, loadFundingFleet, warnLowBalance } from '../billing/funding.js'
-import { handleCustomerOperation, isOrphanedPowerOperation, notifyDelayedOperations, reconcileCustomerOperations, recordOperationFailure } from '../servers/management.js'
+import { findBlockingManagementOperation, handleCustomerOperation, isOrphanedPowerOperation, notifyDelayedOperations, reconcileCustomerOperations, recordOperationFailure } from '../servers/management.js'
+import { advancePrimaryIpv4 } from '../servers/primary-ip-operation.js'
+import { replacePrimaryIpv4 } from '../servers/primary-ip-request.js'
 import { notifyServerOperation, publishNotification } from '../notifications/service.js'
 import type { ManagementAction } from '../providers/customer.interface.js'
 import { purgeExpiredServerSecrets } from '../servers/secrets.js'
@@ -538,13 +540,18 @@ export async function handleServerSync(ctx: HandlerContext, data: { serverId?: s
   if (!server?.providerServerId) return { status: 'skipped' }
   try {
     if (server.provider === 'hetzner') {
+      const blocking = await findBlockingManagementOperation(db, server.id)
+      if (blocking?.action === replacePrimaryIpv4) {
+        await advancePrimaryIpv4(db, server, blocking)
+        return { status: 'tracking_primary_ipv4' }
+      }
       await reconcileCustomerOperations(db, server)
       const current = await db.query.servers.findFirst({ where: t => eq(t.id, server.id) })
       if (current?.terminatedAt) return { status: 'terminated' }
     }
     const view = await getProvider(server.provider).getServer(server.providerServerId)
     if (view.state === 'active' && !server.subscriptionId) await finishServerActivation(db, server.id, view)
-    if (server.provider === 'hetzner') await updateServerFromView(db, server.id, view)
+    if (server.provider === 'hetzner') await updateServerFromView(db, server.id, view, server)
     else await syncLegacyPowerState(db, server, view)
     return { status: 'synced' }
   } finally {

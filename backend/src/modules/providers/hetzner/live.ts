@@ -70,6 +70,7 @@ export function createHetznerProvider(config: HetznerConfig, options: HetznerPro
       // Safe, allowlisted fields only. An inventory listing must never
       // forward the API response, private user_data or provider credentials.
       metadata: {
+        ...(Number.isSafeInteger(object(network.ipv4).id) ? { primaryIpv4Id: object(network.ipv4).id } : {}),
         ...(typeof server.created === 'string' ? { createdAt: clean(server.created) } : {}),
         ...(typeof type.name === 'string' ? { serverType: clean(type.name) } : {}),
         ...(typeof location === 'string' ? { location: clean(location) } : {}),

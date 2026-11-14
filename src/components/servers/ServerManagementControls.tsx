@@ -4,19 +4,20 @@ import { Button } from '../ui/Button'
 import { Input } from '../ui/FormControls'
 import { Modal } from '../ui/Modal'
 import { Card } from '../ui/Card'
-import { formatFaDateTime } from '../../lib/format'
+import { formatFaDateTime, formatToman } from '../../lib/format'
 import { acknowledgeServerPassword, actionLabels, claimServerPassword, type ManagementAction, type ServerDetail, type ServerOperation } from '../../lib/serverManagement'
 
 export function ServerPowerActionButton({ action, disabled, onClick }: { action: ManagementAction; disabled: boolean; onClick: () => void }) {
   return <Button variant={action === 'power_off' || action === 'reset' ? 'danger' : 'secondary'} className="server-power-action" icon={<Power size={18} />} disabled={disabled} onClick={onClick}>{actionLabels[action]}</Button>
 }
-export function DestructiveConfirmation({ server, action, busy, error, onClose, onConfirm }: { server: ServerDetail; action: ManagementAction; busy: boolean; error: string; onClose: () => void; onConfirm: () => void }) {
+export function DestructiveConfirmation({ server, action, busy, error, onClose, onConfirm, children }: { server: ServerDetail; action: ServerOperation['action']; busy: boolean; error: string; onClose: () => void; onConfirm: () => void; children?: React.ReactNode }) {
   const [typed, setTyped] = useState(''), [ack, setAck] = useState(false)
   const destructive = ['delete', 'rebuild'].includes(action)
   const forced = ['power_off', 'reset'].includes(action)
   return <Modal className={`server-management-modal ${action === 'delete' ? 'server-delete-modal' : ''}`} trapFocus open onClose={() => { if (!busy) onClose() }} title={actionLabels[action]} description={`سرور ${server.name} — ${server.providerIdentity}`}
     footer={<><Button variant="secondary" disabled={busy} onClick={onClose}>انصراف</Button><Button variant={destructive || forced ? 'danger' : 'primary'} disabled={busy || !ack || typed !== server.name} onClick={onConfirm}>{busy ? 'در حال ثبت درخواست…' : `تأیید ${actionLabels[action]}`}</Button></>}>
     <div className="server-confirmation">
+      {children}
       {(destructive || forced) && <p className="server-danger-note"><TriangleAlert size={20} />{destructive ? 'این عملیات داده‌های دیسک سرور را از بین می‌برد و بازگشت‌پذیر نیست.' : 'این فرمان بدون انتظار برای خاموش‌شدن نرم سیستم‌عامل اجرا می‌شود و ممکن است داده‌های ذخیره‌نشده از بین بروند.'}</p>}
       {action === 'delete' && <p className="server-notice">تمدید و برداشت‌های آیندهٔ همین سرور فقط پس از تأیید حذف در Hetzner به‌طور نهایی متوقف می‌شوند. منابع مستقل مانند Volume، Snapshot و IP ممکن است باقی بمانند. برای دورهٔ پیش‌پرداخت، بازپرداخت خودکار انجام نمی‌شود.</p>}
       <Input autoComplete="off" label={`برای تأیید، ${server.name} را دقیق تایپ کنید`} value={typed} onChange={event => setTyped(event.target.value)} disabled={busy} dir="ltr" />
@@ -27,8 +28,12 @@ export function DestructiveConfirmation({ server, action, busy, error, onClose, 
 }
 const operationLabels = { queued: 'در صف', dispatching: 'در حال ارسال', provider_accepted: 'پذیرفته‌شده توسط Hetzner', confirmed: 'تأیید نهایی', outcome_unknown: 'نتیجه نامشخص', failed: 'ناموفق' }
 export function ServerOperationStatus({ operation }: { operation: ServerOperation }) {
+  const ip = operation.primaryIpv4
+  const ipSteps: Record<string, string> = { shutdown: 'خاموشی نرم سرور', create: 'دریافت آدرس جدید', detach_old: 'جداسازی آدرس قبلی', attach_new: 'اتصال آدرس جدید', restart: 'روشن‌کردن سرور', remove_old: 'آزادسازی آدرس قبلی', detach_new: 'جداسازی آدرس جدید', restore_old: 'بازیابی آدرس قبلی', restart_old: 'بازیابی وضعیت برق', remove_new: 'آزادسازی آدرس جدید' }
   return <article className="server-operation" role="status"><div><strong>{actionLabels[operation.action] ?? 'عملیات سرور'}</strong><span className={`server-lifecycle server-lifecycle--${operation.status === 'confirmed' ? 'ready' : operation.status === 'failed' ? 'failed' : operation.status === 'outcome_unknown' ? 'outcome_unknown' : 'provisioning'}`}>{operationLabels[operation.status]}</span></div>
     <p>شناسه عملیات: <bdi>{operation.id}</bdi>{operation.actionId ? <> · Action ID: <bdi>{operation.actionId}</bdi></> : null}</p><small>{formatFaDateTime(operation.updatedAt)}</small>{operation.message && <p>{operation.message}</p>}
+    {ip && <><p>{ip.step && ipSteps[ip.step]} · IPv4 قبلی <bdi dir="ltr">{ip.oldIp}</bdi>{ip.newIp && <> · IPv4 جدید <bdi dir="ltr">{ip.newIp}</bdi></>}</p>
+      <p>{formatToman(ip.feeRial / 10)} · شناسه تراکنش <bdi>{ip.ledgerId}</bdi>{ip.refundId && <> · بازگشت وجه <bdi>{ip.refundId}</bdi></>}</p></>}
   </article>
 }
 export function ServerBillingTerminationState({ server }: { server: ServerDetail }) {

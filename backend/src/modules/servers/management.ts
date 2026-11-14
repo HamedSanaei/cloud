@@ -59,11 +59,12 @@ export function customerProvider(server: Server) {
 }
 export function managementDto(op: Operation) {
   const meta = op.responseMetadata as { actionId?: number; accepted?: boolean; reconciledAt?: string } | null
-  const unknown = op.status === 'unknown' || op.status === 'needs_reconciliation' || operationDelayed(op)
+  const ipChange = op.action === 'replace_primary_ipv4'
+  const unknown = op.status === 'unknown' || op.status === 'needs_reconciliation' || (!ipChange && operationDelayed(op))
   return { id: op.id, action: op.action, status: op.status === 'succeeded' ? 'confirmed' : op.status === 'failed' ? 'failed'
-    : unknown ? 'outcome_unknown' : op.status === 'pending' ? 'queued' : meta?.accepted ? 'provider_accepted' : 'dispatching',
-    actionId: meta?.actionId ?? null, createdAt: op.createdAt.toISOString(), updatedAt: op.updatedAt.toISOString(),
-    completedAt: op.completedAt?.toISOString() ?? null, needsOperator: isOrphanedPowerOperation(op),
+    : unknown ? 'outcome_unknown' : op.status === 'pending' ? 'queued' : meta?.accepted || (ipChange && meta?.actionId) ? 'provider_accepted' : 'dispatching',
+    actionId: meta?.actionId || null, createdAt: op.createdAt.toISOString(), updatedAt: op.updatedAt.toISOString(),
+    completedAt: op.completedAt?.toISOString() ?? null, needsOperator: isOrphanedPowerOperation(op) || (ipChange && unknown),
     message: op.status === 'failed' ? 'عملیات انجام نشد؛ حفاظت، وضعیت سرور یا دسترسی پروژه را بررسی کنید.' : isOrphanedPowerOperation(op)
       ? 'این درخواست رسید قابل پیگیری ندارد. شناسهٔ عملیات را برای بررسی سابقهٔ ارائه‌دهنده به پشتیبانی بدهید.'
       : unknown ? 'نتیجهٔ ارائه‌دهنده هنوز قابل تأیید نیست؛ وضعیت را دوباره بررسی کنید.' : null }
@@ -218,7 +219,7 @@ export async function handleCustomerOperation(db: DbClient, operationId: string)
 }
 
 export async function reconcileCustomerOperation(db: DbClient, server: Server, operation: Operation) {
-  if (operation.completedAt || !operation.action || !reconcilable.some(status => status === operation.status)) return
+  if (operation.completedAt || !operation.action || !managementActions.includes(operation.action as ManagementAction) || !reconcilable.some(status => status === operation.status)) return
   const requestedServerId = (operation.requestMetadata as { providerServerId?: string } | null)?.providerServerId
   if (operation.provider !== server.provider || (requestedServerId && requestedServerId !== server.providerServerId)) {
     throw new ProviderUnknownError('Provider operation belongs to a different server identity')

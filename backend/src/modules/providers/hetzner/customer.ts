@@ -2,6 +2,7 @@ import type { CustomerProvider, ManagementAction, ServerActionEvidence } from '.
 import type { ProviderServerView } from '../provider.interface.js'
 import { ProviderPermanentError, ProviderUnknownError } from '../../../lib/errors.js'
 import { HetznerApiError, object, type HetznerClient } from './client.js'
+import { createPrimaryIpv4Provider } from './primary-ip.js'
 
 export const hetznerCommands: Record<ManagementAction, string> = {
   power_on: 'poweron', shutdown: 'shutdown', power_off: 'poweroff', reboot: 'reboot', reset: 'reset', delete: 'delete_server',
@@ -11,6 +12,7 @@ export const hetznerCommands: Record<ManagementAction, string> = {
 export function createCustomerProvider(resolve: (id: string) => { id: string; client: HetznerClient }, inspect: (id: string) => Promise<ProviderServerView>): CustomerProvider {
   return {
     inspect,
+    primaryIpv4: createPrimaryIpv4Provider(resolve),
     async submit(id, action, input) {
       const route = resolve(id), command = hetznerCommands[action]
       let body: Record<string, unknown> | undefined
