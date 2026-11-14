@@ -78,6 +78,7 @@ export async function readCatalog(client: HetznerClient, clean: (value: string) 
         ipv4Count: 1, ipv6Available: true, providerCurrency: currency,
         providerPriceCents: native.amountCents ?? null, billingOptions: [native], operatingSystems, serviceLevels: [],
         raw: {
+          storageType: type.storage_type,
           architecture: type.architecture, ipv4Included: true,
           serverHourlyGross: hourly, ipv4HourlyGross: ipHourly,
           ...(monthly !== undefined ? { serverMonthlyCapGross: monthly } : {}),

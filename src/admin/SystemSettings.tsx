@@ -8,6 +8,7 @@ import { Card } from '../components/ui/Card'
 import { Input, Select, Toggle } from '../components/ui/FormControls'
 import { Modal } from '../components/ui/Modal'
 import { formatToman } from '../lib/format'
+import { iranResources, iranRateMaximum, type IranResource, type IranTariffs } from '../../backend/src/contracts/home-tariffs'
 import './system-settings.css'
 
 const base = '/admin/settings'
@@ -51,10 +52,38 @@ export function SystemSettingsLayout() {
     <nav className="system-tabs" aria-label="بخش‌های تنظیمات فروشگاه">{[
       { to: 'gateway', label: 'درگاه‌ها', icon: CreditCard }, { to: 'logs', label: 'لاگ‌ها', icon: FileClock },
       { to: 'backups', label: 'پشتیبان‌گیری و بازیابی', icon: Database }, { to: 'finance', label: 'عملیات مالی کاربران', icon: WalletCards },
+      { to: 'iran-tariffs', label: 'تعرفهٔ سرور ایران', icon: Settings2 },
       ...(capabilities.data?.primaryIpv4Pricing ? [{ to: 'primary-ipv4', label: 'تعرفهٔ تعویض IPv4', icon: Settings2 }] : []),
     ].map(({ to, label, icon: Icon }) => <NavLink key={to} to={to}><Icon size={19} />{label}</NavLink>)}</nav>
     {capabilities.loading ? <p role="status">در حال بررسی دسترسی…</p> : capabilities.error ? <p role="alert">{capabilities.error}</p> : !capabilities.data?.allowed ? <Card><h2>دسترسی مدیریت مجاز نیست</h2><p>این بخش فقط برای حساب‌های مدیر فعال فروشگاه قابل استفاده است.</p></Card> : <SimpleAdminActions>{!capabilities.data.encryptionReady ? <Card><h2>کلید رمزگذاری آماده نیست</h2><p>برای تغییر مرچنت TabaPay باید STORE_SECRET_KEY مستقل و پایدار در تنظیمات محافظت‌شده سرور ثبت شود. سایر بخش‌های مدیریتی قابل مشاهده و استفاده هستند و عملیات Backup نیز به تنظیمات مستقل خود نیاز دارد.</p></Card> : null}<Outlet context={capabilities.data} /></SimpleAdminActions>}
   </div>
+}
+type IranTariffSettings = IranTariffs & { published: boolean }
+const resources = Object.keys(iranResources) as IranResource[]
+export function SystemIranTariffs() {
+  const tariffs = useApiQuery(() => get<IranTariffSettings | null>('/iran-tariffs'))
+  const [draft, setDraft] = useState<Partial<IranTariffSettings>>({})
+  const [notice, setNotice] = useState(''), [busy, setBusy] = useState(false)
+  if (tariffs.loading) return <p role="status">در حال دریافت تعرفه…</p>
+  if (tariffs.error) return <p role="alert">{tariffs.error}</p>
+  const value = { rates: { outbound: null, inbound: null, cpu: null, ram: null }, trafficUnit: 'TB', tax: 'excluded', published: false, ...tariffs.data, ...draft } satisfies IranTariffSettings
+  return <Card><h2>تعرفهٔ ماهانهٔ منابع آسیاتک</h2><p>نرخ مصوب فروش به ریال وارد شود. ردیف خالی برای استعلام نمایش داده می‌شود.</p>
+    <form className="form-stack" onSubmit={async event => {
+      event.preventDefault()
+      if (busy) return
+      setBusy(true); setNotice('')
+      try { await post('/iran-tariffs', value); tariffs.refetch(); setDraft({}); setNotice('تعرفه ذخیره شد.') }
+      catch (error) { setNotice(errorText(error)) }
+      finally { setBusy(false) }
+    }}>
+      {resources.map(resource => <Input key={resource} label={`${iranResources[resource]} (ریال)`} type="number" min={0} max={iranRateMaximum} step={1}
+        value={value.rates[resource] ?? ''} onChange={event => setDraft({ ...draft, rates: { ...value.rates, [resource]: event.target.value === '' ? null : Number(event.target.value) } })} />)}
+      <Select label="واحد ترافیک" value={value.trafficUnit} onChange={event => setDraft({ ...draft, trafficUnit: event.target.value === 'TiB' ? 'TiB' : 'TB' })}><option value="TB">TB (۱٬۰۰۰ GB)</option><option value="TiB">TiB (۱٬۰۲۴ GiB)</option></Select>
+      <Select label="مالیات" value={value.tax} onChange={event => setDraft({ ...draft, tax: event.target.value === 'included' ? 'included' : 'excluded' })}><option value="excluded">بدون مالیات</option><option value="included">شامل مالیات</option></Select>
+      <Toggle label="انتشار نرخ‌های تأییدشده در صفحهٔ اصلی" checked={value.published} onChange={published => setDraft({ ...draft, published })} />
+      <Button type="submit" disabled={busy}>ذخیرهٔ تعرفه</Button><p role="status">{notice}</p>
+    </form>
+  </Card>
 }
 type IpPricing = { feeRial: number; history: Array<{ actorId: string; createdAt: string; metadata: { previousRial: number; feeRial: number } }> }
 export function SystemPrimaryIpv4Pricing() {
