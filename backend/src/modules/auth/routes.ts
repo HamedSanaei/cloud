@@ -52,6 +52,7 @@ function challengeResponse(
   type: 'email' | 'sms' | 'totp',
   destination: string,
   developmentCode?: string,
+  smsAutofill?: true,
 ) {
   return {
     challengeToken: challenge.token,
@@ -60,11 +61,13 @@ function challengeResponse(
     expiresIn: challenge.expiresIn,
     resendAfter: challenge.resendAfter,
     ...(developmentCode ? { developmentCode } : {}),
+    ...(smsAutofill ? { smsAutofill } : {}),
   }
 }
 
-async function deliverChallenge(kind: string, identifier: string, code: string) {
-  if (kind === 'phone_login' || kind === 'phone_register') return sendSmsOtp(identifier, code)
+async function deliverChallenge(kind: string, identifier: string, code: string, origin?: string): Promise<{ developmentCode?: string; smsAutofill?: true }> {
+  if (kind === 'phone_login') return sendSmsOtp(identifier, code, origin)
+  if (kind === 'phone_register') return sendSmsOtp(identifier, code)
   if (kind === 'email_register') return sendEmailOtp(identifier, code, 'register')
   if (kind === 'password_recovery') return sendEmailOtp(identifier, code, 'recovery')
   return sendEmailOtp(identifier, code, 'login')
@@ -172,8 +175,8 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
     }
     if (user.status === 'disabled') throw new ForbiddenError('این حساب غیرفعال است')
     const challenge = await issueChallenge(db, { kind: 'phone_login', identifier: normalized, userId: user.id })
-    const delivery = await sendSmsOtp(normalized, challenge.code)
-    return reply.status(202).send({ data: challengeResponse(challenge, 'sms', maskMobile(normalized), delivery.developmentCode) })
+    const delivery = await sendSmsOtp(normalized, challenge.code, request.headers.origin)
+    return reply.status(202).send({ data: challengeResponse(challenge, 'sms', maskMobile(normalized), delivery.developmentCode, delivery.smsAutofill) })
   })
 
   app.post('/auth/challenge/verify', { config: { rateLimit: authLimiter } }, async (request, reply) => {
@@ -212,9 +215,9 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
       resendCount: old.resendCount + 1,
       resendToken: input.token,
     })
-    const delivery = await deliverChallenge(old.kind, old.identifier, challenge.code)
+    const delivery = await deliverChallenge(old.kind, old.identifier, challenge.code, request.headers.origin)
     const isSms = old.kind === 'phone_login' || old.kind === 'phone_register'
-    return reply.status(202).send({ data: challengeResponse(challenge, isSms ? 'sms' : 'email', isSms ? maskMobile(old.identifier) : maskEmail(old.identifier), delivery.developmentCode) })
+    return reply.status(202).send({ data: challengeResponse(challenge, isSms ? 'sms' : 'email', isSms ? maskMobile(old.identifier) : maskEmail(old.identifier), delivery.developmentCode, delivery.smsAutofill) })
   })
 
   app.post('/auth/password/forgot', { config: { rateLimit: sendLimiter } }, async (request, reply) => {

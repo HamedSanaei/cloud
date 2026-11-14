@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useEffectEvent, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ArrowLeft, Check, Eye, EyeOff, KeyRound, LockKeyhole, Mail, Phone, RefreshCw, Server, ShieldCheck } from 'lucide-react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { BRAND_NAME, BrandMark } from '../components/Brand'
 import { ApiError } from '../lib/apiClient'
 import { toFaDigits } from '../lib/format'
+import { readSmsCode } from '../lib/webOtp'
 import {
   getGoogleLoginUrl,
   resendChallenge,
@@ -92,13 +93,21 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
   const [success, setSuccess] = useState(false)
   const [countdown, setCountdown] = useState(0)
   const [otpLocked, setOtpLocked] = useState(false)
+  const [receivedSms, setReceivedSms] = useState<{ token: string; code: string; controller: AbortController }>()
+  const smsReader = useRef<AbortController | null>(null)
+  const sending = useRef<AbortController | null>(null)
   const verification = useRef<AbortController | null>(null)
   const mounted = useRef(true)
 
   useEffect(() => {
     mounted.current = true
-    return () => { mounted.current = false; verification.current?.abort() }
-  }, [intent])
+    return () => {
+      mounted.current = false
+      verification.current?.abort()
+      sending.current?.abort()
+      smsReader.current?.abort()
+    }
+  }, [intent, location.key])
 
   const returnTo = useMemo(() => {
     const from = (location.state as { from?: string } | null)?.from
@@ -121,28 +130,60 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
     window.setTimeout(() => navigate(returnTo, { replace: true }), 700)
   }
 
+  function cancelSmsRead() {
+    smsReader.current?.abort()
+    smsReader.current = null
+    setReceivedSms(undefined)
+  }
+
+  async function requestSms(send: () => Promise<AuthChallenge>) {
+    cancelSmsRead()
+    const controller = new AbortController()
+    smsReader.current = controller
+    // A fast SMS can arrive before the send endpoint returns the challenge.
+    const reading = readSmsCode(controller)
+    try {
+      const next = await send()
+      if (next.challengeType === 'sms' && next.smsAutofill) {
+        void reading.then((code) => {
+          if (code && !controller.signal.aborted) setReceivedSms({ token: next.challengeToken, code, controller })
+        })
+      } else controller.abort()
+      return next
+    } catch (error) {
+      controller.abort()
+      throw error
+    }
+  }
+
   async function submitEntry(event: FormEvent) {
     event.preventDefault()
+    if (busy || sending.current) return
     setError('')
     if (intent === 'register' && method === 'email' && password !== confirmPassword) {
       setError('تکرار رمز عبور با رمز اصلی یکسان نیست.')
       return
     }
+    const controller = new AbortController()
+    sending.current = controller
     setBusy(true)
     try {
-      if (intent === 'register' && method === 'phone') setChallenge(await startPhoneRegistration({ mobile, firstName, lastName }))
-      else if (intent === 'register') setChallenge(await startRegistration({ email, password, firstName, lastName }))
-      else if (intent === 'forgot') setChallenge(await startPasswordRecovery(email))
-      else if (method === 'phone') setChallenge(await startPhoneLogin(mobile))
-      else {
-        const result = await startEmailLogin(email, password)
-        if ('token' in result) complete(result)
-        else setChallenge(result)
-      }
+      let result: AuthChallenge | AuthSession
+      if (intent === 'register' && method === 'phone') result = await startPhoneRegistration({ mobile, firstName, lastName })
+      else if (intent === 'register') result = await startRegistration({ email, password, firstName, lastName })
+      else if (intent === 'forgot') result = await startPasswordRecovery(email)
+      else if (method === 'phone') result = await requestSms(() => startPhoneLogin(mobile))
+      else result = await startEmailLogin(email, password)
+      if (controller.signal.aborted) return
+      if ('token' in result) complete(result)
+      else setChallenge(result)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'انجام عملیات ناموفق بود.')
+      if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : 'انجام عملیات ناموفق بود.')
     } finally {
-      setBusy(false)
+      if (sending.current === controller) {
+        sending.current = null
+        if (mounted.current) setBusy(false)
+      }
     }
   }
 
@@ -150,6 +191,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
     event?.preventDefault()
     if (!challenge || busy || success || otpLocked || verification.current) return
     if (!recoveryMode && !/^\d{6}$/.test(submittedCode)) return
+    cancelSmsRead()
     const controller = new AbortController()
     verification.current = controller
     setBusy(true)
@@ -194,21 +236,40 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
   }
 
   function changeOtp(value: string) {
+    cancelSmsRead()
     setCode(value)
     if (challenge?.challengeType === 'sms' && value.length === 6) void submitChallenge(undefined, value)
   }
 
+  const fillSmsCode = useEffectEvent((sms: NonNullable<typeof receivedSms>) => {
+    if (!sms.controller.signal.aborted && smsReader.current === sms.controller) changeOtp(sms.code)
+  })
+
+  useEffect(() => {
+    if (!busy && receivedSms && challenge?.challengeType === 'sms' && receivedSms.token === challenge.challengeToken) {
+      fillSmsCode(receivedSms)
+    }
+  }, [busy, challenge, receivedSms])
+
   async function resend() {
-    if (!challenge || countdown > 0 || busy || verification.current || otpLocked) return
+    if (!challenge || countdown > 0 || busy || sending.current || verification.current || otpLocked) return
+    const controller = new AbortController()
+    sending.current = controller
     setBusy(true)
     setError('')
     try {
-      setChallenge(await resendChallenge(challenge.challengeToken))
+      const send = () => resendChallenge(challenge.challengeToken)
+      const next = challenge.challengeType === 'sms' && intent === 'login' ? await requestSms(send) : await send()
+      if (controller.signal.aborted) return
+      setChallenge(next)
       setCode('')
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'ارسال مجدد ناموفق بود.')
+      if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : 'ارسال مجدد ناموفق بود.')
     } finally {
-      setBusy(false)
+      if (sending.current === controller) {
+        sending.current = null
+        if (mounted.current) setBusy(false)
+      }
     }
   }
 
@@ -263,8 +324,8 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
                 <form className="auth-form" onSubmit={submitEntry}>
                   {intent !== 'forgot' && (
                     <div className="auth-method-tabs" role="tablist" aria-label={intent === 'register' ? 'روش ثبت‌نام' : 'روش ورود'}>
-                      <button aria-selected={method === 'phone'} className={method === 'phone' ? 'active' : ''} onClick={() => { setMethod('phone'); setError('') }} role="tab" type="button"><Phone size={17} /> {intent === 'register' ? 'ثبت‌نام با شماره همراه' : 'شماره همراه'}</button>
-                      <button aria-selected={method === 'email'} className={method === 'email' ? 'active' : ''} onClick={() => { setMethod('email'); setError('') }} role="tab" type="button"><Mail size={17} /> {intent === 'register' ? 'ثبت‌نام با ایمیل' : 'ایمیل و رمز عبور'}</button>
+                      <button aria-selected={method === 'phone'} className={method === 'phone' ? 'active' : ''} disabled={busy} onClick={() => { setMethod('phone'); setError('') }} role="tab" type="button"><Phone size={17} /> {intent === 'register' ? 'ثبت‌نام با شماره همراه' : 'شماره همراه'}</button>
+                      <button aria-selected={method === 'email'} className={method === 'email' ? 'active' : ''} disabled={busy} onClick={() => { setMethod('email'); setError('') }} role="tab" type="button"><Mail size={17} /> {intent === 'register' ? 'ثبت‌نام با ایمیل' : 'ایمیل و رمز عبور'}</button>
                     </div>
                   )}
                   {intent === 'register' && (
@@ -310,7 +371,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
                   ) : (
                     <button className="auth-resend" disabled={busy || success || otpLocked || countdown > 0} onClick={resend} type="button"><RefreshCw size={16} /> {countdown > 0 ? `ارسال مجدد تا ${countdown} ثانیه دیگر` : 'ارسال مجدد کد'}</button>
                   )}
-                  <button className="auth-back" disabled={busy || success} onClick={() => { setChallenge(null); setCode(''); setError(''); setOtpLocked(false) }} type="button">اصلاح اطلاعات ورود</button>
+                  <button className="auth-back" disabled={busy || success} onClick={() => { cancelSmsRead(); setChallenge(null); setCode(''); setError(''); setOtpLocked(false) }} type="button">اصلاح اطلاعات ورود</button>
                 </form>
               )}
             </>

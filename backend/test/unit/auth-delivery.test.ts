@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { sendParsGreenSms, sendSmsOtp } from '../../src/modules/auth/delivery.js'
+import { isDomainBoundLoginPattern } from '../../src/modules/auth/sms-autofill.js'
 
-const { warn } = vi.hoisted(() => ({ warn: vi.fn() }))
+const { warn, smsConfig } = vi.hoisted(() => ({ warn: vi.fn(), smsConfig: { pattern: '' } }))
 vi.mock('../../src/logger.js', () => ({ createLogger: () => ({ warn }) }))
 
 vi.mock('../../src/config.js', () => ({
@@ -11,13 +12,59 @@ vi.mock('../../src/config.js', () => ({
     PARSGREEN_FROM: 'fixture-sender',
     PARSGREEN_ENDPOINT: 'https://sms.example.test/service',
     PARSGREEN_TIMEOUT_MS: 1000,
+    PARSGREEN_APPROVED_PHONE_LOGIN_PATTERN: smsConfig.pattern,
+    FRONTEND_URL: 'https://login.example.test/login',
   }),
   isProduction: () => false,
 }))
 
-afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks() })
+afterEach(() => { smsConfig.pattern = ''; vi.unstubAllGlobals(); vi.clearAllMocks() })
 
 const accepted = '<SendGroupSMSResponse xmlns="http://ParsGreen.com/"><SendGroupSMSResult>1</SendGroupSMSResult><success>1</success><retStr><string>fixture-message-id</string></retStr></SendGroupSMSResponse>'
+
+describe('domain-bound login SMS', () => {
+  const pattern = 'Sample code: %%\n@login.example.test #%%'
+
+  it('sends the same issued code in both slots with the domain on the exact last line', async () => {
+    smsConfig.pattern = pattern
+    const request = vi.fn().mockResolvedValue(new Response(accepted))
+    vi.stubGlobal('fetch', request)
+    await expect(sendSmsOtp('+989000000000', '034567', 'https://login.example.test')).resolves.toEqual({ smsAutofill: true })
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(request.mock.calls[0]![1].body).toContain('<text>Sample code: 034567\n@login.example.test #034567</text>')
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it.each(['https://example.test', 'https://login.example.test:444', undefined])('uses manual SMS for origin %s', async (origin) => {
+    smsConfig.pattern = pattern
+    const request = vi.fn().mockResolvedValue(new Response(accepted))
+    vi.stubGlobal('fetch', request)
+    await expect(sendSmsOtp('+989000000000', '034567', origin)).resolves.toEqual({})
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(request.mock.calls[0]![1].body).toContain('کد ورود پارس سرور: 034567')
+    expect(request.mock.calls[0]![1].body).not.toContain('@login.example.test')
+  })
+
+  it.each([
+    [pattern, 'https://login.example.test/login', true],
+    [pattern, 'https://example.test/login', false],
+    [pattern, 'http://login.example.test/login', false],
+    [pattern + '\n', 'https://login.example.test/login', false],
+    [pattern.replace(' #%%', ' #123456'), 'https://login.example.test/login', false],
+    [pattern.replace('code: %%', 'code: 123456'), 'https://login.example.test/login', false],
+  ])('validates the dynamic pattern and canonical origin', (text, origin, valid) => {
+    expect(isDomainBoundLoginPattern(text, origin)).toBe(valid)
+  })
+
+  it('does not send an extra fallback SMS or expose the code on rejection', async () => {
+    smsConfig.pattern = pattern
+    const request = vi.fn().mockResolvedValue(new Response('<Fault>fixture-signature 09000000000 034567</Fault>'))
+    vi.stubGlobal('fetch', request)
+    await expect(sendSmsOtp('+989000000000', '034567', 'https://login.example.test')).rejects.toThrow('ارسال پیامک ناموفق بود')
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/fixture-signature|09000000000|034567/)
+  })
+})
 
 describe('ParsGreen SOAP delivery contract', () => {
   it('uses the new brand in login SMS without contacting a provider', async () => {
