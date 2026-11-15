@@ -27,6 +27,8 @@ export function ServerTableRow({ server, onPlatformManage }: { server: Server; o
   const id = useId()
   const state = serverLifecycleState(server)
   const ready = state === 'ready'
+  const missingResource = state === 'queued' || state === 'provisioning' ? 'در حال دریافت' : 'در دسترس نیست'
+  const resources = [server.cpu, server.ram, server.disk].filter(Boolean).join(' · ') || missingResource
   const addressUnavailable = serverAddressUnavailable({ ...server, lifecycle: state })
   const inspectable = ready || ['delete_failed', 'deletion_requested', 'deleting', 'terminated'].includes(state)
   const canInspect = server.platformServerId ? ready : inspectable
@@ -38,7 +40,7 @@ export function ServerTableRow({ server, onPlatformManage }: { server: Server; o
     <td><strong><bdi>{server.name}</bdi></strong>{summary && <small className="server-row-summary">{summary}</small>}
       {identifier && <CopyableServerReference key={identifier} value={identifier} label="کپی شناسهٔ سرور" />}</td>
     <td data-label="وضعیت"><ServerStatus server={server} /></td>
-    <td data-label="منابع"><span className="server-row-resources"><bdi dir="ltr">{[server.cpu, server.ram, server.disk].filter(Boolean).join(' · ') || 'در حال دریافت'}</bdi></span><small><bdi>{server.datacenter || 'در حال دریافت'}{server.os ? ` · ${server.os}` : ''}</bdi></small></td>
+    <td data-label="منابع"><span className="server-row-resources"><bdi dir="ltr">{[server.serverType, resources].filter(Boolean).join(' · ')}</bdi></span><small><bdi>{server.datacenter || missingResource}{server.os ? ` · ${server.os}` : ''}</bdi></small></td>
     <td data-label="آدرس‌های آی‌پی"><CopyableIp value={server.ip} unavailableReason={addressUnavailable} />{!addressUnavailable && server.ipv6 && <CopyableIp value={server.ipv6} />}</td>
     <td className="server-row-actions">{canInspect ? server.platformServerId
       ? <><button type="button" className="server-list-control" title="مدیریت و نتیجه عملیات" onClick={onPlatformManage} disabled={!onPlatformManage} aria-describedby={!onPlatformManage ? `${id}-unavailable` : undefined}><span className="server-row-action-label">مدیریت و نتیجه عملیات</span></button>
