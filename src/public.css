@@ -77,6 +77,7 @@
 .landing-footer p { color: #9fb1c5; margin-top: 18px; line-height: 1.9; max-width: 420px; }
 .landing-footer nav { display: flex; flex-wrap: wrap; gap: 18px 28px; justify-content: flex-start; color: #c6d2df; font-size: 14px; padding-top: 8px; }
 .landing-footer nav a:hover { color: white; }
+.landing-footer nav a:focus-visible { outline-color: #93c5fd; }
 .landing-footer-trust { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 16px; width: 100%; max-width: 336px; text-align: center; }
 .parserver-enamad-seal, .parserver-tabapay-seal { display: block; width: 160px; max-width: 100%; min-height: 160px; border: 1px solid #dce5ef; border-radius: 12px; background: white; color: #172b4d; }
 .parserver-enamad-seal { padding: 12px; }
