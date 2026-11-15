@@ -33,6 +33,14 @@ export function ServerTableRow({ server, onPlatformManage }: { server: Server; o
     <td>{(server.platformServerId ? ready : inspectable) ? server.platformServerId
       ? <button className="button button--secondary button--sm" onClick={onPlatformManage} disabled={!onPlatformManage}>مدیریت و نتیجه عملیات</button>
       : <Link className="button button--secondary button--sm" to={`/servers/${server.id}`}>مشاهده جزئیات</Link>
-      : <span className="server-tracking-hint">{server.tracking ? `پیگیری ${server.tracking.reference.slice(0, 8)}` : 'در انتظار اطلاعات معتبر'}</span>}</td>
+      : server.tracking?.failure ? <div className="server-provisioning-failure">
+        <p>{server.tracking.failure.message}</p>
+        <p>{server.tracking.failure.billing === 'refunded' ? 'مبلغ پرداخت‌شده به کیف پول بازگردانده شد.'
+          : server.tracking.failure.billing === 'not_charged' ? 'مبلغی بابت این سفارش از کیف پول کسر نشده است.' : 'مبلغ کسرشده هنوز بازگردانده نشده و نیازمند پیگیری است.'}</p>
+        <p>{server.tracking.failure.nextStep}</p>
+        <small>شمارهٔ پیگیری: <bdi>{server.tracking.failure.reference}</bdi></small>
+        <Link className="text-link" to="/tickets">پیگیری از پشتیبانی</Link>
+        {server.tracking.failure.canChooseAlternative && <Link className="text-link" to="/servers/create">انتخاب پلن یا دیتاسنتر دیگر</Link>}
+      </div> : <span className="server-tracking-hint">{server.tracking ? `پیگیری ${server.tracking.reference.slice(0, 8)}` : 'در انتظار اطلاعات معتبر'}</span>}</td>
   </tr>
 }

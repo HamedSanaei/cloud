@@ -53,6 +53,26 @@ function mockApi(handler?: (call: Call) => Response | Json | Promise<Response | 
 }
 
 describe('Hetzner account routing and live catalog', () => {
+  it.each([false, true])('handles the affected CAX11/Nuremberg ARM request when capacity is rejected=%s', async rejected => {
+    const api = mockApi(() => rejected
+      ? Response.json({ error: { code: 'resource_unavailable', message: 'fixture-secret-provider-message' } }, { status: 412 })
+      : { server: server(167) }, {
+      '/locations': { locations: [{ name: 'nbg1', country: 'DE', city: 'Nuremberg' }] },
+      '/server_types': { server_types: [{ id: 167, name: 'cax11', architecture: 'arm', cores: 2, memory: 4, disk: 40,
+        locations: [{ name: 'nbg1', available: true }], prices: [{ location: 'nbg1', price_hourly: { gross: '0.0044' } }] }] },
+      '/images': { images: [{ id: 387894171, name: 'ubuntu-arm', type: 'system', status: 'available', architecture: 'arm' }] },
+      '/pricing': { pricing: { currency: 'EUR', primary_ips: [{ type: 'ipv4', prices: [{ location: 'nbg1', price_hourly: { gross: '0.0008' } }] }] } },
+    })
+    const provider = createHetznerProvider({ ...config, accounts: [config.accounts[1]!] }, { fetch: api.fetcher })
+    const attempt = provider.createServer({ ...order, productId: 'cax11:EUR', location: 'nbg1', operatingSystem: '387894171' })
+    if (rejected) {
+      await expect(attempt).rejects.toMatchObject({ details: { httpStatus: 412, providerCode: 'resource_unavailable', definitiveRejection: true } })
+      await expect(attempt).rejects.not.toThrow('fixture-secret-provider-message')
+    } else expect(await attempt).toMatchObject({ providerServerId: 'first:167', state: 'active' })
+    const posts = api.calls.filter(call => call.method === 'POST')
+    expect(posts).toHaveLength(1)
+    expect(posts[0]?.body).toMatchObject({ server_type: 'cax11', location: 'nbg1', image: 387894171 })
+  })
   it('publishes only provider-priced available compatible images, including exact IPv4 cost', async () => {
     const api = mockApi()
     const provider = createHetznerProvider(config, { fetch: api.fetcher })

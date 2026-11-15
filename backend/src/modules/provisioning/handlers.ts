@@ -35,6 +35,8 @@ import { replacePrimaryIpv4 } from '../servers/primary-ip-request.js'
 import { notifyServerOperation, publishNotification } from '../notifications/service.js'
 import type { ManagementAction } from '../providers/customer.interface.js'
 import { purgeExpiredServerSecrets } from '../servers/secrets.js'
+import { settleRejectedProvision } from './rejection.js'
+import { recordEvent } from '../system/events.js'
 
 export interface HandlerContext {
   db: DbClient
@@ -75,6 +77,8 @@ export async function handleProvision(ctx: HandlerContext, data: { orderId: stri
   if (op && op.status === 'failed') {
     const meta = (op.responseMetadata ?? {}) as Record<string, unknown>
     if (op.attemptCount >= MAX_PROVISION_ATTEMPTS || meta.permanent === true) {
+      if (meta.permanent === true && ['paid', 'queued', 'provisioning'].includes(order.status)) await failServerOrder(ctx, order.id, op.lastError ?? 'Provider rejected the request')
+      if (meta.definitiveRejection === true) await settleRejectedProvision(db, op.id)
       return { status: 'permanently_failed', skipped: true }
     }
   }
@@ -252,6 +256,10 @@ export async function handleProvision(ctx: HandlerContext, data: { orderId: stri
 
     if (err instanceof ProviderPermanentError) {
       const details = (err as AppError).details as Record<string, unknown> | undefined
+      const providerCode = ['resource_unavailable', 'resource_limit_exceeded', 'invalid_input', 'unauthorized', 'forbidden'].includes(String(details?.providerCode)) ? String(details!.providerCode) : undefined
+      recordEvent('provision.rejected', 'warn', 'provisioning', { orderId: order.id, operationId: op.id, integration: order.provider,
+        code: providerCode ?? 'provider_rejected',
+        httpStatus: typeof details?.httpStatus === 'number' ? details.httpStatus : undefined })
       const correlationId = asString(details?.providerCorrelationId)
       const requestId = asString(details?.requestId)
       await db
@@ -265,10 +273,14 @@ export async function handleProvision(ctx: HandlerContext, data: { orderId: stri
           providerRequestId: requestId,
           // Terminal: a permanent rejection must never be retried, even though
           // attemptCount is below the retry cap.
-          responseMetadata: { ...((op.responseMetadata ?? {}) as object), permanent: true, providerCorrelationId: correlationId, requestId, outcome: 'definitive_rejection' },
+          responseMetadata: { ...((op.responseMetadata ?? {}) as object), permanent: true, providerCorrelationId: correlationId, requestId, outcome: 'definitive_rejection',
+            definitiveRejection: details?.definitiveRejection === true,
+            ...(typeof details?.httpStatus === 'number' ? { httpStatus: details.httpStatus } : {}),
+            ...(providerCode ? { providerCode } : {}) },
         })
         .where(eq(providerOperations.id, op.id))
       await failServerOrder(ctx, order.id, err.message)
+      if (details?.definitiveRejection === true) await settleRejectedProvision(db, op.id)
       return { status: 'permanent_failure' }
     }
 

@@ -2,6 +2,14 @@
 export const provisioningStates = ['queued', 'provisioning', 'ready', 'failed', 'requires_review', 'outcome_unknown', 'cancelled'] as const
 export type ProvisioningState = typeof provisioningStates[number]
 export type ServerLifecycle = ProvisioningState | 'deletion_requested' | 'deleting' | 'terminated' | 'delete_failed'
+export interface ProvisioningFailure {
+  code: 'capacity_unavailable' | 'quota_exceeded' | 'provider_rejected' | 'outcome_unknown'
+  message: string
+  nextStep: string
+  billing: 'refunded' | 'not_charged' | 'captured'
+  reference: string
+  canChooseAlternative: boolean
+}
 export interface ServerTracking {
   source: 'site' | 'platform'
   reference: string
@@ -11,6 +19,7 @@ export interface ServerTracking {
   state: ProvisioningState
   createdAt: string
   updatedAt: string
+  failure?: ProvisioningFailure
 }
 export function provisionState(orderStatus: string, operationStatus?: string): ProvisioningState {
   if (operationStatus === 'unknown' || operationStatus === 'needs_reconciliation') return 'outcome_unknown'

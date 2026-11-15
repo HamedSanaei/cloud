@@ -8,7 +8,7 @@ export const object = (value: unknown): ApiObject => value !== null && typeof va
 export class HetznerApiError extends ProviderPermanentError {
   constructor(readonly httpStatus: number, readonly providerCode: string, readonly capacity: boolean) {
     super(capacity ? 'Hetzner definitively rejected the request for capacity' : 'Hetzner rejected the request', {
-      httpStatus, providerCode,
+      httpStatus, providerCode, definitiveRejection: true,
     })
   }
 }
