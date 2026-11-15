@@ -13,7 +13,7 @@ const history = [
   { id: 'deleted-55-a', name: 'Past server A', status: 'inactive', lifecycle: 'terminated', datacenter: 'Hetzner', power: {} },
   { id: 'deleted-55-b', name: 'Past server B', status: 'inactive', lifecycle: 'terminated', datacenter: 'Leaseweb', power: {} },
 ]
-let rows = history
+let rows: Record<string, unknown>[] = history
 let fail = false
 beforeEach(() => {
   rows = history; fail = false
@@ -30,6 +30,51 @@ const open = () => render(<MemoryRouter><ToastProvider><ServersPage /></ToastPro
 const emptyCard = () => within(document.querySelector('.resource-empty-card') as HTMLElement)
 
 describe('server list empty states', () => {
+  it('filters failed lifecycle and tracking-only records while preserving search, datacenter and reset', async () => {
+    const user = userEvent.setup()
+    rows = [
+      ...history,
+      { ...history[0], id: 'ready-74', name: 'Ready server', status: 'active', lifecycle: 'ready' },
+      { ...history[0], id: 'failed-74', name: 'Failed order', status: 'building', lifecycle: 'failed' },
+      { ...history[1], id: 'tracking-failed-74', name: 'Tracking failed order', status: 'building', lifecycle: undefined,
+        tracking: { source: 'site', reference: 'tracking-failed-74', state: 'failed' } },
+      { ...history[0], id: 'review-74', name: 'Under review', status: 'building', lifecycle: 'outcome_unknown' },
+      { ...history[0], id: 'deletion-failed-74', name: 'Deletion failed', lifecycle: 'delete_failed' },
+    ]
+    open()
+    await screen.findByRole('cell', { name: 'Failed order', exact: true })
+    const nameCell = (name: string) => screen.queryByRole('cell', { name, exact: true })
+    const status = screen.getByRole('combobox', { name: 'وضعیت' })
+    await user.selectOptions(status, 'failed')
+    expect(nameCell('Failed order')).toBeTruthy()
+    expect(nameCell('Tracking failed order')).toBeTruthy()
+    for (const name of ['Ready server', 'Past server A', 'Past server B', 'Under review', 'Deletion failed']) expect(nameCell(name)).toBeNull()
+    await user.selectOptions(screen.getByRole('combobox', { name: 'دیتاسنتر' }), 'Leaseweb')
+    expect(nameCell('Tracking failed order')).toBeTruthy()
+    expect(nameCell('Failed order')).toBeNull()
+    await user.type(screen.getByRole('textbox', { name: 'جستجو' }), 'no-match')
+    expect(emptyCard().getByText('سروری با این جستجو یا فیلترها یافت نشد')).toBeTruthy()
+    await user.click(emptyCard().getByRole('button', { name: 'پاک کردن فیلترها' }))
+    expect(nameCell('Failed order')).toBeTruthy()
+    expect(nameCell('Ready server')).toBeTruthy()
+    expect((status as HTMLSelectElement).value).toBe('all')
+    await user.selectOptions(status, 'active')
+    expect(nameCell('Ready server')).toBeTruthy()
+    expect(nameCell('Failed order')).toBeNull()
+    await user.selectOptions(status, 'inactive')
+    expect(screen.getByText('Past server A')).toBeTruthy()
+    expect(nameCell('Tracking failed order')).toBeNull()
+  })
+
+  it('shows the existing empty-results message when no failed orders match', async () => {
+    const user = userEvent.setup()
+    open()
+    await screen.findByText('Past server A')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'وضعیت' }), 'failed')
+    expect(emptyCard().getByText('سروری با این جستجو یا فیلترها یافت نشد')).toBeTruthy()
+    expect(screen.queryByText('هنوز سروری نساخته‌اید')).toBeNull()
+  })
+
   it.each(['status', 'search', 'combined'])('shows empty results for %s and resets every filter to restore history', async mode => {
     const user = userEvent.setup()
     open()
