@@ -82,7 +82,9 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
     if (!server) return []
     const items = (servers.data ?? []).filter((item) => {
       const matchesQuery = !query.trim() || item.name.includes(query.trim()) || item.datacenter.includes(query.trim())
-      const matchesStatus = status === 'all' || item.status === status
+      const matchesStatus = status === 'all' || (status === 'failed'
+        ? (item.lifecycle ?? item.tracking?.state) === 'failed'
+        : item.status === status)
       const matchesDatacenter = secondary === 'all' || item.datacenter === secondary
       return matchesQuery && matchesStatus && matchesDatacenter
     })
@@ -130,7 +132,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
       />
       {!server && <PurchaseAvailability purchase={purchase} />}
       <FilterPanel query={query} onQueryChange={setQuery} placeholder={server ? 'جستجو در سرورها...' : 'جستجو در آی‌پی، سرور یا دیتاسنتر...'} onReset={resetFilters}>
-        <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="وضعیت"><option value="all">همه وضعیت‌ها</option><option value="inactive">غیرفعال</option><option value="active">فعال</option>{!server ? <option value="reserved">رزرو شده</option> : null}</Select>
+        <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="وضعیت"><option value="all">همه وضعیت‌ها</option><option value="inactive">غیرفعال</option><option value="active">فعال</option>{server ? <option value="failed">خطای ساخت</option> : <option value="reserved">رزرو شده</option>}</Select>
         <Select value={secondary} onChange={(event) => setSecondary(event.target.value)} aria-label={server ? 'دیتاسنتر' : 'نوع آی‌پی'}>
           <option value="all">{server ? 'همه دیتاسنترها' : 'همه انواع'}</option>
           {server ? [...new Set((servers.data ?? []).map(item => item.datacenter))].map(name => <option key={name} value={name}>{name}</option>) : <><option value="IPv4">IPv4</option><option value="IPv6">IPv6</option></>}
