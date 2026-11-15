@@ -16,6 +16,7 @@ import { HetznerApiError } from '../../src/modules/providers/hetzner/client.js'
 import { provisioningRow } from '../../src/modules/servers/provisioning.js'
 import * as rejection from '../../src/modules/provisioning/rejection.js'
 import { walletTransactions, servers } from '../../src/db/schema.js'
+import * as walletService from '../../src/modules/wallets/service.js'
 
 const skip = !dbAvailable
 
@@ -143,6 +144,33 @@ describe.skipIf(skip)('provisioning safety + permissions (integration)', () => {
     await creditWallet(ctx.db, order.userId, order.walletId!, order.totalRial, { type: 'refund', referenceType: 'order', referenceId: order.id, idempotencyKey: `fixture-manual:${order.id}` })
     await handleProvision(ctx, { orderId: order.id })
     expect((await ledgerFor(order.id)).filter(t => t.type === 'refund')).toHaveLength(1)
+  })
+
+  it('waits for an in-flight ledger writer before checking for an operator refund', async () => {
+    const { order } = await buyVps('race67@test.local', 'race-67', 'race-67')
+    vi.spyOn(rejection, 'settleRejectedProvision').mockResolvedValueOnce(false)
+    vi.spyOn(mock, 'createServer').mockRejectedValue(new HetznerApiError(412, 'resource_unavailable', true))
+    await handleProvision(ctx, { orderId: order.id })
+    const op = await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.referenceId, order.id) })
+    const manualReady = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), automaticReady = Promise.withResolvers<void>()
+    const manual = ctx.db.transaction(async tx => {
+      await creditWallet(tx, order.userId, order.walletId!, order.totalRial, { type: 'refund', referenceType: 'order', referenceId: order.id, idempotencyKey: `fixture-race:${order.id}` })
+      manualReady.resolve()
+      await release.promise
+    })
+    const originalGetWallet = walletService.getWallet
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let automatic: Promise<boolean> | undefined
+    try {
+      await Promise.race([manualReady.promise, manual])
+      vi.spyOn(walletService, 'getWallet').mockImplementation(async (...args) => { const wallet = await originalGetWallet(...args); automaticReady.resolve(); return wallet })
+      automatic = rejection.settleRejectedProvision(ctx.db, op!.id)
+      await Promise.race([automaticReady.promise, new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('Fixture wallet synchronization timed out')), 3000) })])
+      release.resolve()
+      await manual
+      expect(await automatic).toBe(false)
+      expect((await ledgerFor(order.id)).filter(t => t.type === 'refund')).toHaveLength(1)
+    } finally { clearTimeout(timer); release.resolve(); await Promise.allSettled([manual, automatic]) }
   })
 
   it('does not guess a refund when captured debits do not match a single purchase', async () => {
