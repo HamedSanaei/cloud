@@ -117,3 +117,6 @@
   .server-list-page .server-table-row strong { font-size: 17px; }
 }
 @media (prefers-reduced-motion: reduce) { .server-lifecycle-spinner, .Toastify__toast { animation: none !important; transition: none !important; } }
+.server-provisioning-failure { min-width: 220px; max-width: 420px; white-space: normal; line-height: 1.9; }
+.server-provisioning-failure p { margin: 4px 0; font-size: 14px; }
+.server-provisioning-failure .text-link { display: inline-block; margin-inline-end: 14px; margin-top: 8px; }

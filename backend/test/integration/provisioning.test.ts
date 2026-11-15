@@ -1,5 +1,5 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { eq } from 'drizzle-orm'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { and, eq } from 'drizzle-orm'
 import { getTestContext, truncateAll, dbAvailable } from '../helpers.js'
 import { registerUser } from '../../src/modules/auth/service.js'
 import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
@@ -12,6 +12,10 @@ import { getServerForUser, listServersForUser } from '../../src/modules/servers/
 import { getProvider } from '../../src/modules/providers/registry.js'
 import { NotFoundError } from '../../src/lib/errors.js'
 import type { MockLeasewebProvider } from '../../src/modules/providers/leaseweb/mock.js'
+import { HetznerApiError } from '../../src/modules/providers/hetzner/client.js'
+import { provisioningRow } from '../../src/modules/servers/provisioning.js'
+import * as rejection from '../../src/modules/provisioning/rejection.js'
+import { walletTransactions, servers } from '../../src/db/schema.js'
 
 const skip = !dbAvailable
 
@@ -29,6 +33,7 @@ describe.skipIf(skip)('provisioning safety + permissions (integration)', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     // Isolate each scenario: fresh provider state, no leaked VPS instances.
     mock.reset()
   })
@@ -70,6 +75,85 @@ describe.skipIf(skip)('provisioning safety + permissions (integration)', () => {
     expect(order.status).toBe('paid')
     return { user, order }
   }
+
+  const ledgerFor = (orderId: string) => ctx.db.query.walletTransactions.findMany({ where: t => and(eq(t.referenceType, 'order'), eq(t.referenceId, orderId)) })
+
+  it('refunds the exact captured debit once after a proven capacity rejection and exposes safe Persian guidance', async () => {
+    const { user, order } = await buyVps('capacity67@test.local', 'capacity-67', 'capacity-67')
+    const originalDebit = (await ledgerFor(order.id))[0]!
+    const create = vi.spyOn(mock, 'createServer').mockRejectedValue(new HetznerApiError(412, 'resource_unavailable', true))
+    expect((await handleProvision(ctx, { orderId: order.id })).status).toBe('permanent_failure')
+    await Promise.all([handleProvision(ctx, { orderId: order.id }), handleProvision(ctx, { orderId: order.id })])
+    expect(create).toHaveBeenCalledOnce()
+    const ledger = await ledgerFor(order.id)
+    expect(ledger).toHaveLength(2)
+    expect(ledger.find(row => row.type === 'purchase')).toEqual(originalDebit)
+    expect(ledger.find(row => row.type === 'refund')?.amountRial).toBe(-originalDebit.amountRial)
+    expect(ledger.reduce((sum, row) => sum + row.amountRial, 0)).toBe(0)
+    expect((await ctx.db.query.orders.findFirst({ where: t => eq(t.id, order.id) }))?.status).toBe('refunded')
+    expect((await ctx.db.query.invoices.findFirst({ where: t => eq(t.orderId, order.id) }))?.status).toBe('void')
+    expect(await ctx.db.query.servers.findFirst({ where: t => eq(t.orderId, order.id) })).toBeUndefined()
+    expect(await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.orderId, order.id) })).toBeUndefined()
+    const row = await provisioningRow(ctx.db, user.id, order.id)
+    expect(row.tracking.failure).toMatchObject({ code: 'capacity_unavailable', billing: 'refunded', reference: order.orderNumber, canChooseAlternative: true })
+    expect(row.tracking.failure?.message).toContain('دیتاسنتر')
+    const op = await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.referenceId, order.id) })
+    expect(op?.responseMetadata).toMatchObject({ httpStatus: 412, providerCode: 'resource_unavailable', definitiveRejection: true })
+    await expect(provisioningRow(ctx.db, crypto.randomUUID(), order.id)).rejects.toBeInstanceOf(NotFoundError)
+  })
+
+  it('completes interrupted rejection settlement on concurrent job replay without a second provider request or credit', async () => {
+    const { order } = await buyVps('settle67@test.local', 'settle-67', 'settle-67')
+    vi.spyOn(rejection, 'settleRejectedProvision').mockResolvedValueOnce(false)
+    const create = vi.spyOn(mock, 'createServer').mockRejectedValue(new HetznerApiError(412, 'resource_unavailable', true))
+    await handleProvision(ctx, { orderId: order.id })
+    expect((await ledgerFor(order.id)).filter(t => t.type === 'refund')).toHaveLength(0)
+    await Promise.all(Array.from({ length: 3 }, () => handleProvision(ctx, { orderId: order.id })))
+    expect(create).toHaveBeenCalledOnce()
+    expect((await ledgerFor(order.id)).filter(t => t.type === 'refund')).toHaveLength(1)
+  })
+
+  it('keeps legacy failures captured for review and never backfills a refund without persisted proof', async () => {
+    const { user, order } = await buyVps('legacy67@test.local', 'legacy-67', 'legacy-67')
+    mock.setBehavior({ failNextOrders: 'permanent', failNextOrdersCount: 1 })
+    await handleProvision(ctx, { orderId: order.id })
+    await handleProvision(ctx, { orderId: order.id })
+    expect((await ledgerFor(order.id)).filter(t => t.type === 'refund')).toHaveLength(0)
+    expect((await provisioningRow(ctx.db, user.id, order.id)).tracking.failure).toMatchObject({ billing: 'captured', canChooseAlternative: false })
+  })
+
+  it('does not refund when a resource already exists for the order', async () => {
+    const { order } = await buyVps('existing67@test.local', 'existing-67', 'existing-67')
+    vi.spyOn(rejection, 'settleRejectedProvision').mockResolvedValueOnce(false)
+    vi.spyOn(mock, 'createServer').mockRejectedValue(new HetznerApiError(412, 'resource_unavailable', true))
+    await handleProvision(ctx, { orderId: order.id })
+    await ctx.db.insert(servers).values({ userId: order.userId, orderId: order.id, provider: order.provider, providerProductId: order.providerProductId,
+      providerLocation: order.providerLocation, providerServerId: 'fixture-existing-67', hostname: order.hostname, operatingSystem: order.operatingSystem,
+      status: 'active', vcpu: 1, memoryMb: 1024, diskGb: 20 })
+    const op = await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.referenceId, order.id) })
+    expect(await rejection.settleRejectedProvision(ctx.db, op!.id)).toBe(false)
+    expect((await ledgerFor(order.id)).filter(t => t.type === 'refund')).toHaveLength(0)
+  })
+
+  it('never adds another credit when an operator already refunded the order', async () => {
+    const { order } = await buyVps('manual67@test.local', 'manual-67', 'manual-67')
+    vi.spyOn(rejection, 'settleRejectedProvision').mockResolvedValueOnce(false)
+    vi.spyOn(mock, 'createServer').mockRejectedValue(new HetznerApiError(412, 'resource_unavailable', true))
+    await handleProvision(ctx, { orderId: order.id })
+    await creditWallet(ctx.db, order.userId, order.walletId!, order.totalRial, { type: 'refund', referenceType: 'order', referenceId: order.id, idempotencyKey: `fixture-manual:${order.id}` })
+    await handleProvision(ctx, { orderId: order.id })
+    expect((await ledgerFor(order.id)).filter(t => t.type === 'refund')).toHaveLength(1)
+  })
+
+  it('does not guess a refund when captured debits do not match a single purchase', async () => {
+    const { order } = await buyVps('ledger67@test.local', 'ledger-67', 'ledger-67')
+    const { applyWalletTransaction } = await import('../../src/modules/wallets/service.js')
+    await ctx.db.transaction(tx => applyWalletTransaction(tx, order.userId, order.walletId!, { type: 'purchase', amountRial: 1,
+      referenceType: 'order', referenceId: order.id, idempotencyKey: `fixture-extra:${order.id}` }))
+    vi.spyOn(mock, 'createServer').mockRejectedValue(new HetznerApiError(412, 'resource_unavailable', true))
+    await handleProvision(ctx, { orderId: order.id })
+    expect((await ledgerFor(order.id)).filter(t => t.type === 'refund')).toHaveLength(0)
+  })
 
   it('two concurrent provision attempts create exactly one provider order', async () => {
     const { order } = await buyVps('conc@test.local', 'conc-vps', 'conc-key-1')
@@ -151,6 +235,9 @@ describe.skipIf(skip)('provisioning safety + permissions (integration)', () => {
     mock.setBehavior({ timeoutNextOrders: true })
     const result = await handleProvision(ctx, { orderId: order.id })
     expect(result.status).toBe('unknown_scheduled_reconciliation')
+    const tracking = (await provisioningRow(ctx.db, user.id, order.id)).tracking
+    expect(tracking.failure).toMatchObject({ code: 'outcome_unknown', billing: 'captured', canChooseAlternative: false })
+    expect(tracking.failure?.nextStep).toContain('سفارش تازه نسازید')
 
     // The provider actually created the phantom server; the op is UNKNOWN and
     // the order waits for review — no refund, no second order.

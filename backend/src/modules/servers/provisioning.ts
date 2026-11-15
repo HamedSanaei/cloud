@@ -3,7 +3,7 @@ import type { DbClient } from '../../db/index.js'
 import { orders, servers } from '../../db/schema.js'
 import { serverToDto } from '../../lib/dto.js'
 import { NotFoundError } from '../../lib/errors.js'
-import { provisionState, type ServerTracking } from '../../contracts/server-lifecycle.js'
+import { provisionState, type ServerTracking, type ProvisioningFailure } from '../../contracts/server-lifecycle.js'
 import { loadFundingFleet, serverPowerPolicy } from '../billing/funding.js'
 
 export async function provisioningRow(db: DbClient, userId: string, orderId: string) {
@@ -17,6 +17,25 @@ export async function provisioningRow(db: DbClient, userId: string, orderId: str
   const state = server?.terminatedAt ? 'cancelled' : server?.activatedAt ? 'ready' : provisionState(order.status === 'active' ? 'provisioning' : order.status, operation?.status)
   const tracking: ServerTracking = { source: 'site', reference: order.id, orderId: order.id, serverId: server?.id ?? null,
     operationId: operation?.id ?? null, state, createdAt: order.createdAt.toISOString(), updatedAt: order.updatedAt.toISOString() }
+  if (['failed', 'requires_review', 'outcome_unknown'].includes(state)) {
+    const ledger = await db.query.walletTransactions.findMany({ where: t => and(eq(t.userId, userId), eq(t.referenceId, order.id),
+      eq(t.referenceType, 'order'), inArray(t.type, ['purchase', 'refund'])) })
+    const debit = ledger.filter(row => row.type === 'purchase').reduce((sum, row) => sum - row.amountRial, 0)
+    const credit = ledger.filter(row => row.type === 'refund').reduce((sum, row) => sum + row.amountRial, 0)
+    const billing = debit === 0 ? 'not_charged' : credit >= debit ? 'refunded' : 'captured'
+    const meta = operation?.responseMetadata as Record<string, unknown> | null
+    const unknown = state !== 'failed'
+    const code: ProvisioningFailure['code'] = unknown ? 'outcome_unknown' : meta?.providerCode === 'resource_limit_exceeded' ? 'quota_exceeded'
+      : meta?.providerCode === 'resource_unavailable' || operation?.lastError === 'Hetzner definitively rejected the request for capacity' ? 'capacity_unavailable' : 'provider_rejected'
+    const message = code === 'capacity_unavailable' ? 'ظرفیت یا دسترسی پلن در دیتاسنتر انتخابی توسط سرویس‌دهنده تأیید نشد.'
+      : code === 'quota_exceeded' ? 'سهمیهٔ ساخت سرور نزد سرویس‌دهنده کافی نیست.'
+        : unknown ? 'نتیجهٔ ساخت هنوز قطعی نیست و در حال بررسی است.' : 'ساخت سرور توسط سرویس‌دهنده تأیید نشد.'
+    const canChooseAlternative = code === 'capacity_unavailable' && billing !== 'captured'
+    tracking.failure = { code, message, billing, reference: order.orderNumber, canChooseAlternative,
+      nextStep: unknown ? 'سفارش تازه نسازید؛ با شمارهٔ پیگیری، نتیجه را از پشتیبانی بپرسید.'
+        : canChooseAlternative ? 'پلن یا دیتاسنتر دیگری انتخاب کنید؛ ظرفیت لحظهٔ ثبت توسط سرویس‌دهنده مشخص می‌شود.'
+          : 'با شمارهٔ پیگیری با پشتیبانی تماس بگیرید؛ پیش از تعیین تکلیف، سفارش را تکرار نکنید.' }
+  }
   if (server) return { ...serverToDto(server, serverPowerPolicy(server, await loadFundingFleet(db, userId))), tracking }
   return { id: `order:${order.id}`, name: order.hostname, status: 'building' as const, lifecycle: state, provider: order.provider,
     datacenter: order.providerLocation, serverType: order.providerProductId, os: order.operatingSystem,
