@@ -15,12 +15,11 @@ import { decryptOutput, encryptOutput } from './secrets.js'
 import { getServerForUser } from './service.js'
 import { connectConsole } from './console-transport.js'
 import { maintenanceActive, releaseRequestWriter } from '../system/writer-gate.js'
+import { approvedHetznerConsole } from '../outbound/policy.js'
 
 const params = z.object({ id: z.string().uuid(), grantId: z.string().uuid() })
 function permittedUrl(value: string) {
-  const url = new URL(value)
-  if (url.protocol !== 'wss:' || !url.hostname.endsWith('.hetzner.cloud') || url.username || url.password || url.port && url.port !== '443') throw new ForbiddenError('مبدأ کنسول مجاز نیست')
-  return value
+  try { return approvedHetznerConsole(value).href } catch { throw new ForbiddenError('مبدأ کنسول مجاز نیست') }
 }
 export const registerServerConsole: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
   app.post('/servers/:id/console', { config: { rateLimit: { max: 3, timeWindow: '1 minute' } } }, async (request, reply) => {
@@ -55,19 +54,32 @@ export const registerServerConsole: FastifyPluginAsync<{ ctx: AppContext }> = as
     if (!grant?.encrypted) throw new ForbiddenError('نشست کنسول منقضی یا مصرف شده است')
   } }, (socket, request) => {
     let upstream: WebSocket | undefined, closed = false, buffered = 0
+    let isCurrent: (() => Promise<boolean>) | undefined
+    const cancel = new AbortController()
     const pending: Array<{ data: RawData; binary: boolean }> = []
-    const finish = () => { if (closed) return; closed = true; clearTimeout(deadline); clearInterval(authCheck); socket.close(1000); upstream?.close(1000); pending.length = 0 }
+    const finish = (code = 1000) => {
+      if (closed) return
+      closed = true
+      cancel.abort()
+      clearTimeout(deadline); clearInterval(authCheck)
+      socket.close(code)
+      if (upstream?.readyState === WebSocket.OPEN) upstream.close(1000)
+      else upstream?.terminate()
+      pending.length = 0
+    }
     const deadline = setTimeout(finish, 300000)
+    const unavailable = () => finish(1011)
     const authCheck = setInterval(() => {
       void (async () => {
         if (await maintenanceActive()) { finish(); return }
         const user = await authenticateToken(ctx.db, request.cookies[AUTH_COOKIE])
         if (!user || user.sessionId !== request.user?.sessionId) { finish(); return }
         const { id } = parse(params, request.params), server = await getServerForUser(ctx.db, user.id, id)
-        if (server.terminatedAt) finish()
-      })().catch(finish)
+        if (server.terminatedAt) { finish(); return }
+        if (isCurrent && !await isCurrent()) unavailable()
+      })().catch(unavailable)
     }, 30000)
-    socket.on('close', finish); socket.on('error', finish)
+    socket.on('close', () => finish()); socket.on('error', () => finish())
     socket.on('message', (data, binary) => {
       if (closed) return
       if (upstream?.readyState === WebSocket.OPEN) {
@@ -75,7 +87,7 @@ export const registerServerConsole: FastifyPluginAsync<{ ctx: AppContext }> = as
         upstream.send(data, { binary })
       } else {
         buffered += Buffer.isBuffer(data) ? data.byteLength : data instanceof ArrayBuffer ? data.byteLength : data.reduce((n, b) => n + b.byteLength, 0)
-        if (buffered > 1024 * 1024) { finish(); return }
+        if (buffered > 1024 * 1024 || pending.length >= 1024) { finish(); return }
         pending.push({ data, binary })
       }
     })
@@ -88,11 +100,16 @@ export const registerServerConsole: FastifyPluginAsync<{ ctx: AppContext }> = as
         await tx.update(serverSecrets).set({ encrypted: null, claimedAt: new Date() }).where(eq(serverSecrets.id, grantId))
         return url
       })
+      releaseRequestWriter(request)
       if (closed) return
-      upstream = connectConsole(value)
-      upstream.on('error', finish); upstream.on('close', finish)
-      upstream.on('open', () => { for (const frame of pending) upstream!.send(frame.data, { binary: frame.binary }); pending.length = 0; buffered = 0 })
-      upstream.on('message', (data, binary) => { if (socket.readyState === WebSocket.OPEN && socket.bufferedAmount < 2 * 1024 * 1024) socket.send(data, { binary }); else finish() })
-    })().catch(finish).finally(() => releaseRequestWriter(request))
+      const connection = await connectConsole(value, cancel.signal)
+      const peer = connection.socket
+      if (closed) { peer.terminate(); return }
+      upstream = peer; isCurrent = connection.isCurrent
+      peer.on('error', unavailable)
+      peer.on('close', code => { if (code === 1000) finish(); else unavailable() })
+      peer.on('open', () => { for (const frame of pending) peer.send(frame.data, { binary: frame.binary }); pending.length = 0; buffered = 0 })
+      peer.on('message', (data, binary) => { if (socket.readyState === WebSocket.OPEN && socket.bufferedAmount < 2 * 1024 * 1024) socket.send(data, { binary }); else finish() })
+    })().catch(unavailable).finally(() => releaseRequestWriter(request))
   })
 }

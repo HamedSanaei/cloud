@@ -11,13 +11,13 @@ import { createHetznerProvider } from './live.js'
  * Every configured account/project must be readable before a snapshot is
  * updated, otherwise an incomplete fleet could look like deleted servers.
  */
-export async function syncHetznerInventory(db: DbClient, config: HetznerConfig, fetcher: typeof fetch = fetch) {
+export async function syncHetznerInventory(db: DbClient, config: HetznerConfig, fetcher?: typeof fetch) {
   if (!config.accounts.length) throw new ConflictError('هیچ پروژه یا توکن API هتزنر برای نمایش سرورها تنظیم نشده است')
   if (config.accounts.some(a => !a.apiToken)) {
     throw new ConflictError('برای فهرست کامل هتزنر، توکن خواندن همه پروژه‌های تنظیم‌شده لازم است')
   }
   const accounts = config.accounts.map(a => a.id)
-  const fleet = await createHetznerProvider(config, { fetch: fetcher }).listServers()
+  const fleet = await createHetznerProvider(config, fetcher ? { fetch: fetcher } : {}).listServers()
   const stamp = new Date()
   const rows = fleet.map(machine => {
     const [accountId, externalId, extra] = machine.providerServerId.split(':')

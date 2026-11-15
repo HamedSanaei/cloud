@@ -13,7 +13,7 @@ import { creditWallet, ensureDefaultWallet } from '../../src/modules/wallets/ser
 import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
 import { setFxRate } from '../../src/modules/pricing/service.js'
 import { handleProvision, handleReconcile, handleRenewalSweep, handleServerAction, handleServerSync } from '../../src/modules/provisioning/handlers.js'
-import { idempotencyKeys, providerOperations, servers, settings, subscriptions, users, wallets } from '../../src/db/schema.js'
+import { idempotencyKeys, providerOperations, servers, serverSecrets, settings, subscriptions, users, wallets } from '../../src/db/schema.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 import type { ManagementAction } from '../../src/modules/providers/customer.interface.js'
 
@@ -510,7 +510,9 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
   })
   it('authorizes a one-use console by account, session and Origin and relays binary frames without exposing the provider URL', async () => {
     const p = await buy(); await activate(p)
-    const response = await app.inject({ method: 'POST', url: `/api/servers/${p.server.id}/console`, headers: { cookie: `cloud_session=${p.session.token}` }, payload: {} })
+    const issue = () => app.inject({ method: 'POST', url: `/api/servers/${p.server.id}/console`, remoteAddress: p.remoteAddress,
+      headers: { cookie: `cloud_session=${p.session.token}` }, payload: {} })
+    const response = await issue()
     expect(response.statusCode, response.body).toBe(200)
     expect(response.body).not.toContain('wss://')
     const grant = response.json().data, path = `/api/servers/${p.server.id}/console/${grant.grantId}`
@@ -519,19 +521,38 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     await expect(app.injectWS(path, upgrade({ ...headers, origin: 'https://foreign.test' }))).rejects.toThrow(/403/)
     const second = await createSession(ctx.db, p.user.id, {})
     await expect(app.injectWS(path, upgrade({ ...headers, cookie: `cloud_session=${second.token}` }))).rejects.toThrow(/403/)
+    let currentRoute = true
     openSocket.mockImplementation(() => {
       const events = new EventEmitter()
-      const socket = Object.assign(events, { readyState: 1, bufferedAmount: 0, send(data: Buffer) { events.emit('message', data, true) }, close() { socket.readyState = 3; events.emit('close') } })
-      queueMicrotask(() => socket.emit('open')); return socket
+      const socket = Object.assign(events, { readyState: 1, bufferedAmount: 0, send(data: Buffer) { events.emit('message', data, true) }, close() { socket.readyState = 3; events.emit('close', 1000) }, terminate() { socket.close() } })
+      setImmediate(() => socket.emit('open'))
+      return { socket, isCurrent: async () => currentRoute }
     })
-    const socket = await app.injectWS(path, upgrade(headers))
+    const realSetInterval = globalThis.setInterval
+    const interval = vi.spyOn(globalThis, 'setInterval').mockImplementation((callback, delay, ...args) =>
+      realSetInterval(callback, delay === 30000 ? 25 : delay, ...args))
+    const socket = await app.injectWS(path, upgrade(headers)).finally(() => interval.mockRestore())
     const received = once(socket, 'message'); socket.send(Buffer.from('fixture-rfb-frame'))
     expect((await received)[0].toString()).toBe('fixture-rfb-frame')
-    const closed = once(socket, 'close'); socket.close(); await closed
+    const closed = once(socket, 'close'); currentRoute = false
+    expect((await closed)[0]).toBe(1011)
     expect(openSocket).toHaveBeenCalledTimes(1)
     const stored = (await ctx.db.query.serverSecrets.findFirst({ where: t => eq(t.id, grant.grantId) }))!
     expect(stored.encrypted).toBeNull(); expect(stored.claimedAt).toBeTruthy()
     await expect(app.injectWS(path, upgrade(headers))).rejects.toThrow(/403/)
+    const issueGrant = async () => {
+      const result = await issue()
+      expect(result.statusCode, result.body).toBe(200)
+      return result.json().data.grantId
+    }
+    const revoked = await issueGrant(), revokedPath = `/api/servers/${p.server.id}/console/${revoked}`
+    expect((await app.inject({ method: 'DELETE', url: revokedPath, headers })).statusCode).toBe(204)
+    await expect(app.injectWS(revokedPath, upgrade(headers))).rejects.toThrow(/403/)
+    const expired = await issueGrant()
+    await ctx.db.update(serverSecrets).set({ expiresAt: new Date(0) }).where(eq(serverSecrets.id, expired))
+    await expect(app.injectWS(`/api/servers/${p.server.id}/console/${expired}`, upgrade(headers))).rejects.toThrow(/403/)
+    expect(openSocket).toHaveBeenCalledTimes(1)
+    expect((await issue()).statusCode).toBe(429)
   })
   it('keeps receipt-less legacy shutdown locked until an admin verifies terminal evidence, then allows safe owner deletion', async () => {
     const p = await buy(); await activate(p)

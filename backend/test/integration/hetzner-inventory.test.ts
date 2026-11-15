@@ -1,7 +1,9 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { HetznerConfig } from '../../src/config.js'
 import { hetznerInventory } from '../../src/db/schema.js'
 import { syncHetznerInventory } from '../../src/modules/providers/hetzner/inventory.js'
+import { installOutboundClient, OutboundHttp } from '../../src/modules/outbound/client.js'
+import { ProviderRetryableError } from '../../src/lib/errors.js'
 import { dbAvailable, getTestContext, truncateAll } from '../helpers.js'
 
 const config: HetznerConfig = {
@@ -67,5 +69,19 @@ describe.skipIf(!dbAvailable)('Hetzner complete read-only fleet snapshot (integr
     }, async () => { throw new Error('must not fetch') })).rejects.toThrow(/توکن خواندن همه پروژه/)
     const stored = await context.db.select().from(hetznerInventory)
     expect(stored).toHaveLength(3)
+  })
+
+  it('uses the installed Hetzner policy for production inventory refreshes', async () => {
+    const close = installOutboundClient(new OutboundHttp(async () => ({ revision: 'fixture', profiles: [],
+      routes: { hetzner: { enabled: true, profileId: null, failurePolicy: 'closed' } } })))
+    const fetcher = vi.fn(async () => Response.json({ servers: [] }))
+    vi.stubGlobal('fetch', fetcher)
+    try {
+      await expect(syncHetznerInventory(context.db, config)).rejects.toBeInstanceOf(ProviderRetryableError)
+      expect(fetcher).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+      await close()
+    }
   })
 })

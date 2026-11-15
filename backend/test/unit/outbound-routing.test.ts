@@ -63,9 +63,16 @@ describe('outbound routing and safety', () => {
     await expect(client().request('hetzner', url)).rejects.toBeInstanceOf(OutboundFailure)
     expect(fetch).toHaveBeenCalledOnce()
     vi.mocked(fetch).mockReset().mockRejectedValueOnce(new Error('proxy unreachable')).mockResolvedValue(Response.json({ locations: [] }))
-    state.routes.hetzner!.failurePolicy = 'read-only-direct'
-    expect((await client().request('hetzner', url)).report.route).toBe('direct-fallback')
+    state.routes.leaseweb = { enabled: true, profileId: id, failurePolicy: 'read-only-direct' }
+    expect((await client().request('leaseweb', policy.testTargets.leaseweb.url)).report.route).toBe('direct-fallback')
     expect(fetch).toHaveBeenCalledTimes(2)
+  })
+  it('blocks direct fallback for Hetzner reads even with a legacy saved fallback policy', async () => {
+    state.routes.hetzner!.failurePolicy = 'read-only-direct'
+    vi.mocked(fetch).mockRejectedValue(new Error('proxy unavailable'))
+    await expect(client().request('hetzner', url)).rejects.toMatchObject({ category: 'unreachable', route: { route: 'proxy' } })
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(routeInput.safeParse({ revision: state.revision, integration: 'hetzner', ...state.routes.hetzner, confirm: true }).success).toBe(false)
   })
   it('does not bypass policy errors or retry upstream errors, and refuses redirects', async () => {
     state.routes.hetzner!.failurePolicy = 'read-only-direct'

@@ -3,6 +3,7 @@ import type { ProviderServerView } from '../provider.interface.js'
 import { ProviderPermanentError, ProviderUnknownError } from '../../../lib/errors.js'
 import { HetznerApiError, object, type HetznerClient } from './client.js'
 import { createPrimaryIpv4Provider } from './primary-ip.js'
+import { approvedHetznerConsole } from '../../outbound/policy.js'
 
 export const hetznerCommands: Record<ManagementAction, string> = {
   power_on: 'poweron', shutdown: 'shutdown', power_off: 'poweroff', reboot: 'reboot', reset: 'reset', delete: 'delete_server',
@@ -130,9 +131,8 @@ export function createCustomerProvider(resolve: (id: string) => { id: string; cl
     async console(id) {
       const route = resolve(id), data = await route.client.request('POST', `/servers/${route.id}/actions/request_console`)
       if (typeof data.wss_url !== 'string' || typeof data.password !== 'string' || data.password.length > 4096) throw new ProviderUnknownError('Console credentials were not returned')
-      const url = new URL(data.wss_url)
-      if (url.protocol !== 'wss:' || !url.hostname.endsWith('.hetzner.cloud') || url.username || url.password || (url.port && url.port !== '443')) throw new ProviderPermanentError('Provider console origin is not permitted')
-      return { url: url.toString(), password: data.password }
+      try { return { url: approvedHetznerConsole(data.wss_url).href, password: data.password } }
+      catch { throw new ProviderPermanentError('مبدأ کنسول هتزنر مجاز نیست.') }
     },
   }
 }

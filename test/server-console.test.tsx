@@ -55,6 +55,16 @@ it('clears the connected session on disconnect and ignores late events', async (
   expect(revokeServerConsole).not.toHaveBeenCalled()
 })
 
+it('shows a localized error and revokes the grant when the upstream connection fails', async () => {
+  open()
+  fireEvent.click(create())
+  await waitFor(() => expect(viewers).toHaveLength(1))
+  act(() => viewers[0]?.dispatchEvent(new Event('disconnect')))
+  expect(screen.getByRole('status').textContent).toContain('ارتباط با کنسول سرور برقرار نشد')
+  expect(revokeServerConsole).toHaveBeenCalledWith('test-server', 'grant-1')
+  expect(create().disabled).toBe(false)
+})
+
 it('revokes a grant that arrives after leaving the console tab and never creates a viewer for it', async () => {
   let resolve!: (value: ReturnType<typeof grant>) => void
   vi.mocked(requestServerConsole).mockReturnValue(new Promise(done => { resolve = done }))

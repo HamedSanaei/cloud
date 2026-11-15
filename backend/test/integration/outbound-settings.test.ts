@@ -5,10 +5,11 @@ import type { FastifyInstance } from 'fastify'
 import * as config from '../../src/config.js'
 import * as policy from '../../src/modules/outbound/policy.js'
 import { buildApp } from '../../src/app.js'
-import { settings, users, auditLogs } from '../../src/db/schema.js'
+import { settings, users, auditLogs, systemEvents } from '../../src/db/schema.js'
 import { registerUser, createSession } from '../../src/modules/auth/service.js'
 import { readOutbound, outboundKey } from '../../src/modules/outbound/settings.js'
 import { OutboundHttp } from '../../src/modules/outbound/client.js'
+import { recordEvent } from '../../src/modules/system/events.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 
 const base = '/api/admin/settings', healthKey = 'network.outbound.health.v1'
@@ -142,5 +143,20 @@ describe.skipIf(!dbAvailable)('admin outbound settings and shared runtime policy
     const view = await status(actor)
     expect(view.profiles.find((p: any) => p.id === saved.id).lastTest.ok).toBe(false)
     expect((await send(actor, 'POST', '/outbound/test', { ...payload, proof: randomUUID(), url: 'http://169.254.169.254/' })).statusCode).toBe(422)
+  })
+  it('keeps the last console failure after success and redacts secrets from health status', async () => {
+    const actor = await account(), snapshot = await status(actor)
+    const metadata = { integration: 'hetzner', route: 'proxy', revision: snapshot.revision, elapsedMs: 30, password: 'fixture-secret', url: 'wss://fixture-ticket' }
+    try {
+      recordEvent('outbound.console', 'warn', 'outbound', { ...metadata, code: 'authentication' })
+      await vi.waitFor(async () => expect((await status(actor)).hetznerConsole.lastFailure?.category).toBe('authentication'))
+      recordEvent('outbound.console', 'info', 'outbound', { ...metadata, code: 'none', elapsedMs: 21 })
+      await vi.waitFor(async () => {
+        const result = (await status(actor)).hetznerConsole
+        expect(result.latest).toMatchObject({ route: 'proxy', category: 'none', latencyMs: 21 })
+        expect(result.lastFailure).toMatchObject({ route: 'proxy', category: 'authentication', latencyMs: 30 })
+        expect(JSON.stringify(result)).not.toMatch(/fixture-secret|fixture-ticket/)
+      })
+    } finally { await ctx.db.delete(systemEvents).where(eq(systemEvents.event, 'outbound.console')) }
   })
 })

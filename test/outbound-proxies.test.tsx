@@ -11,7 +11,7 @@ let allowed: boolean, encryptionReady: boolean, data: OutboundStatus
 let posts: Array<{ path: string; body: Record<string, unknown> }>, reads: string[]
 beforeEach(() => {
   allowed = true; encryptionReady = true; posts = []; reads = []
-  data = { revision: 'initial', profiles: [{ id: profileId, name: 'Europe fixture', type: 'socks5', host: 'proxy.example.test', port: 1080, timeoutMs: 10000, enabled: true, authenticated: true, lastTest: null }],
+  data = { revision: 'initial', hetznerConsole: { latest: null, lastFailure: null }, profiles: [{ id: profileId, name: 'Europe fixture', type: 'socks5', host: 'proxy.example.test', port: 1080, timeoutMs: 10000, enabled: true, authenticated: true, lastTest: null }],
     integrations: outboundIntegrations.map(id => ({ id, route: { enabled: false, profileId: null, failurePolicy: 'closed' }, active: { route: 'direct', profileId: null }, lastTest: null })) }
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     const path = url.replace(/^\/api/, '')
@@ -68,6 +68,13 @@ describe('admin outbound panel', () => {
     await user.click(card.getByRole('button', { name: 'ذخیرهٔ مسیر هتزنر' }))
     await waitFor(() => expect(posts).toHaveLength(2))
     expect(posts[1].body).toMatchObject({ integration: 'hetzner', enabled: false, profileId: null, failurePolicy: 'closed', proof })
+  })
+  it('shows the last console failure and provides no direct fallback control for Hetzner', async () => {
+    data.hetznerConsole.latest = { route: 'proxy', profileId, category: 'authentication', latencyMs: 27, checkedAt: '2026-11-15T08:00:00Z', revision: 'initial' }
+    await ready()
+    const card = integration('هتزنر')
+    expect(card.getByText(/پراکسی · نیازمند بررسی اعتبارنامهٔ سرویس · 27 ms/)).toBeTruthy()
+    expect(card.queryByLabelText('سیاست خطای هتزنر')).toBeNull()
   })
   it('assigns ParsGreen independently without changing other integration routes', async () => {
     const user = userEvent.setup(); await ready()

@@ -1,14 +1,15 @@
 import { hkdfSync, randomUUID } from 'node:crypto'
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import type { DbClient, DbOrTx } from '../../db/index.js'
+import type { systemEvents } from '../../db/schema.js'
 import { settings } from '../../db/schema.js'
 import { getConfig } from '../../config.js'
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../lib/errors.js'
 import type { SessionUser } from '../auth/service.js'
 import { consumeAuthorization, seal, unseal } from '../system/security.js'
 import { writeAudit } from '../audit/service.js'
-import { outboundIntegrations, type OutboundState, type OutboundStatus, type OutboundTestResult } from '../../contracts/outbound.js'
+import { outboundIntegrations, type OutboundConsoleHealth, type OutboundState, type OutboundStatus, type OutboundTestResult } from '../../contracts/outbound.js'
 import { emptyOutboundState, OutboundHttp, selectedRoute, OutboundFailure } from './client.js'
 import { OutboundError, publicAddresses, testTargets, withinDeadline } from './policy.js'
 
@@ -25,6 +26,7 @@ export const profileInput = z.object({ revision, id: z.uuid().optional(), name: 
 export const routeInput = z.object({ revision, integration: integrationSchema, enabled: z.boolean(), profileId: z.uuid().nullable(),
   failurePolicy: z.enum(['closed', 'read-only-direct']), confirm: z.literal(true),
 }).strict().refine(v => !v.enabled || !!v.profileId, 'An enabled route requires a proxy')
+  .refine(v => v.integration !== 'hetzner' || v.failurePolicy === 'closed', 'Hetzner routing requires fail-closed behavior')
 export const deleteInput = z.object({ revision, id: z.uuid(), confirm: z.literal(true) }).strict()
 export const testInput = z.object({ revision, integration: integrationSchema, profileId: z.uuid().optional(), confirm: z.literal(true) }).strict()
 export const canManageOutbound = (user: SessionUser) => user.role === 'admin' && user.status === 'active'
@@ -41,6 +43,7 @@ export async function readOutbound(db: DbOrTx): Promise<OutboundState> {
     const stored = row.value as { revision: string; encrypted: string }
     const value = JSON.parse(unseal(Buffer.from(stored.encrypted, 'base64'), `${outboundKey}:${stored.revision}`, encryptionKey()).toString()) as OutboundState
     if (value.revision !== stored.revision || !Array.isArray(value.profiles) || !value.routes) throw new Error()
+    if (value.routes.hetzner) value.routes.hetzner.failurePolicy = 'closed'
     return value
   } catch { throw new OutboundError('configuration') }
 }
@@ -52,12 +55,25 @@ async function store(tx: DbOrTx, state: OutboundState) {
   await tx.insert(settings).values({ key: outboundKey, value }).onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: new Date() } })
   return { revision: state.revision }
 }
+function consoleHealth(event?: typeof systemEvents.$inferSelect): OutboundConsoleHealth | null {
+  if (!event?.metadata) return null
+  const data = event.metadata as { route: OutboundConsoleHealth['route']; profileId?: string;
+    revision: string; code: OutboundConsoleHealth['category']; elapsedMs: number }
+  return { route: data.route, profileId: data.profileId ?? null, category: data.code, latencyMs: data.elapsedMs,
+    checkedAt: event.createdAt.toISOString(), revision: data.revision }
+}
 export async function outboundStatus(db: DbClient): Promise<OutboundStatus> {
-  const state = await readOutbound(db)
-  const health = (await db.query.settings.findFirst({ where: t => eq(t.key, healthKey) }))?.value as Record<string, OutboundTestResult> | undefined
+  const [state, storedHealth, latest, lastFailure] = await Promise.all([
+    readOutbound(db),
+    db.query.settings.findFirst({ where: t => eq(t.key, healthKey) }),
+    db.query.systemEvents.findFirst({ where: (t, { eq }) => eq(t.event, 'outbound.console'), orderBy: (t, { desc }) => desc(t.createdAt) }),
+    db.query.systemEvents.findFirst({ where: t => and(eq(t.event, 'outbound.console'), eq(t.level, 'warn')), orderBy: (t, { desc }) => desc(t.createdAt) }),
+  ])
+  const health = storedHealth?.value as Record<string, OutboundTestResult> | undefined
   return { revision: state.revision, profiles: state.profiles.map(({ username, password: _password, ...p }) => ({ ...p, authenticated: !!username, lastTest: health?.[`profile:${p.id}`] ?? null })),
     integrations: outboundIntegrations.map(id => ({ id, route: state.routes[id] ?? { enabled: false, profileId: null, failurePolicy: 'closed' },
-      active: selectedRoute(state, id), lastTest: health?.[id] ?? null })) }
+      active: selectedRoute(state, id), lastTest: health?.[id] ?? null })),
+    hetznerConsole: { latest: consoleHealth(latest), lastFailure: consoleHealth(lastFailure) } }
 }
 export async function saveProfile(db: DbClient, user: SessionUser, input: z.infer<typeof profileInput>, proof: string) {
   requireOutboundAdmin(user)
