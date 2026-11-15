@@ -16,6 +16,7 @@ import { getServerForUser } from './service.js'
 import { connectConsole } from './console-transport.js'
 import { maintenanceActive, releaseRequestWriter } from '../system/writer-gate.js'
 import { approvedHetznerConsole } from '../outbound/policy.js'
+import { consoleSessionExpiredCode } from '../../contracts/server-console.js'
 
 const params = z.object({ id: z.string().uuid(), grantId: z.string().uuid() })
 function permittedUrl(value: string) {
@@ -67,7 +68,7 @@ export const registerServerConsole: FastifyPluginAsync<{ ctx: AppContext }> = as
       else upstream?.terminate()
       pending.length = 0
     }
-    const deadline = setTimeout(finish, 300000)
+    const deadline = setTimeout(() => finish(consoleSessionExpiredCode), 300000)
     const unavailable = () => finish(1011)
     const authCheck = setInterval(() => {
       void (async () => {

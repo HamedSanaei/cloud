@@ -9,6 +9,7 @@ export interface ServerOperation {
   actionId: number | null; createdAt: string; updatedAt: string; completedAt: string | null; message: string | null
   needsOperator?: boolean
   primaryIpv4?: { oldIp: string; newIp: string | null; step: string | null; feeRial: number; ledgerId: string; refundId: string | null }
+  resize?: { powerBefore: string | null; powerAfter: string; startedAfterResize: boolean }
 }
 export interface PrimaryIpv4Quote { currentIp: string | null; feeRial: number; version: string; balanceRial: number; reason: string | null; needsTopUp: boolean }
 export interface ServerDetail extends Server {
@@ -30,7 +31,7 @@ export interface ServerDetail extends Server {
   operations: ServerOperation[]; credentials: Array<{ operationId: string | null; claimedAt: string | null; acknowledgedAt: string | null }>
 }
 export interface ResizeOption { type: string; architecture: string; storageType: string; vcpu: number; memoryMb: number; diskGb: number; available: boolean; offerId: string }
-export interface ResizePreview { quoteId: string; serverType: string; upgradeDisk: boolean; priceRial: number; currentPriceRial: number; period: string; effectiveAt: string; expiresAt: string; immediateChargeRial: number }
+export interface ResizePreview { quoteId: string; serverType: string; upgradeDisk: boolean; currentDiskGb: number; resultingDiskGb: number; powerAfterResize: 'may_start'; priceRial: number; currentPriceRial: number; period: string; effectiveAt: string; expiresAt: string; immediateChargeRial: number }
 export const getServerDetail = async (id: string, refresh = false) =>
   (await apiGet<{ data: ServerDetail }>(`/servers/${encodeURIComponent(id)}/management${refresh ? '?refresh=1' : ''}`)).data
 export const recheckServerOperation = async (serverId: string, operationId: string) =>

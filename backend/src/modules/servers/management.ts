@@ -58,13 +58,14 @@ export function customerProvider(server: Server) {
   return manager
 }
 export function managementDto(op: Operation) {
-  const meta = op.responseMetadata as { actionId?: number; accepted?: boolean; reconciledAt?: string } | null
+  const meta = op.responseMetadata as { actionId?: number; accepted?: boolean; reconciledAt?: string; resize?: { powerBefore: string | null; powerAfter: string; startedAfterResize: boolean } } | null
   const ipChange = op.action === 'replace_primary_ipv4'
   const unknown = op.status === 'unknown' || op.status === 'needs_reconciliation' || (!ipChange && operationDelayed(op))
   return { id: op.id, action: op.action, status: op.status === 'succeeded' ? 'confirmed' : op.status === 'failed' ? 'failed'
     : unknown ? 'outcome_unknown' : op.status === 'pending' ? 'queued' : meta?.accepted || (ipChange && meta?.actionId) ? 'provider_accepted' : 'dispatching',
     actionId: meta?.actionId || null, createdAt: op.createdAt.toISOString(), updatedAt: op.updatedAt.toISOString(),
     completedAt: op.completedAt?.toISOString() ?? null, needsOperator: isOrphanedPowerOperation(op) || (ipChange && unknown),
+    ...(op.action === 'resize' && op.status === 'succeeded' && meta?.resize ? { resize: meta.resize } : {}),
     message: op.status === 'failed' ? 'عملیات انجام نشد؛ حفاظت، وضعیت سرور یا دسترسی پروژه را بررسی کنید.' : isOrphanedPowerOperation(op)
       ? 'این درخواست رسید قابل پیگیری ندارد. شناسهٔ عملیات را برای بررسی سابقهٔ ارائه‌دهنده به پشتیبانی بدهید.'
       : unknown ? 'نتیجهٔ ارائه‌دهنده هنوز قابل تأیید نیست؛ وضعیت را دوباره بررسی کنید.' : null }
@@ -158,6 +159,7 @@ async function validateDispatch(db: DbClient, server: Server, action: Management
     if (!baseline || baseline.serverType !== meta.serverType || baseline.diskGb !== view.diskGb || baseline.imageId !== meta.imageId || typeof input.expiresAt !== 'string' || new Date(input.expiresAt).getTime() <= Date.now()) throw new ValidationError('وضعیت سرور یا پیش‌نمایش قیمت تغییر کرده است؛ دوباره بررسی کنید')
     const target = (await provider.resizeOptions(server.providerServerId!)).find(type => type.type === input.serverType)
     if (!target?.available || target.type === meta.serverType || target.diskGb < (view.diskGb ?? Infinity) || target.storageType !== meta.storageType) throw new ValidationError('پلن مقصد، ظرفیت دیسک یا نوع ذخیره‌سازی سازگار نیست')
+    if (input.currentDiskGb !== undefined && (input.currentDiskGb !== view.diskGb || input.resultingDiskGb !== (input.upgradeDisk ? target.diskGb : view.diskGb))) throw new ValidationError('نتیجهٔ ظرفیت دیسک با پیش‌نمایش مطابقت ندارد؛ دوباره بررسی کنید')
   }
   if (action === 'rebuild') {
     const image = (await provider.images(server.providerServerId!)).find(image => image.id === input.image)
@@ -277,7 +279,11 @@ async function confirmCustomerOperation(db: DbClient, server: Server, operation:
       await tx.update(servers).set({ operatingSystem: image! }).where(eq(servers.id, server.id))
     }
     const now = new Date()
-    await tx.update(providerOperations).set({ status: 'succeeded', lastError: null, responseMetadata: { ...((locked.responseMetadata ?? {}) as object), reconciledAt: now.toISOString() }, completedAt: now, updatedAt: now }).where(eq(providerOperations.id, operation.id))
+    const baseline = (locked.requestMetadata as { input?: { baseline?: { powerState?: string } } })?.input?.baseline
+    const resize = action === 'resize' ? { powerBefore: baseline?.powerState ?? null, powerAfter: view.state,
+      startedAfterResize: baseline?.powerState === 'suspended' && view.state === 'active' } : undefined
+    await tx.update(providerOperations).set({ status: 'succeeded', lastError: null, responseMetadata: { ...((locked.responseMetadata ?? {}) as object),
+      ...(resize ? { resize } : {}), reconciledAt: now.toISOString() }, completedAt: now, updatedAt: now }).where(eq(providerOperations.id, operation.id))
     await notifyServerOperation(tx, current, locked, 'succeeded')
     await writeAudit(tx, { actorId: server.userId, action: `server.${action}.confirmed`, targetType: 'server', targetId: server.id, metadata: { operationId: operation.id, actionId } })
   })

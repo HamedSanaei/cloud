@@ -4,10 +4,12 @@ import { Card } from '../ui/Card'
 import { Button, LinkButton } from '../ui/Button'
 import { ApiError, getApiBaseUrl } from '../../lib/apiClient'
 import { requestServerConsole, revokeServerConsole, type ServerDetail } from '../../lib/serverManagement'
+import { consoleSessionExpiredCode } from '../../../backend/src/contracts/server-console'
 
 type Block = NonNullable<ServerDetail['consoleBlock']> | 'checking' | 'refresh_failed' | 'cross_origin'
 type Phase = 'idle' | 'requesting' | 'connecting' | 'connected'
-interface Attempt { grantId?: string; viewer?: RFB; timeout?: number }
+interface Attempt { grantId?: string; viewer?: RFB; socket?: WebSocket; timeout?: number }
+const expiredNotice = 'مهلت نشست موقت کنسول به پایان رسید. برای اتصال دوباره نشست جدید بسازید.'
 
 const blockedMessages: Record<Block, string> = {
   operation_pending: 'نتیجهٔ عملیات قبلی سرور هنوز مشخص نشده است. ابتدا وضعیت آن را بررسی کنید.',
@@ -31,6 +33,7 @@ function discardGrant(serverId: string, grantId: string) {
 function dispose(serverId: string, attempt: Attempt) {
   window.clearTimeout(attempt.timeout)
   attempt.viewer?.disconnect()
+  if (attempt.socket && attempt.socket.readyState < WebSocket.CLOSING) attempt.socket.close()
   if (attempt.grantId) discardGrant(serverId, attempt.grantId)
 }
 
@@ -39,9 +42,11 @@ export function ServerConsole({ serverId, block, recheck, openOperations }: {
 }) {
   const target = useRef<HTMLDivElement>(null)
   const current = useRef<Attempt | null>(null)
+  const entry = useRef<HTMLButtonElement>(null)
   const [phase, setPhase] = useState<Phase>('idle')
+  const [expanded, setExpanded] = useState(false)
   const [notice, setNotice] = useState('')
-  const statusId = useId(), blockId = useId()
+  const statusId = useId(), blockId = useId(), viewerId = useId(), keyboardId = useId()
   const consoleUrl = new URL(`${getApiBaseUrl()}/servers/${encodeURIComponent(serverId)}/console/`, location.origin)
   const reason = consoleUrl.origin !== location.origin ? 'cross_origin' : block
 
@@ -52,6 +57,7 @@ export function ServerConsole({ serverId, block, recheck, openOperations }: {
       current.current = null
       dispose(serverId, attempt)
       setPhase('idle')
+      setExpanded(false)
       setNotice('با خروج از تب، نشست کنسول پایان یافت. برای اتصال دوباره نشست جدید بسازید.')
     }
     document.addEventListener('visibilitychange', hide)
@@ -68,6 +74,7 @@ export function ServerConsole({ serverId, block, recheck, openOperations }: {
     current.current = null
     dispose(serverId, attempt)
     setPhase('idle')
+    setExpanded(false)
     setNotice(message)
   }
 
@@ -90,7 +97,13 @@ export function ServerConsole({ serverId, block, recheck, openOperations }: {
       }
       const url = new URL(encodeURIComponent(grant.grantId), consoleUrl)
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-      const viewer = new Viewer(target.current, url.toString(), { credentials: { password: grant.password } })
+      // noVNC accepts a public WebSocket channel; retain its explicit close reason.
+      const socket = new WebSocket(url.toString())
+      attempt.socket = socket
+      socket.addEventListener('close', event => {
+        if (event.code === consoleSessionExpiredCode) end(attempt, expiredNotice)
+      }, { once: true })
+      const viewer = new Viewer(target.current, socket, { credentials: { password: grant.password } })
       let connected = false
       attempt.viewer = viewer
       viewer.scaleViewport = true
@@ -102,7 +115,7 @@ export function ServerConsole({ serverId, block, recheck, openOperations }: {
         connected = true
         attempt.grantId = undefined
         window.clearTimeout(attempt.timeout)
-        attempt.timeout = window.setTimeout(() => end(attempt, 'مهلت نشست کنسول تمام شد. برای اتصال دوباره نشست جدید بسازید.'), Math.min(300, grant.maxSessionSeconds) * 1000)
+        attempt.timeout = window.setTimeout(() => end(attempt, expiredNotice), Math.min(300, grant.maxSessionSeconds) * 1000)
         setPhase('connected')
       })
       viewer.addEventListener('disconnect', () => {
@@ -128,10 +141,22 @@ export function ServerConsole({ serverId, block, recheck, openOperations }: {
   const canEnd = phase === 'connecting' || phase === 'connected'
   const canRefresh = reason && ['provider_unavailable', 'server_not_ready', 'refresh_failed', 'browser_session_required'].includes(reason)
 
-  return <Card className="server-console">
+  return <Card className={`server-console${expanded ? ' server-console--expanded' : ''}`}>
     <h2>کنسول مرورگر</h2>
     <p id={statusId} role="status">{status}</p>
-    <div className="server-console-viewer" ref={target} aria-label="نمایشگر امن کنسول سرور" />
+    {phase === 'connected' && <div className="server-console-tools">
+      <button ref={entry} type="button" className="button button--secondary button--sm" aria-controls={viewerId} aria-describedby={keyboardId} onClick={() => current.current?.viewer?.focus()}>ورود با صفحه‌کلید به کنسول</button>
+      <Button size="sm" variant="secondary" aria-expanded={expanded} aria-controls={viewerId} onClick={() => setExpanded(value => !value)}>{expanded ? 'اندازهٔ معمول کنسول' : 'بزرگ‌کردن کنسول'}</Button>
+    </div>}
+    <div id={viewerId} className="server-console-viewer" ref={target} aria-label="نمایشگر امن کنسول سرور" onKeyDownCapture={event => {
+      if (event.key === 'Escape' && event.ctrlKey && event.altKey) {
+        event.preventDefault(); event.stopPropagation()
+        // Release modifiers already sent to the guest before moving focus out.
+        for (const [symbol, code] of [[0xffe3, 'ControlLeft'], [0xffe4, 'ControlRight'], [0xffe9, 'AltLeft'], [0xffea, 'AltRight']] as const) current.current?.viewer?.sendKey(symbol, code, false)
+        current.current?.viewer?.blur(); entry.current?.focus()
+      }
+    }} />
+    {phase === 'connected' && <p id={keyboardId} className="server-console-keyboard-help">کلید Tab داخل کنسول به سرور ارسال می‌شود. برای بازگشت به کنترل‌های صفحه، <kbd dir="ltr">Ctrl + Alt + Escape</kbd> را بزنید.</p>}
     {reason && <div className="server-notice server-access-notice">
       <p id={blockId}>{blockedMessages[reason]}</p>
       <div className="server-inline-actions">

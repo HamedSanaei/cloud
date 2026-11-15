@@ -166,10 +166,13 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
     const sub = server.subscriptionId ? await db.query.subscriptions.findFirst({ where: t => eq(t.id, server.subscriptionId!) }) : null
     const period = sub?.billingInterval.toLowerCase() as RetailPeriod | undefined
     if (!period || !['hourly', 'daily', 'monthly'].includes(period)) throw new ValidationError('دورهٔ صورتحساب برای تغییر پلن پشتیبانی نمی‌شود')
+    if (view.diskGb == null || !Number.isFinite(view.diskGb) || view.diskGb <= 0 || !Number.isFinite(target.diskGb)) throw new ValidationError('ظرفیت فعلی یا مقصد دیسک قابل تأیید نیست')
     const quote = await createQuote(db, { userId: user.id, offerId: offer.id, locationCode: server.providerLocation,
       billingOption: retailBilling(offer.billingOptions as ProviderBillingOption[], period).native, billingPeriod: period })
-    const baseline = { serverType: view.metadata?.serverType, diskGb: view.diskGb, imageId: view.metadata?.imageId }
-    const payload = { serverType: target.type, upgradeDisk: input.upgradeDisk, priceRial: quote.totalRial, quoteId: quote.id, expiresAt: quote.expiresAt.toISOString(), baseline }
+    const baseline = { serverType: view.metadata?.serverType, diskGb: view.diskGb, imageId: view.metadata?.imageId, powerState: view.state }
+    const payload = { serverType: target.type, upgradeDisk: input.upgradeDisk, currentDiskGb: view.diskGb,
+      resultingDiskGb: input.upgradeDisk ? target.diskGb : view.diskGb, powerAfterResize: 'may_start' as const,
+      priceRial: quote.totalRial, quoteId: quote.id, expiresAt: quote.expiresAt.toISOString(), baseline }
     await db.insert(idempotencyKeys).values({ scope: `resize:${user.id}:${id}`, key: quote.id, responseStatus: 200, responseBody: payload, expiresAt: quote.expiresAt })
     return { data: { ...payload, currentPriceRial: sub!.priceRial, period: sub!.billingInterval, effectiveAt: sub!.nextInvoiceAt.toISOString(), expiresAt: quote.expiresAt.toISOString(), immediateChargeRial: 0 } }
   })
@@ -201,7 +204,9 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
   })
   app.get('/servers/:id/metrics', { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } }, async request => {
     const user = requireUser(request), { id } = parse(params, request.params), { window } = parse(z.object({ window: z.enum(['1h', '6h', '24h']).default('1h') }), request.query)
-    const server = await getServerForUser(db, user.id, id), manager = customerProvider(server), key = `${id}:${window}`
+    const server = await getServerForUser(db, user.id, id)
+    if (server.terminatedAt || server.terminationState === 'terminated' || server.status === 'terminated') throw new ConflictError('مانیتورینگ زنده برای سرور حذف‌شده در دسترس نیست')
+    const manager = customerProvider(server), key = `${id}:${window}`
     const prior = metricCache.get(key)
     if (prior && prior.expiresAt > Date.now()) return { data: await prior.value }
     const hours = Number(window.replace('h', '')), end = new Date(Math.floor(Date.now() / 60000) * 60000), start = new Date(end.getTime() - hours * 3600000)

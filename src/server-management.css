@@ -165,6 +165,15 @@
 .server-advanced-links { display: grid; gap: 16px; margin: 24px 0; }
 .server-console-viewer { background: #0f172a; min-height: 240px; height: 300px; border-radius: 9px; overflow: hidden; margin: 20px 0; }
 .server-console-actions { margin-block: 12px; }
+.server-console-tools { display: flex; gap: 8px; flex-wrap: wrap; margin-block: 12px; }
+.server-console-viewer:focus-within { outline: 3px solid var(--brand-500); outline-offset: 3px; }
+.server-console--expanded { grid-column: 1 / -1; }
+.server-console--expanded .server-console-viewer { height: min(75dvh, 850px); min-height: 350px; }
+.server-console-keyboard-help kbd { display: inline-block; font-family: monospace; color: var(--ink); background: var(--surface-muted); border: 1px solid var(--border-strong); padding: 2px 6px; border-radius: 4px; }
+.server-credential-list article { padding-block: 14px; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.server-credential-list article p { margin: 6px 0; }
+.server-credential-list small { display: block; color: var(--muted); margin-bottom: 8px; }
+.server-resize-effects { color: var(--ink); }
 @media (max-width: 1000px) { .server-detail-columns { grid-template-columns: 1fr; } .server-resize-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .Toastify__toast { font-family: Vazirmatn, sans-serif; font-size: 14px; border: 1px solid #d9e2ec; border-radius: 12px; line-height: 1.8; }
 @media (max-width: 640px) {
