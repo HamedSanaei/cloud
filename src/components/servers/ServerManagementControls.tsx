@@ -32,6 +32,9 @@ export function ServerOperationStatus({ operation }: { operation: ServerOperatio
   const ipSteps: Record<string, string> = { shutdown: 'خاموشی نرم سرور', create: 'دریافت آدرس جدید', detach_old: 'جداسازی آدرس قبلی', attach_new: 'اتصال آدرس جدید', restart: 'روشن‌کردن سرور', remove_old: 'آزادسازی آدرس قبلی', detach_new: 'جداسازی آدرس جدید', restore_old: 'بازیابی آدرس قبلی', restart_old: 'بازیابی وضعیت برق', remove_new: 'آزادسازی آدرس جدید' }
   return <article className="server-operation" role="status"><div><strong>{actionLabels[operation.action] ?? 'عملیات سرور'}</strong><span className={`server-lifecycle server-lifecycle--${operation.status === 'confirmed' ? 'ready' : operation.status === 'failed' ? 'failed' : operation.status === 'outcome_unknown' ? 'outcome_unknown' : 'provisioning'}`}>{operationLabels[operation.status]}</span></div>
     <p>شناسه عملیات: <bdi>{operation.id}</bdi>{operation.actionId ? <> · Action ID: <bdi>{operation.actionId}</bdi></> : null}</p><small>{formatFaDateTime(operation.updatedAt)}</small>{operation.message && <p>{operation.message}</p>}
+    {operation.action === 'resize' && operation.resize && <p>{operation.resize.startedAfterResize
+      ? 'پس از تغییر پلن، روشن‌شدن سرور توسط ارائه‌دهنده مشاهده و ثبت شد؛ آغازکنندهٔ روشن‌شدن از این نتیجه مشخص نیست.'
+      : `وضعیت برق مشاهده‌شده پس از تغییر پلن: ${operation.resize.powerAfter === 'active' ? 'روشن' : operation.resize.powerAfter === 'suspended' ? 'خاموش' : 'نامشخص'}`}</p>}
     {ip && <><p>{ip.step && ipSteps[ip.step]} · IPv4 قبلی <bdi dir="ltr">{ip.oldIp}</bdi>{ip.newIp && <> · IPv4 جدید <bdi dir="ltr">{ip.newIp}</bdi></>}</p>
       <p>{formatToman(ip.feeRial / 10)} · شناسه تراکنش <bdi>{ip.ledgerId}</bdi>{ip.refundId && <> · بازگشت وجه <bdi>{ip.refundId}</bdi></>}</p></>}
   </article>
@@ -40,6 +43,7 @@ export function ServerBillingTerminationState({ server }: { server: ServerDetail
   return <Card className="server-billing-termination"><h3>وضعیت پایان اشتراک</h3><strong>{server.billing.futureDebits === 'stopped' ? 'حذف قطعی تأیید شد؛ برداشت‌های آینده متوقف‌اند.' : server.billing.futureDebits === 'held_pending_confirmation' ? 'نتیجهٔ حذف هنوز نهایی نیست؛ تمدیدهای جدید موقتاً نگه داشته شده‌اند.' : 'اشتراک طبق دورهٔ خریداری‌شده محاسبه می‌شود.'}</strong><p>سوابق مالی قبلی حفظ می‌شوند. خاموش‌کردن VM هزینهٔ ارائه‌دهنده را متوقف نمی‌کند.</p></Card>
 }
 export function OneTimePassword({ server, operationId, onClose }: { server: ServerDetail; operationId: string; onClose: () => void }) {
+  const operation = server.operations.find(item => item.id === operationId)
   const [secret, setSecret] = useState<{ password: string; expiresAt: string } | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('')
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
@@ -57,7 +61,7 @@ export function OneTimePassword({ server, operationId, onClose }: { server: Serv
     catch { if (mounted.current) setError('رمز قابل دریافت نیست، قبلاً نمایش داده شده یا عملیات هنوز تأیید نشده است.') }
     finally { if (mounted.current) setBusy(false) }
   }
-  return <Modal className="server-management-modal" trapFocus open onClose={onClose} title="رمز جدید root — فقط یک‌بار" description="این مقدار تنها در نشست فعلی و برای مدت کوتاه نمایش داده می‌شود.">
+  return <Modal className="server-management-modal" trapFocus open onClose={onClose} title={operation?.action === 'enable_rescue' ? 'رمز Rescue — فقط یک‌بار' : 'رمز جدید root — فقط یک‌بار'} description={operation ? `${actionLabels[operation.action]} — ${formatFaDateTime(operation.createdAt)} — ${operation.id}` : 'این مقدار تنها در نشست فعلی و برای مدت کوتاه نمایش داده می‌شود.'}>
     <p>رمز را در محل امن نگه دارید. پس از بستن این پنجره یا خروج از تب، نمایش دوباره ممکن نیست.</p>
     {secret ? <><output className="server-password" dir="ltr">{secret.password}</output><div className="server-inline-actions"><Button onClick={() => { void navigator.clipboard.writeText(secret.password).catch(() => setError('کپی خودکار در این مرورگر ممکن نیست.')) }}>کپی رمز</Button><Button variant="secondary" onClick={() => { setSecret(null); void acknowledgeServerPassword(server.id, operationId); onClose() }}>مشاهده و دریافت شد</Button></div></> : <Button disabled={busy} onClick={claim}>دریافت امن رمز</Button>}
     {error && <p role="alert">{error}</p>}

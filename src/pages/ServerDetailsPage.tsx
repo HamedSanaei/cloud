@@ -12,7 +12,8 @@ import { useToast } from '../components/ui/Toast'
 import { LifecycleBadge, ServerResourceMetricCard } from '../components/servers/ServerPrimitives'
 import { DestructiveConfirmation, OneTimePassword, ServerBillingTerminationState, ServerOperationStatus, ServerPowerActionButton } from '../components/servers/ServerManagementControls'
 import { ServerConsole } from '../components/servers/ServerConsole'
-import { ServerAccess } from '../components/servers/ServerAccess'
+import { ServerAccess, ServerCredentialList } from '../components/servers/ServerAccess'
+import { ResizeEffects, resizeEffectsVerified } from '../components/servers/ResizeEffects'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { formatFaDateTime, formatFaNumber, formatToman } from '../lib/format'
 import { actionLabels, getResizeOptions, getServerDetail, getServerMetrics, previewResize, recheckServerOperation, submitPrimaryIpv4, submitServerAction,
@@ -23,7 +24,7 @@ const byteValue = (value: number | null | undefined) => value === null || value 
 const amount = (value: number | null) => value === null ? missing : formatToman(value / 10)
 const periodLabels: Record<string, string> = { HOURLY: 'ساعتی', DAILY: 'روزانه', MONTHLY: 'ماهانه' }
 const tabs = [['overview', 'نمای کلی'], ['monitoring', 'مانیتورینگ'], ['operations', 'عملیات'], ['resize', 'تغییر پلن'], ['access', 'سیستم‌عامل و دسترسی'], ['console', 'کنسول و تنظیمات']] as const
-type ActionRequest = { action: ManagementAction; input: Record<string, unknown> } | { action: 'replace_primary_ipv4'; quote: PrimaryIpv4Quote }
+type ActionRequest = { action: ManagementAction; input: Record<string, unknown>; resizePreview?: ResizePreview } | { action: 'replace_primary_ipv4'; quote: PrimaryIpv4Quote }
 export function ServerDetailsPage() {
   const { id = '' } = useParams(), [search, setSearch] = useSearchParams(), tab = search.get('tab') || 'overview'
   const fresh = useRef(false)
@@ -77,9 +78,13 @@ export function ServerDetailsPage() {
     const timer = window.setTimeout(() => { if (document.visibilityState !== 'hidden') { rounds.current++; refresh() } }, Math.min(5000 * 1.3 ** rounds.current, 30000))
     return () => window.clearTimeout(timer)
   }, [pending, detail.loading, server?.operations, refresh])
-  const ask = (action: ManagementAction, input: Record<string, unknown> = {}) => { key.current = crypto.randomUUID(); setError(''); setRequest({ action, input }) }
+  const ask = (action: ManagementAction, input: Record<string, unknown> = {}, resizePreview?: ResizePreview) => { key.current = crypto.randomUUID(); setError(''); setRequest({ action, input, resizePreview }) }
   const confirm = async () => {
     if (!request || !server || busy) return
+    if (request.action === 'resize' && (!request.resizePreview || !resizeEffectsVerified(request.resizePreview) || Date.now() >= Date.parse(request.resizePreview.expiresAt))) {
+      setError('جزئیات تغییر پلن یا اعتبار قیمت قابل تأیید نیست؛ پیش‌نمایش را دوباره دریافت کنید.')
+      return
+    }
     if (request.action === 'resize' && (pending || checking || detail.loading || detail.error || !server.capabilities.resize || !server.providerAvailable || server.resizeBlock || server.providerState !== 'suspended')) {
       setError('برای تأیید تغییر پلن، وضعیت خاموش سرور و نتیجهٔ عملیات قبلی را دوباره بررسی کنید.')
       return
@@ -138,7 +143,7 @@ export function ServerDetailsPage() {
       openOperations={() => setSearch({ tab: 'operations' })} />
       <Card><h2>امکانات پیشرفته</h2><div className="server-advanced-links"><Button variant="secondary" onClick={() => setSearch({ tab: 'storage' })}>Snapshot، Backup و Volume</Button><Button variant="secondary" onClick={() => setSearch({ tab: 'network' })}>شبکه، حفاظت و Rescue</Button></div><p>{server.capabilities.unavailableReason}</p></Card></div>}
     {tab === 'storage' && <ServerStorage server={server} />}
-    {tab === 'network' && <><ServerNetwork server={server} disabled={disabled} ask={ask} />
+    {tab === 'network' && <><ServerNetwork server={server} disabled={disabled} ask={ask} reveal={setSecretOperation} />
       <Card><h2>تعویض IPv4 اصلی</h2>{server.primaryIpv4 ? <>
         {server.provider === 'hetzner' && <><PrimaryIpv4Summary quote={server.primaryIpv4} unavailableReason={addressUnavailable} /><PrimaryIpv4Warning /></>}
         {server.primaryIpv4.reason && <p>{server.primaryIpv4.reason}</p>}
@@ -167,6 +172,7 @@ export function ServerDetailsPage() {
     </Card>
     {request && <DestructiveConfirmation key={key.current} server={server} action={request.action} busy={busy} error={error} onClose={() => setRequest(null)} onConfirm={() => { void confirm() }}>
       {request.action === 'replace_primary_ipv4' && <><PrimaryIpv4Summary quote={request.quote} unavailableReason={addressUnavailable} /><PrimaryIpv4Warning /></>}
+      {request.action === 'resize' && request.resizePreview && <ResizeEffects preview={request.resizePreview} />}
     </DestructiveConfirmation>}
     {secretOperation && <OneTimePassword server={server} operationId={secretOperation} onClose={() => { setSecretOperation(null); refresh() }} />}
   </div>
@@ -201,6 +207,10 @@ function MetricChart({ title, series }: { title: string; series: ServerMetrics['
   })}</svg><p className="server-muted">کمینه: {new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 }).format(y0)} · بیشینه: {new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 }).format(Math.max(...ys))}</p><small dir="ltr">{Object.keys(series).join(' · ')}</small></Card>
 }
 function ServerMonitoring({ server }: { server: ServerDetail }) {
+  if (server.lifecycle === 'terminated' || server.providerState === 'terminated') return <Card><h2>مانیتورینگ سرور</h2><p>این سرور حذف شده است؛ مانیتورینگ زنده در دسترس نیست.</p></Card>
+  return <LiveServerMonitoring key={server.id} server={server} />
+}
+function LiveServerMonitoring({ server }: { server: ServerDetail }) {
   const [window, setWindow] = useState('1h'), metrics = useApiQuery(() => getServerMetrics(server.id, window), [server.id, window])
   const group = (prefix: string, unit?: string) => Object.fromEntries(Object.entries(metrics.data?.series ?? {}).filter(([key]) => key.startsWith(prefix) && (!unit || key.includes(`.${unit === 'bytes' ? 'bandwidth' : unit}.`))))
   return <><div className="server-window-filter"><Select label="بازهٔ زمانی" value={window} onChange={event => setWindow(event.target.value)}><option value="1h">یک ساعت</option><option value="6h">شش ساعت</option><option value="24h">۲۴ ساعت</option></Select><Button variant="secondary" disabled={metrics.loading} onClick={metrics.refetch}>دریافت مجدد</Button></div>
@@ -209,7 +219,7 @@ function ServerMonitoring({ server }: { server: ServerDetail }) {
 }
 function ServerResize({ server, disabled, recovery, checking, recheck, openOperations, ask }: {
   server: ServerDetail; disabled: boolean; recovery: ReactNode; checking: boolean; recheck: () => void; openOperations: () => void
-  ask: (action: ManagementAction, input: Record<string, unknown>) => void
+  ask: (action: ManagementAction, input: Record<string, unknown>, preview?: ResizePreview) => void
 }) {
   const verifiedOff = !recovery && !server.resizeBlock && server.providerAvailable && server.capabilities.resize && server.providerState === 'suspended'
   if (!verifiedOff) {
@@ -229,7 +239,7 @@ function ServerResize({ server, disabled, recovery, checking, recheck, openOpera
   }
   return <ResizeForm key={`${server.id}:${server.facts?.serverType}:${server.facts?.diskGb}`} server={server} disabled={disabled} ask={ask} />
 }
-function ResizeForm({ server, disabled, ask }: { server: ServerDetail; disabled: boolean; ask: (action: ManagementAction, input: Record<string, unknown>) => void }) {
+function ResizeForm({ server, disabled, ask }: { server: ServerDetail; disabled: boolean; ask: (action: ManagementAction, input: Record<string, unknown>, preview?: ResizePreview) => void }) {
   const options = useApiQuery(() => getResizeOptions(server.id), [server.id])
   const [selected, setSelected] = useState(''), [upgradeDisk, setUpgradeDisk] = useState(false)
   const [preview, setPreview] = useState<ResizePreview | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('')
@@ -248,21 +258,24 @@ function ResizeForm({ server, disabled, ask }: { server: ServerDetail; disabled:
         : <div className="server-resize-grid">{eligible.map(option => <button key={option.offerId} className={`server-resize-option ${selected === option.offerId ? 'is-selected' : ''}`} disabled={disabled || busy} aria-pressed={selected === option.offerId} onClick={() => { setSelected(option.offerId); setPreview(null) }}><strong>{option.type}</strong><span>{option.vcpu} vCPU · {option.memoryMb / 1024} GB RAM</span><span>{option.diskGb} GB · {option.architecture}</span></button>)}</div>}
     <Card><h2>پیش‌نمایش صورتحساب</h2><label className="server-checkbox"><input type="checkbox" checked={upgradeDisk} disabled={disabled || busy} onChange={event => { setUpgradeDisk(event.target.checked); setPreview(null) }} />افزایش دائمی ظرفیت دیسک را می‌خواهم؛ بازگشت به دیسک کوچک‌تر ممکن نیست.</label>
       <Button disabled={disabled || !selectionValid || busy} onClick={estimate}>بررسی قیمت و محدودیت‌ها</Button>
-      {preview && <div className="server-price-preview"><p>قیمت قبل: {amount(preview.currentPriceRial)} · قیمت جدید: {amount(preview.priceRial)} / {periodLabels[preview.period]}</p><p>برداشت فوری: {amount(preview.immediateChargeRial)} · اعمال در تمدیدهای آتی پس از تأیید تغییر</p><p>اعتبار قیمت: {formatFaDateTime(preview.expiresAt)}</p><Button disabled={disabled || !selectionValid || Date.now() >= new Date(preview.expiresAt).getTime()} onClick={() => ask('resize', { quoteId: preview.quoteId, upgradeDisk: preview.upgradeDisk })}>تأیید تغییر پلن</Button></div>}
+      {preview && <div className="server-price-preview"><p>قیمت قبل: {amount(preview.currentPriceRial)} · قیمت جدید: {amount(preview.priceRial)} / {periodLabels[preview.period]}</p><p>برداشت فوری: {amount(preview.immediateChargeRial)} · اعمال در تمدیدهای آتی پس از تأیید تغییر</p><p>اعتبار قیمت: {formatFaDateTime(preview.expiresAt)}</p>
+        {resizeEffectsVerified(preview) ? <ResizeEffects preview={preview} /> : <p role="alert">جزئیات ظرفیت دیسک قابل تأیید نیست؛ پیش‌نمایش را دوباره دریافت کنید.</p>}
+        <Button disabled={disabled || !selectionValid || !resizeEffectsVerified(preview) || Date.now() >= new Date(preview.expiresAt).getTime()} onClick={() => ask('resize', { quoteId: preview.quoteId, upgradeDisk: preview.upgradeDisk }, preview)}>تأیید تغییر پلن</Button></div>}
       {error && <p role="alert">{error}</p>}
     </Card></>
 }
 function ServerStorage({ server }: { server: ServerDetail }) {
   return <><p className="server-notice">{server.capabilities.unavailableReason}</p><div className="server-detail-columns"><Card><h2>اسنپ‌شات‌ها و بکاپ‌ها</h2><p>ساخت و بازیابی Snapshot با تعرفه و مالکیت مستقل هنوز در این فروشگاه فعال نیست.</p><p>بکاپ ارائه‌دهنده: {server.facts?.backupWindow || 'وضعیت فعال اعلام نشده است'}</p></Card><Card><h2>Volumeهای متصل</h2>{server.facts ? server.facts.volumes.length ? server.facts.volumes.map(id => <p key={id}>Volume ID: <bdi>{id}</bdi></p>) : <p>Volume متصلی گزارش نشده است.</p> : <p>{missing}</p>}<p>منابع مستقل ممکن است پس از حذف VM باقی بمانند.</p></Card></div></>
 }
-function ServerNetwork({ server, disabled, ask }: { server: ServerDetail; disabled: boolean; ask: (action: ManagementAction, input?: Record<string, unknown>) => void }) {
+function ServerNetwork({ server, disabled, ask, reveal }: { server: ServerDetail; disabled: boolean; ask: (action: ManagementAction, input?: Record<string, unknown>) => void; reveal: (id: string) => void }) {
   const f = server.facts
   const addressUnavailable = serverAddressUnavailable(server)
   return <div className="server-detail-columns"><Card><h2>شبکه و آدرس‌ها</h2><dl className="server-ip-list"><div><dt>IPv4</dt><dd><CopyableIp value={f?.ipv4 ?? server.ip} unavailableReason={addressUnavailable} /></dd></div><div><dt>IPv6</dt><dd><CopyableIp value={f?.ipv6 ?? server.ipv6} unavailableReason={addressUnavailable} /></dd></div>
     {!addressUnavailable && f?.privateNetworks.map(network => <div key={network.id}><dt>شبکهٔ خصوصی {network.id}</dt><dd><CopyableIp value={network.ip} /></dd></div>)}</dl>
     <dl className="server-facts"><div><dt>شناسه‌های Floating IP</dt><dd>{f ? f.floatingIps.join('، ') || 'گزارش نشده' : missing}</dd></div></dl><p className="server-muted">تغییر شبکه و منابع مشترک پروژه بدون اثبات مالکیت اختصاصی مجاز نیست.</p></Card>
     <Card><h2>Firewall، Rescue و حفاظت</h2>{f?.firewalls.map(firewall => <p key={firewall.id}>Firewall ID: {firewall.id} · {firewall.status}</p>)}<p>Rescue: {f?.rescueEnabled == null ? missing : f.rescueEnabled ? 'فعال' : 'غیرفعال'}</p>
-      <div className="server-inline-actions"><Button variant="secondary" disabled={disabled || f?.rescueEnabled == null} onClick={() => ask(f?.rescueEnabled ? 'disable_rescue' : 'enable_rescue')}>{f?.rescueEnabled ? 'غیرفعال‌سازی Rescue' : 'فعال‌سازی Rescue'}</Button><Button variant="secondary" disabled={disabled || !f?.isoId} onClick={() => ask('detach_iso')}>قطع ISO متصل</Button></div><p>انتخاب و اتصال ISO جدید در این پروژه فعال نیست.</p>
+      <div className="server-inline-actions"><Button variant="secondary" disabled={disabled || f?.rescueEnabled == null} onClick={() => ask(f?.rescueEnabled ? 'disable_rescue' : 'enable_rescue')}>{f?.rescueEnabled ? 'غیرفعال‌سازی Rescue' : 'فعال‌سازی Rescue'}</Button><Button variant="secondary" disabled={disabled || !f?.isoId} onClick={() => ask('detach_iso')}>قطع ISO متصل</Button></div>
+      <ServerCredentialList server={server} reveal={reveal} rescueOnly /><p>انتخاب و اتصال ISO جدید در این پروژه فعال نیست.</p>
       {f?.protection && <><p>حفاظت حذف: {f.protection.delete ? 'فعال' : 'غیرفعال'} · حفاظت Rebuild: {f.protection.rebuild ? 'فعال' : 'غیرفعال'}</p><div className="server-inline-actions"><Button variant="secondary" disabled={disabled} onClick={() => ask('change_protection', { delete: !f.protection!.delete, rebuild: f.protection!.rebuild })}>تغییر حفاظت حذف</Button><Button variant="secondary" disabled={disabled} onClick={() => ask('change_protection', { delete: f.protection!.delete, rebuild: !f.protection!.rebuild })}>تغییر حفاظت Rebuild</Button></div></>}
     </Card></div>
 }

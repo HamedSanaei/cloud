@@ -4,6 +4,7 @@ import { Card } from '../ui/Card'
 import { Select } from '../ui/FormControls'
 import { useApiQuery } from '../../hooks/useApiQuery'
 import { actionLabels, getServerImages, type ManagementAction, type ServerAccessBlock, type ServerDetail } from '../../lib/serverManagement'
+import { formatFaDateTime } from '../../lib/format'
 
 type RecoveryTab = 'operations' | 'network'
 type Block = ServerAccessBlock | 'checking' | 'submitting' | 'detail_failed'
@@ -62,10 +63,26 @@ export function ServerAccess({ server, busy, loading, stale, ask, reveal, rechec
       <Button disabled={!!passwordBlock} aria-describedby={passwordBlock ? passwordReason : undefined} onClick={() => ask('reset_password')}>بازنشانی رمز عبور</Button>
       {passwordBlock ? notice(passwordBlock, passwordReason)
         : <p className="server-notice">رمز جدید پس از تأیید عملیات، تنها در نشست درخواست‌کننده و فقط یک‌بار قابل دریافت است.</p>}
-      {server.credentials.filter(secret => !secret.claimedAt && secret.operationId && server.operations.some(op => op.id === secret.operationId && op.status === 'confirmed')).map(secret =>
-        <Button key={secret.operationId} variant="secondary" onClick={() => reveal(secret.operationId!)}>دریافت امن رمز جدید</Button>)}
+      <ServerCredentialList server={server} reveal={reveal} />
     </Card>
   </div>
+}
+
+export function ServerCredentialList({ server, reveal, rescueOnly = false }: { server: ServerDetail; reveal: (id: string) => void; rescueOnly?: boolean }) {
+  const operations = server.credentials.filter(secret => !secret.claimedAt && !secret.acknowledgedAt && secret.operationId)
+    .flatMap(secret => {
+      const operation = server.operations.find(op => op.id === secret.operationId && op.status === 'confirmed')
+      return operation && (!rescueOnly || operation.action === 'enable_rescue') ? [operation] : []
+    })
+  if (!operations.length) return null
+  return <div className="server-credential-list"><h3>{rescueOnly ? 'رمز یک‌بارمصرف Rescue' : 'رمزهای یک‌بارمصرف عملیات'}</h3>{operations.map(operation => {
+    const label = operation.action === 'enable_rescue' ? 'دریافت امن رمز Rescue' : `دریافت امن رمز — ${actionLabels[operation.action]}`
+    const time = formatFaDateTime(operation.createdAt)
+    return <article key={operation.id}><strong>{actionLabels[operation.action]}</strong>
+      <p>زمان درخواست: <time dateTime={operation.createdAt}>{time}</time></p><small>شناسهٔ عملیات: <bdi dir="ltr">{operation.id}</bdi></small>
+      <Button variant="secondary" aria-label={`${label} — ${time} — ${operation.id}`} onClick={() => reveal(operation.id)}>{label}</Button>
+    </article>
+  })}</div>
 }
 
 function AccessNotice({ id, block, pending, loading, recheck, openTab }: {

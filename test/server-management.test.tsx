@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { toast } from 'react-toastify'
@@ -19,6 +19,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     const path = url.replace('/api', '')
     requests.push({ path, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined, key: new Headers(init?.headers).get('idempotency-key') ?? undefined })
+    if (path.endsWith('/credentials/claim')) return Response.json({ data: { password: 'synthetic-operation-password', expiresAt: new Date(Date.now() + 60_000).toISOString() } })
     return Response.json(path.includes('/management') && (!init?.method || init.method === 'GET')
       ? { data: detail } : serverUxFixture(path.split('?')[0]))
   }))
@@ -28,6 +29,79 @@ function open(tab = 'overview') {
   return render(<MemoryRouter initialEntries={[`/servers/${detailServer.id}?tab=${tab}`]}><ToastProvider><Routes><Route path="/servers/:id" element={<ServerDetailsPage />} /></Routes></ToastProvider></MemoryRouter>)
 }
 describe('customer server management UI', () => {
+  it.each(['lifecycle', 'provider'])('skips live monitoring and retries for %s-confirmed deletion', async source => {
+    if (source === 'lifecycle') detail.lifecycle = 'terminated'
+    else detail.providerState = 'terminated'
+    open('monitoring')
+    expect(await screen.findByText('این سرور حذف شده است؛ مانیتورینگ زنده در دسترس نیست.')).toBeTruthy()
+    expect(screen.queryByRole('combobox', { name: 'بازهٔ زمانی' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'دریافت مجدد' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'تلاش مجدد' })).toBeNull()
+    expect(requests.some(request => request.path.includes('/metrics'))).toBe(false)
+  })
+
+  it.each([false, true])('shows server-validated disk outcomes and startup warning in quote and confirmation (expand=%s)', async upgradeDisk => {
+    detail.providerState = 'suspended'
+    detail.facts!.diskGb = 20
+    const fallback = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      if (String(url).endsWith('/resize-preview')) return Response.json({ data: {
+        quoteId: 'quote-disk', serverType: 'CX33', upgradeDisk, currentDiskGb: 20, resultingDiskGb: upgradeDisk ? 80 : 20, powerAfterResize: 'may_start',
+        currentPriceRial: 20000, priceRial: 30000, immediateChargeRial: 0, period: 'HOURLY', expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      } })
+      return fallback(url, init)
+    })
+    open('resize')
+    fireEvent.click(await screen.findByRole('button', { name: /CX33/ }))
+    if (upgradeDisk) fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: 'بررسی قیمت و محدودیت‌ها' }))
+    await screen.findByText('ظرفیت دیسک پس از تغییر')
+    expect(screen.getByText('ظرفیت فعلی دیسک').nextElementSibling?.textContent).toBe('20 GB')
+    expect(screen.getByText('ظرفیت دیسک پس از تغییر').nextElementSibling?.textContent).toBe(upgradeDisk ? '80 GB' : '20 GB')
+    expect(screen.getByText(/سرور ممکن است پس از تغییر پلن روشن شود/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'تأیید تغییر پلن' }))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.getByText('ظرفیت فعلی دیسک').nextElementSibling?.textContent).toBe('20 GB')
+    expect(dialog.getByText('ظرفیت دیسک پس از تغییر').nextElementSibling?.textContent).toBe(upgradeDisk ? '80 GB' : '20 GB')
+    expect(dialog.getByText(upgradeDisk ? /افزایش ظرفیت دیسک دائمی است/ : /دیسک فعلی حفظ می‌شود/)).toBeTruthy()
+    expect(dialog.getByText(/سرور ممکن است پس از تغییر پلن روشن شود/)).toBeTruthy()
+    expect(requests.some(request => request.method === 'POST')).toBe(false)
+  })
+
+  it('labels credentials by operation and time, links Rescue to its panel, and never claims them automatically', async () => {
+    detail.operations = [
+      { id: 'rebuild-83', action: 'rebuild', status: 'confirmed', actionId: 83, createdAt: '2026-11-16T10:00:00Z', updatedAt: '2026-11-16T10:01:00Z', completedAt: '2026-11-16T10:01:00Z', message: null },
+      { id: 'rescue-83', action: 'enable_rescue', status: 'confirmed', actionId: 84, createdAt: '2026-11-16T11:00:00Z', updatedAt: '2026-11-16T11:01:00Z', completedAt: '2026-11-16T11:01:00Z', message: null },
+    ]
+    detail.credentials = detail.operations.map(op => ({ operationId: op.id, claimedAt: null, acknowledgedAt: null }))
+    open('access')
+    const rebuild = await screen.findByRole('button', { name: /دریافت امن رمز — نصب مجدد سیستم‌عامل.*rebuild-83/ })
+    const rescue = screen.getByRole('button', { name: /دریافت امن رمز Rescue.*rescue-83/ })
+    expect(rebuild.getAttribute('aria-label')).toContain(formatFaDateTime(detail.operations[0].createdAt))
+    expect(rescue.getAttribute('aria-label')).toContain(formatFaDateTime(detail.operations[1].createdAt))
+    expect(requests.some(request => request.path.includes('/credentials/claim'))).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'کنسول و تنظیمات' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'شبکه، حفاظت و Rescue' }))
+    expect(await screen.findByRole('button', { name: /دریافت امن رمز Rescue.*rescue-83/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /دریافت امن رمز — نصب مجدد/ })).toBeNull()
+    expect(requests.every(request => request.method === 'GET')).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: /دریافت امن رمز Rescue.*rescue-83/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.getByText(/فعال‌سازی Rescue.*rescue-83/)).toBeTruthy()
+    expect(requests.some(request => request.path.includes('/credentials/claim'))).toBe(false)
+    fireEvent.click(dialog.getByRole('button', { name: 'دریافت امن رمز', exact: true }))
+    await waitFor(() => expect(requests.filter(request => request.path.endsWith('/credentials/claim'))).toHaveLength(1))
+    expect(requests.find(request => request.path.endsWith('/credentials/claim'))?.body).toEqual({ operationId: 'rescue-83' })
+  })
+
+  it('shows observed startup in a confirmed resize result without attributing its initiator', async () => {
+    detail.operations = [{ id: 'resize-81', action: 'resize', status: 'confirmed', actionId: 81, createdAt: '2026-11-16T10:00:00Z', updatedAt: '2026-11-16T10:01:00Z', completedAt: '2026-11-16T10:01:00Z', message: null,
+      resize: { powerBefore: 'suspended', powerAfter: 'active', startedAfterResize: true } }]
+    open('operations')
+    expect(await screen.findByText(/روشن‌شدن سرور توسط ارائه‌دهنده مشاهده و ثبت شد/)).toBeTruthy()
+    expect(requests.every(request => request.method === 'GET')).toBe(true)
+  })
+
   it.each([
     ['confirmed lifecycle deletion', { lifecycle: 'terminated' }],
     ['provider-confirmed deletion with a cached ready lifecycle', { providerState: 'terminated' }],
@@ -214,6 +288,7 @@ describe('customer server management UI', () => {
         return Response.json({ data: { operation: confirmed, checkFailed: false } })
       }
       if (path.endsWith('/resize-preview')) return Response.json({ data: { quoteId: 'fixture', upgradeDisk: false,
+        currentDiskGb: 40, resultingDiskGb: 40, powerAfterResize: 'may_start', serverType: 'CX33',
         currentPriceRial: 20000, priceRial: 30000, immediateChargeRial: 0, period: 'HOURLY', expiresAt: new Date(Date.now() + 60_000).toISOString() } })
       return fallback(url, init)
     })

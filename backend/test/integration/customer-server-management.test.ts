@@ -16,6 +16,8 @@ import { handleProvision, handleReconcile, handleRenewalSweep, handleServerActio
 import { idempotencyKeys, providerOperations, servers, serverSecrets, settings, subscriptions, users, wallets } from '../../src/db/schema.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 import type { ManagementAction } from '../../src/modules/providers/customer.interface.js'
+import { managementDto } from '../../src/modules/servers/management.js'
+import { consoleSessionExpiredCode } from '../../src/contracts/server-console.js'
 
 const { openSocket } = vi.hoisted(() => ({ openSocket: vi.fn() }))
 vi.mock('../../src/modules/servers/console-transport.js', () => ({ connectConsole: openSocket }))
@@ -397,10 +399,14 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     const url = `/api/servers/${p.server.id}/resize-preview`, payload = { offerId: offer!.id, upgradeDisk: true }
     expect((await app.inject({ method: 'POST', url, headers: p.headers, payload })).statusCode).toBe(422)
     machines.get(p.providerId)!.status = 'off'; await handleServerSync(ctx, { serverId: p.server.id })
+    const keep = await app.inject({ method: 'POST', url, headers: p.headers, payload: { ...payload, upgradeDisk: false } })
+    expect(keep.statusCode, keep.body).toBe(200)
+    expect(keep.json().data).toMatchObject({ currentDiskGb: 40, resultingDiskGb: 40, upgradeDisk: false, powerAfterResize: 'may_start' })
     const response = await app.inject({ method: 'POST', url, headers: p.headers, payload })
     expect(response.statusCode, response.body).toBe(200)
     const preview = response.json().data, sub = (await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.serverId, p.server.id) }))!
-    expect(preview).toMatchObject({ currentPriceRial: sub.priceRial, immediateChargeRial: 0, serverType: largerType.name })
+    expect(preview).toMatchObject({ currentPriceRial: sub.priceRial, immediateChargeRial: 0, serverType: largerType.name,
+      currentDiskGb: 40, resultingDiskGb: 80, upgradeDisk: true, powerAfterResize: 'may_start' })
     expect(preview.priceRial).toBeGreaterThan(sub.priceRial)
     const resizeKey = randomUUID()
     const submit = (extra = {}) => app.inject({ method: 'POST', remoteAddress: p.remoteAddress, url: `/api/servers/${p.server.id}/management/actions`, headers: { ...p.headers, 'idempotency-key': resizeKey }, payload: { action: 'resize', quoteId: preview.quoteId, upgradeDisk: true, hostname: 'fixture-server', confirm: true, ...extra } })
@@ -416,8 +422,10 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     await handleServerAction(ctx, { operationId: id, serverId: p.server.id, action: 'resize' })
     const op = (await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.id, id) }))!, actionId = (op.responseMetadata as { actionId: number }).actionId
     expect((await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.id, sub.id) }))!.priceRial).toBe(sub.priceRial)
-    machines.get(p.providerId)!.server_type = largerType; machines.get(p.providerId)!.primary_disk_size = 80
+    machines.get(p.providerId)!.server_type = largerType; machines.get(p.providerId)!.primary_disk_size = 80; machines.get(p.providerId)!.status = 'running'
     actions.get(actionId)!.status = 'success'; await handleServerSync(ctx, { serverId: p.server.id })
+    const confirmed = (await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.id, id) }))!
+    expect(managementDto(confirmed)).toMatchObject({ resize: { powerBefore: 'suspended', powerAfter: 'active', startedAfterResize: true } })
     expect((await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.id, sub.id) }))!.priceRial).toBe(preview.priceRial)
     expect((await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, p.wallet.id) }))!.balanceRial).toBe(balance)
     expect((await ctx.db.query.invoices.findFirst({ where: t => eq(t.orderId, p.orderId) }))!.totalRial).toBe(sub.priceRial)
@@ -508,6 +516,37 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     await handleServerSync(ctx, { serverId: p.server.id })
     expect((await claim()).json().data.password).toBe('Fixture-sensitive-root-password!')
   })
+  it('does not request provider metrics for a confirmed-deleted server', async () => {
+    const p = await buy(); await activate(p)
+    await ctx.db.update(servers).set({ status: 'terminated', terminationState: 'terminated', terminatedAt: new Date() }).where(eq(servers.id, p.server.id))
+    const before = calls.length
+    const response = await app.inject({ url: `/api/servers/${p.server.id}/metrics?window=1h`, headers: p.headers })
+    expect(response.statusCode, response.body).toBe(409)
+    expect(response.body).toContain('مانیتورینگ زنده برای سرور حذف‌شده در دسترس نیست')
+    expect(calls).toHaveLength(before)
+  })
+
+  it('closes the console with an explicit expiry code at its deadline', async () => {
+    const p = await buy(); await activate(p)
+    openSocket.mockImplementation(() => {
+      const events = new EventEmitter()
+      const socket = Object.assign(events, { readyState: 1, bufferedAmount: 0, send() {}, close() { socket.readyState = 3; events.emit('close', 1000) }, terminate() { socket.close() } })
+      setImmediate(() => socket.emit('open'))
+      return { socket, isCurrent: async () => true }
+    })
+    const headers = { cookie: `cloud_session=${p.session.token}`, host: 'app.test', origin: 'https://app.test' }
+    const grant = await app.inject({ method: 'POST', url: `/api/servers/${p.server.id}/console`, remoteAddress: p.remoteAddress, headers, payload: {} })
+    expect(grant.statusCode, grant.body).toBe(200)
+    const realSetTimeout = globalThis.setTimeout
+    const timeout = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) => realSetTimeout(callback, delay === 300000 ? 250 : delay, ...args))
+    try {
+      const socket = await app.injectWS(`/api/servers/${p.server.id}/console/${grant.json().data.grantId}`, {
+        headers, socket: Object.defineProperty(new Socket(), 'remoteAddress', { value: p.remoteAddress }),
+      })
+      expect((await once(socket, 'close'))[0]).toBe(consoleSessionExpiredCode)
+    } finally { timeout.mockRestore() }
+  })
+
   it('authorizes a one-use console by account, session and Origin and relays binary frames without exposing the provider URL', async () => {
     const p = await buy(); await activate(p)
     const issue = () => app.inject({ method: 'POST', url: `/api/servers/${p.server.id}/console`, remoteAddress: p.remoteAddress,
