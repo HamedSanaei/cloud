@@ -5,12 +5,87 @@
 .server-lifecycle--cancelled, .server-lifecycle--terminated { background: #f1f5f9; color: #64748b; }
 .server-lifecycle-spinner { animation: server-spin 1.2s linear infinite; flex-shrink: 0; }
 @keyframes server-spin { to { transform: rotate(360deg); } }
-.server-table-row { height: 80px; }
-.server-table-row td { padding: 15px 16px; }
-.server-table-row strong { font-size: 15px; font-weight: 700; }
-.server-table-row small { display: block; color: var(--text-muted, #64748b); font-size: 13px; margin-top: 6px; }
-.server-table-row--pending { background: #f4f8ff; }
-.server-tracking-hint { color: #2869e8; font-size: 13px; }
+/* Exact Penpot component mapping and review matrix: docs/SERVER_LIST_DESIGN.md. */
+.server-list-page {
+  --server-action-ink: var(--brand-700);
+  --server-action-surface: var(--brand-100);
+  --server-success-ink: #166534;
+  --server-warning-ink: #715200;
+  --server-neutral-ink: #475569;
+  --server-focus: var(--brand-700);
+}
+:root[data-theme='dark'] .server-list-page {
+  --server-action-ink: var(--brand-200);
+  --server-action-surface: var(--brand-100);
+  --server-success-ink: #86efac;
+  --server-warning-ink: #fde68a;
+  --server-neutral-ink: var(--muted);
+  --server-focus: var(--brand-200);
+}
+.server-list-page .data-table { table-layout: fixed; min-width: 1000px; }
+.server-list-page .data-table th:nth-child(1) { width: 23%; }
+.server-list-page .data-table th:nth-child(2) { width: 18%; }
+.server-list-page .data-table th:nth-child(3) { width: 20%; }
+.server-list-page .data-table th:nth-child(4) { width: 22%; }
+.server-list-page .data-table th:nth-child(5) { width: 17%; }
+.server-table-row { height: 89px; background: var(--surface); color: var(--ink); }
+.server-table-row--pending { background: var(--surface-muted); }
+.server-table-row--failure { background: var(--surface); }
+:root[data-theme='dark'] .server-table-row--failure { background: var(--surface-muted); }
+.server-table-row td { padding: 10px 14px; white-space: normal; overflow-wrap: anywhere; vertical-align: middle; }
+.server-table-row strong { display: block; font-size: 14px; font-weight: 700; }
+.server-table-row small { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+.server-row-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-row-resources { font-size: 12px; color: var(--muted); }
+.server-table-row .server-lifecycle { color: var(--server-action-ink); background: var(--server-action-surface); font-size: 12px; }
+.server-table-row .server-lifecycle--ready { color: var(--server-success-ink); background: var(--success-soft); }
+.server-table-row .server-lifecycle--failed, .server-table-row .server-lifecycle--delete_failed { color: var(--danger-ink); background: var(--danger-soft); }
+.server-table-row .server-lifecycle--outcome_unknown, .server-table-row .server-lifecycle--requires_review { color: var(--server-warning-ink); background: var(--warning-soft); }
+.server-table-row .server-lifecycle--terminated, .server-table-row .server-lifecycle--cancelled { color: var(--server-neutral-ink); background: var(--surface-muted); }
+.server-list-control {
+  display: inline-flex; justify-content: center; align-items: center; gap: 6px; min-height: 44px; padding: 9px 12px;
+  border: 1px solid var(--muted); border-radius: 11px; font-family: inherit;
+  font-size: 13px; font-weight: 600; line-height: 1.6; text-decoration: none; cursor: pointer;
+  background: var(--server-action-surface); color: var(--server-action-ink); text-align: center;
+}
+.server-list-control:hover { background: var(--surface); color: var(--server-action-ink); border-color: var(--server-action-ink); }
+.server-list-control:disabled { cursor: not-allowed; color: var(--muted); background: var(--surface-muted); opacity: 1; }
+.server-list-control--primary { background: var(--brand-500); color: #fff; border-color: var(--brand-500); }
+.server-list-control--primary:hover { background: var(--brand-600); color: #fff; }
+.server-list-page :is(.server-list-control, .copyable-ip__button, input):focus-visible { outline: 2px solid var(--server-focus); outline-offset: 3px; }
+.server-row-actions > .server-list-control { width: 100%; }
+.server-row-action-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-row-actions > small { line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-row-actions [aria-expanded='true'] svg { transform: rotate(180deg); }
+.server-table-row .copyable-ip__button { min-height: 28px; padding: 2px 6px; border-color: var(--muted); }
+.server-table-row .copyable-ip__button bdi { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-reference { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
+.server-reference > bdi { font: 600 12px/1.5 ui-monospace, Consolas, monospace; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-reference > [role='status'] { font-size: 12px; color: var(--ink); }
+.server-table-row .server-reference { flex-wrap: nowrap; gap: 5px; margin-top: 3px; color: var(--muted); }
+.server-table-row .server-reference > .server-list-control { min-height: 26px; padding: 3px; border-radius: 5px; flex: none; }
+.server-table-row .server-reference > .server-list-control span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.server-reference__manual { display: block; width: 100%; font-size: 12px; color: var(--ink); }
+.server-reference__manual input { display: block; width: 100%; padding: 6px; background: var(--surface); color: var(--ink); border: 1px solid var(--muted); border-radius: 6px; }
+.server-table-row .server-reference:has(.server-reference__manual) { flex-wrap: wrap; }
+.server-failure-details-row > td { padding: 0 20px 20px; background: var(--surface); white-space: normal; }
+.server-failure-details-row[hidden] { display: none; }
+.server-failure-panel { padding: 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-muted); color: var(--ink); font-size: 14px; line-height: 1.9; overflow-wrap: anywhere; }
+.server-failure-panel__heading { padding: 9px 14px; border-radius: 8px; background: var(--danger-soft); color: var(--danger-ink); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px; }
+.server-failure-panel__heading h3 { margin: 0; font-size: 17px; }
+.server-failure-panel__heading span { font-size: 12px; }
+.server-failure-panel__heading--pending { background: var(--server-action-surface); color: var(--server-action-ink); }
+.server-failure-panel__reason { display: flex; gap: 16px; margin-block: 14px; }
+.server-failure-panel__reason strong { flex: none; }
+.server-failure-panel__reason p { margin: 0; }
+.server-failure-panel__billing { margin: 12px 0; padding: 14px; background: var(--warning-soft); color: var(--server-warning-ink); border-radius: 8px; }
+.server-failure-panel__reference { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; }
+.server-failure-panel__reference .server-reference { flex: 1; }
+.server-failure-panel__reference bdi { white-space: normal; overflow-wrap: anywhere; }
+.server-failure-panel__reference .server-list-control { min-height: 35px; padding-block: 5px; }
+.server-failure-panel__guidance { color: var(--muted); margin: 12px 0; }
+.server-failure-panel__actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 14px; }
+.server-failure-panel__actions .server-list-control { min-width: 200px; }
 .server-notice { padding: 16px; border-radius: 10px; background: #fff7db; color: #715200; font-size: 14px; line-height: 1.8; }
 .server-access-notice { margin-block-start: 12px; background: var(--surface-muted); color: var(--ink); }
 .server-access-notice p { margin: 0; }
@@ -110,13 +185,25 @@
   .server-list-page .data-table { display: block; min-width: 0; width: 100%; }
   .server-list-page .data-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   .server-list-page .data-table tbody { display: grid; gap: 16px; }
-  .server-list-page .server-table-row { display: grid; grid-template-columns: 1fr 1fr; height: auto; border: 1px solid #d9e2ec; border-radius: 14px; padding: 16px; gap: 14px; }
+  .server-list-page .server-table-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); height: auto; border: 1px solid var(--border); border-radius: 14px; padding: 16px; gap: 14px; }
   .server-list-page .server-table-row td { display: block; padding: 0; border: 0; white-space: normal; overflow-wrap: anywhere; font-size: 14px; }
   .server-list-page .server-table-row td:first-child, .server-list-page .server-table-row td:last-child { grid-column: 1 / -1; }
-  .server-list-page .server-table-row td[data-label]::before { content: attr(data-label); display: block; color: #64748b; font-size: 12px; margin-bottom: 6px; }
+  .server-list-page .server-table-row td[data-label]::before { content: attr(data-label); display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
   .server-list-page .server-table-row strong { font-size: 17px; }
+  .server-list-page .server-row-actions > small { white-space: normal; }
+  .server-list-page .server-table-row--expanded { border-end-start-radius: 0; border-end-end-radius: 0; border-bottom: 0; }
+  .server-list-page .server-table-row .copyable-ip__button, .server-list-page .server-reference > .server-list-control { min-height: 44px; min-width: 44px; }
+  .server-list-page .server-table-row .copyable-ip__button bdi { white-space: normal; overflow-wrap: anywhere; }
+  .server-list-page .server-failure-details-row { display: block; margin-top: -16px; border: 1px solid var(--border); border-top: 0; border-radius: 0 0 14px 14px; background: var(--surface); }
+  .server-list-page .server-failure-details-row[hidden] { display: none; }
+  .server-list-page .server-failure-details-row > td { display: block; padding: 0 12px 12px; border: 0; }
+  .server-failure-panel { padding: 12px; font-size: 13px; }
+  .server-failure-panel__heading { padding: 10px; }
+  .server-failure-panel__heading h3 { font-size: 15px; }
+  .server-failure-panel__reason { display: block; }
+  .server-failure-panel__reason strong { display: block; margin-bottom: 4px; }
+  .server-failure-panel__reference .server-reference { flex-basis: 100%; }
+  .server-failure-panel__actions { gap: 8px; }
+  .server-failure-panel__actions .server-list-control { flex: 1; min-width: min(100%, 120px); font-size: 12px; }
 }
 @media (prefers-reduced-motion: reduce) { .server-lifecycle-spinner, .Toastify__toast { animation: none !important; transition: none !important; } }
-.server-provisioning-failure { min-width: 220px; max-width: 420px; white-space: normal; line-height: 1.9; }
-.server-provisioning-failure p { margin: 4px 0; font-size: 14px; }
-.server-provisioning-failure .text-link { display: inline-block; margin-inline-end: 14px; margin-top: 8px; }

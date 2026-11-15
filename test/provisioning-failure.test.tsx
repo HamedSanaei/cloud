@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import { ServerTableRow } from '../src/components/servers/ServerPrimitives'
@@ -13,7 +13,9 @@ const open = (billing: 'refunded' | 'captured' | 'not_charged', unknown = false)
         message: unknown ? 'نتیجهٔ ساخت هنوز قطعی نیست و در حال بررسی است.' : 'ظرفیت دیتاسنتر انتخابی تأیید نشد.',
         nextStep: unknown ? 'سفارش تازه نسازید؛ نتیجه را از پشتیبانی بپرسید.' : 'وضعیت سفارش را با شمارهٔ پیگیری بررسی کنید.',
         canChooseAlternative: !unknown && billing !== 'captured' } } }
-  return render(<MemoryRouter><table><tbody><ServerTableRow server={server} /></tbody></table></MemoryRouter>)
+  const view = render(<MemoryRouter><table><tbody><ServerTableRow server={server} /></tbody></table></MemoryRouter>)
+  fireEvent.click(screen.getByRole('button', { name: 'علت خطا و پیگیری' }))
+  return view
 }
 describe('customer provisioning failure details', () => {
   it('shows the capacity reason, confirmed refund, reference and safe alternative action', () => {
