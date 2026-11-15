@@ -9,6 +9,7 @@ import { OneTimePassword } from '../src/components/servers/ServerManagementContr
 // @ts-expect-error Synthetic JS fixtures shared with the loopback design preview.
 import { detailServer, serverUxFixture } from './server-management-fixtures.mjs'
 import type { ServerDetail } from '../src/lib/serverManagement'
+import { formatFaDateTime } from '../src/lib/format'
 
 let requests: Array<{ path: string; method: string; body: unknown; key?: string }>
 let detail: ServerDetail
@@ -27,6 +28,39 @@ function open(tab = 'overview') {
   return render(<MemoryRouter initialEntries={[`/servers/${detailServer.id}?tab=${tab}`]}><ToastProvider><Routes><Route path="/servers/:id" element={<ServerDetailsPage />} /></Routes></ToastProvider></MemoryRouter>)
 }
 describe('customer server management UI', () => {
+  it.each([
+    ['confirmed lifecycle deletion', { lifecycle: 'terminated' }],
+    ['provider-confirmed deletion with a cached ready lifecycle', { providerState: 'terminated' }],
+    ['stopped future debits', { billing: { ...detailServer.billing, futureDebits: 'stopped' } }],
+    ['cancelled subscription', { billing: { ...detailServer.billing, state: 'cancelled' } }],
+    ['expired subscription', { billing: { ...detailServer.billing, state: 'expired' } }],
+  ])('does not present a historical renewal date for %s', async (_label, overrides) => {
+    Object.assign(detail, overrides)
+    const original = structuredClone(detail)
+    open()
+    const renewal = await screen.findByText('تمدید بعدی')
+    expect(renewal.nextElementSibling?.textContent).toBe('تمدید نمی‌شود')
+    if (['cancelled', 'expired'].includes(detail.billing.state!)) expect(screen.getByText('پایان‌یافته')).toBeTruthy()
+    expect(detail.billing.nextInvoiceAt).toBeTruthy() // Retain historical API data, without scheduling or changing anything.
+    expect(detail).toEqual(original)
+    expect(requests.every(request => request.method === 'GET')).toBe(true)
+  })
+
+  it.each(['active', 'grace', 'suspended'])('retains the scheduled date for a non-ended %s subscription', async state => {
+    detail.billing.state = state
+    open()
+    const renewal = await screen.findByText('تمدید بعدی')
+    expect(renewal.nextElementSibling?.textContent).toBe(formatFaDateTime(detail.billing.nextInvoiceAt!))
+    expect(screen.queryByText('تمدید نمی‌شود')).toBeNull()
+  })
+
+  it('does not invent a renewal date when an active subscription has none', async () => {
+    detail.billing.nextInvoiceAt = null
+    open()
+    const renewal = await screen.findByText('تمدید بعدی')
+    expect(renewal.nextElementSibling?.textContent).toBe('در دسترس نیست')
+  })
+
   it.each(['overview', 'network', 'operations'])('does not present historical addresses as active in a deleted server %s view', async tab => {
     detail.lifecycle = 'terminated'; detail.status = 'inactive'; detail.providerState = 'terminated'; detail.providerAvailable = false
     detail.ipv6 = '2001:db8::/64'
