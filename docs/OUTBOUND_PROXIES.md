@@ -37,7 +37,7 @@ proofs and audits. Deactivated/demoted accounts are rejected. Revisions prevent
 lost edits. API, worker and Leaseweb CLI read the same settings for new requests
 and retire old connection pools when a revision changes.
 
-Only fixed approved HTTPS authorities on port 443 are supported. Proxy addresses
+Only fixed approved HTTPS and Hetzner console WSS authorities on port 443 are supported. Proxy addresses
 and direct DNS answers must be public; local, private, metadata and special-use
 addresses are rejected and resolved addresses are pinned for socket creation.
 Redirects and arbitrary test URLs are rejected. SOCKS5 resolves the approved
@@ -46,10 +46,19 @@ Use a trusted proxy with public-destination egress rules: the app cannot inspect
 an IP chosen by the remote resolver. SOCKS5/HTTP proxy credentials are not
 transport-encrypted; HTTPS CONNECT protects that client-to-proxy leg.
 
-Default failure behavior blocks on proxy errors. The optional direct fallback is
-limited to GET/HEAD and the original deadline. Mutations never fall back or retry:
-Hetzner/Leaseweb unknown outcomes and reconciliation remain authoritative. Tests
-never order a server, charge a wallet, create a payment or send a message.
+An enabled Hetzner route applies to API, worker and inventory requests, including
+the console grant and the VNC WebSocket. The browser connects to the authenticated
+same-origin relay. Each new provider request and console connection reads the
+current policy. An open console uses its original route until the next session
+check, which closes it when the settings revision changes. The network panel
+shows the latest console result and last failure without including console
+tickets or proxy credentials.
+
+An enabled Hetzner route fails closed on any proxy error. Other integrations can
+optionally fall back on GET/HEAD within the original deadline. Mutations never
+fall back or retry. Hetzner/Leaseweb unknown outcomes and reconciliation remain
+authoritative. Tests never order a server, charge a wallet, create a payment or
+send a message.
 
 ## Validation and rollout
 

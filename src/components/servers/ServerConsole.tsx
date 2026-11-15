@@ -91,6 +91,7 @@ export function ServerConsole({ serverId, block, recheck, openOperations }: {
       const url = new URL(encodeURIComponent(grant.grantId), consoleUrl)
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
       const viewer = new Viewer(target.current, url.toString(), { credentials: { password: grant.password } })
+      let connected = false
       attempt.viewer = viewer
       viewer.scaleViewport = true
       viewer.resizeSession = false
@@ -98,6 +99,7 @@ export function ServerConsole({ serverId, block, recheck, openOperations }: {
       attempt.timeout = window.setTimeout(() => end(attempt, 'مهلت اتصال به نشست موقت تمام شد. نشست جدید بسازید.'), Math.max(0, expiresIn))
       viewer.addEventListener('connect', () => {
         if (current.current !== attempt) return
+        connected = true
         attempt.grantId = undefined
         window.clearTimeout(attempt.timeout)
         attempt.timeout = window.setTimeout(() => end(attempt, 'مهلت نشست کنسول تمام شد. برای اتصال دوباره نشست جدید بسازید.'), Math.min(300, grant.maxSessionSeconds) * 1000)
@@ -105,7 +107,8 @@ export function ServerConsole({ serverId, block, recheck, openOperations }: {
       })
       viewer.addEventListener('disconnect', () => {
         attempt.viewer = undefined
-        end(attempt, 'ارتباط قطع شد و نشست پایان یافت. برای اتصال دوباره نشست جدید بسازید.')
+        end(attempt, connected ? 'ارتباط قطع شد و نشست پایان یافت. برای اتصال دوباره نشست جدید بسازید.'
+          : 'ارتباط با کنسول سرور برقرار نشد. دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.')
       })
       viewer.addEventListener('securityfailure', () => end(attempt, 'احراز هویت کنسول ناموفق بود. برای تلاش دوباره نشست جدید بسازید.'))
     } catch (error) {

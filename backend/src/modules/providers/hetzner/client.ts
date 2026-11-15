@@ -1,4 +1,5 @@
 import { ProviderPermanentError, ProviderRetryableError, ProviderUnknownError } from '../../../lib/errors.js'
+import { OutboundError } from '../../outbound/policy.js'
 
 export type ApiObject = Record<string, unknown>
 export const object = (value: unknown): ApiObject => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ApiObject : {}
@@ -28,7 +29,11 @@ export class HetznerClient {
       })
       if (method === 'DELETE' && response.status === 204) return {}
       payload = await response.json()
-    } catch {
+    } catch (error) {
+      if (error instanceof OutboundError) {
+        if (method !== 'GET') throw new ProviderUnknownError('ارتباط با هتزنر برقرار نشد و نتیجهٔ عملیات نامشخص است. ابتدا وضعیت عملیات را بررسی کنید.')
+        throw new ProviderRetryableError('ارتباط با هتزنر برقرار نشد. کمی بعد دوباره تلاش کنید.')
+      }
       if (method !== 'GET') throw new ProviderUnknownError('Hetzner mutation outcome is unknown; do not dispatch again')
       throw new ProviderRetryableError('Hetzner read request is unavailable')
     }

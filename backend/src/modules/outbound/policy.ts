@@ -26,6 +26,15 @@ export function approvedTarget(integration: OutboundIntegration, input: string |
   if (url.protocol !== 'https:' || url.hostname !== hosts[integration] || url.port || url.username || url.password || url.hash) throw new OutboundError('policy')
   return url
 }
+const hetznerConsoleHosts = new Set(['console.hetzner.cloud', 'web-console.hetzner.cloud'])
+export function approvedHetznerConsole(input: string): URL {
+  let url: URL
+  try { url = new URL(input) } catch { throw new OutboundError('policy') }
+  if (url.protocol !== 'wss:' || !hetznerConsoleHosts.has(url.hostname) || url.port || url.username || url.password || url.hash) {
+    throw new OutboundError('policy')
+  }
+  return url
+}
 export function publicAddress(address: string): boolean {
   try { return ipaddr.process(address).range() === 'unicast' } catch { return false }
 }
@@ -52,6 +61,7 @@ export function errorCategory(error: unknown): NetworkCategory {
     // Inspect known transport phrases only; never retain a raw error or credential.
     if (message.includes('Proxy response (407)') || message.includes('Socks5 Authentication failed')) return 'authentication'
     if (e.name === 'TimeoutError' || e.name === 'AbortError' || /TIMEOUT|TIMEDOUT/.test(code)) return 'timeout'
+    if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'dns'
     if (/CERT|TLS|SSL/.test(code)) return 'tls'
     current = e.cause
   }

@@ -10,7 +10,7 @@ import './outbound-proxies.css'
 
 const base = '/admin/settings/outbound'
 const names: Record<OutboundIntegration, string> = { hetzner: 'هتزنر', leaseweb: 'لیزوب', parsgreen: 'پارس‌گرین (پیامک)', tabapay: 'تاباپی (پرداخت)', abantether: 'آبان‌تتر (نرخ ارز)' }
-const categories = { none: 'موفق', policy: 'مقصد غیرمجاز', configuration: 'تنظیمات ناقص یا پراکسی غیرفعال', timeout: 'پایان مهلت اتصال', authentication: 'نیازمند بررسی اعتبارنامهٔ سرویس', tls: 'خطای اعتبار گواهی TLS', unreachable: 'اتصال برقرار نشد', upstream: 'پاسخ ناموفق سرویس' }
+const categories = { none: 'موفق', policy: 'مقصد غیرمجاز', configuration: 'تنظیمات ناقص یا پراکسی غیرفعال', timeout: 'پایان مهلت اتصال', authentication: 'نیازمند بررسی اعتبارنامهٔ سرویس', dns: 'خطای یافتن نشانی میزبان', tls: 'خطای اعتبار گواهی TLS', unreachable: 'اتصال برقرار نشد', upstream: 'پاسخ ناموفق سرویس' }
 const routeNames = { direct: 'مستقیم', proxy: 'پراکسی', 'direct-fallback': 'بازگشت مجاز به مسیر مستقیم', blocked: 'مسدود؛ پراکسی در دسترس نیست' }
 const blank = { id: '', name: '', type: 'socks5' as ProxyType, host: '', port: '1080', timeoutMs: '10000', enabled: false, username: '', password: '', clearCredentials: false }
 
@@ -89,8 +89,9 @@ export function SystemOutboundProxies() {
       </article>)}</div>
       {!data.profiles.length ? <p>هنوز پراکسی تعریف نشده است؛ همهٔ سرویس‌ها مستقیم متصل می‌شوند.</p> : null}
     </Card>
-    <Card><h2>مسیر سرویس‌ها</h2><p>«مسدود در خطا» هیچ‌گاه مسیر مستقیم را جایگزین نمی‌کند. بازگشت مستقیم فقط با انتخاب صریح و برای GET/HEAD مجاز است؛ درخواست‌های تغییردهنده هرگز تکرار نمی‌شوند.</p>
+    <Card><h2>مسیر سرویس‌ها</h2><p>با فعال بودن پراکسی هتزنر، API و کنسول فقط از همان پراکسی استفاده می‌کنند. برای سرویس‌های دیگر، بازگشت مستقیم فقط با انتخاب صریح و برای GET/HEAD مجاز است.</p>
       <div className="outbound-grid">{data.integrations.map(integration => <IntegrationRoute key={`${integration.id}:${data.revision}`} integration={integration} profiles={data.profiles} revision={data.revision} busy={busy}
+        consoleHealth={data.hetznerConsole}
         save={route => run('outbound.route', '/routes', { revision: data.revision, integration: integration.id, ...route, confirm: true })}
         test={() => test(integration.id)} />)}</div>
     </Card>
@@ -98,12 +99,16 @@ export function SystemOutboundProxies() {
   </div>
 }
 
-function IntegrationRoute({ integration, profiles, revision, busy, save, test }: {
+function IntegrationRoute({ integration, profiles, revision, busy, consoleHealth, save, test }: {
   integration: OutboundStatus['integrations'][number]; profiles: PublicProxyProfile[]; revision: string; busy: boolean
+  consoleHealth?: OutboundStatus['hetznerConsole']
   save: (route: OutboundRoute) => void; test: () => void
 }) {
-  const [route, setRoute] = useState(integration.route)
+  const hetzner = integration.id === 'hetzner'
+  const [route, setRoute] = useState(hetzner ? { ...integration.route, failurePolicy: 'closed' as const } : integration.route)
   const profile = profiles.find(p => p.id === integration.active.profileId)
+  const latest = consoleHealth?.latest
+  const failure = consoleHealth?.lastFailure
   return <article className="outbound-profile"><h3>{names[integration.id]}</h3>
     <p>مسیر فعلی: {routeNames[integration.active.route]}{profile ? ` · ${profile.name}` : ''}</p>
     <form className="form-stack" onSubmit={e => { e.preventDefault(); save(route) }}>
@@ -111,10 +116,20 @@ function IntegrationRoute({ integration, profiles, revision, busy, save, test }:
         <option value="">مستقیم (Direct)</option>{profiles.map(p => <option key={p.id} value={p.id} disabled={!p.enabled}>{p.name}{!p.enabled ? ' (غیرفعال)' : ''}</option>)}
       </Select>
       <Toggle label={`فعال‌بودن مسیر پراکسی ${names[integration.id]}`} checked={route.enabled} onChange={enabled => setRoute({ ...route, enabled })} />
-      <Select label={`سیاست خطای ${names[integration.id]}`} value={route.failurePolicy} onChange={e => setRoute({ ...route, failurePolicy: e.target.value as OutboundRoute['failurePolicy'] })}>
+      {!hetzner && <Select label={`سیاست خطای ${names[integration.id]}`} value={route.failurePolicy} onChange={e => setRoute({ ...route, failurePolicy: e.target.value as OutboundRoute['failurePolicy'] })}>
         <option value="closed">مسدود در خطا (پیشنهادی)</option><option value="read-only-direct">بازگشت مستقیم فقط برای خواندن</option>
-      </Select>
+      </Select>}
       <div className="outbound-actions"><Button type="submit" disabled={busy || route.enabled && !route.profileId}>ذخیرهٔ مسیر {names[integration.id]}</Button><Button variant="secondary" disabled={busy} onClick={test}>آزمون اتصال {names[integration.id]}</Button></div>
     </form><TestResult result={integration.lastTest} revision={revision} />
+    {hetzner && <div className="outbound-test" role="status">
+      <strong>آخرین اتصال کنسول</strong>
+      {latest ? <>
+        <span>{routeNames[latest.route]} · {categories[latest.category]} · {latest.latencyMs} ms</span>
+        {latest.category !== 'none' && <code>{latest.category}</code>}
+        <small>{new Date(latest.checkedAt).toLocaleString('fa-IR')}</small>
+        {latest.revision !== revision && <small>تنظیمات پس از این اتصال تغییر کرده است.</small>}
+      </> : <span>هنوز اتصالی ثبت نشده است.</span>}
+      {failure && latest?.category === 'none' && <small>آخرین خطا: {categories[failure.category]} (<code>{failure.category}</code>) · {failure.latencyMs} ms · {new Date(failure.checkedAt).toLocaleString('fa-IR')}</small>}
+    </div>}
   </article>
 }
