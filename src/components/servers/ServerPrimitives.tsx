@@ -1,8 +1,10 @@
-import { LoaderCircle } from 'lucide-react'
+import { Fragment, useId, useState } from 'react'
+import { ChevronDown, LoaderCircle } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { lifecycleLabels, serverAddressUnavailable } from '../../lib/serverLifecycle'
 import type { Server, ServerLifecycle } from '../../lib/types'
 import { CopyableIp } from '../ui/CopyableIp'
+import { CopyableServerReference, FailureDetailsPanel } from './FailureDetailsPanel'
 
 export function LifecycleBadge({ state }: { state: ServerLifecycle }) {
   const busy = state === 'queued' || state === 'provisioning' || state === 'deleting'
@@ -21,26 +23,30 @@ export function ServerStatus({ server }: { server: Server }) {
   return <><LifecycleBadge state={state} />{state === 'ready' && server.status === 'inactive' && <small>خاموش</small>}</>
 }
 export function ServerTableRow({ server, onPlatformManage }: { server: Server; onPlatformManage?: () => void }) {
+  const [expanded, setExpanded] = useState(false)
+  const id = useId()
   const state = serverLifecycleState(server)
   const ready = state === 'ready'
-  const addressUnavailable = serverAddressUnavailable(server)
+  const addressUnavailable = serverAddressUnavailable({ ...server, lifecycle: state })
   const inspectable = ready || ['delete_failed', 'deletion_requested', 'deleting', 'terminated'].includes(state)
-  return <tr className={`server-table-row${!ready ? ' server-table-row--pending' : ''}`}>
-    <td><strong>{server.name}</strong><small>{server.datacenter || 'در حال دریافت'}{server.os ? ` · ${server.os}` : ''}</small></td>
+  const canInspect = server.platformServerId ? ready : inspectable
+  const failureState = ['failed', 'outcome_unknown', 'requires_review'].includes(state)
+  const failure = server.tracking?.failure
+  const summary = failure ? ({ capacity_unavailable: 'ظرفیت دیتاسنتر تأیید نشد', quota_exceeded: 'سهمیهٔ ساخت سرور کافی نیست', provider_rejected: 'درخواست ساخت تأیید نشد', outcome_unknown: 'نتیجهٔ ساخت در حال بررسی است' })[failure.code] : undefined
+  const identifier = server.platformServerId || server.tracking?.serverId || server.serverId
+  return <Fragment><tr className={`server-table-row${!ready ? ' server-table-row--pending' : ''}${failureState ? ' server-table-row--failure' : ''}${expanded ? ' server-table-row--expanded' : ''}`}>
+    <td><strong><bdi>{server.name}</bdi></strong>{summary && <small className="server-row-summary">{summary}</small>}
+      {identifier && <CopyableServerReference key={identifier} value={identifier} label="کپی شناسهٔ سرور" />}</td>
     <td data-label="وضعیت"><ServerStatus server={server} /></td>
-    <td data-label="منابع">{[server.cpu, server.ram, server.disk].filter(Boolean).join(' · ') || 'در حال دریافت'}</td>
+    <td data-label="منابع"><span className="server-row-resources"><bdi dir="ltr">{[server.cpu, server.ram, server.disk].filter(Boolean).join(' · ') || 'در حال دریافت'}</bdi></span><small><bdi>{server.datacenter || 'در حال دریافت'}{server.os ? ` · ${server.os}` : ''}</bdi></small></td>
     <td data-label="آدرس‌های آی‌پی"><CopyableIp value={server.ip} unavailableReason={addressUnavailable} />{!addressUnavailable && server.ipv6 && <CopyableIp value={server.ipv6} />}</td>
-    <td>{(server.platformServerId ? ready : inspectable) ? server.platformServerId
-      ? <button className="button button--secondary button--sm" onClick={onPlatformManage} disabled={!onPlatformManage}>مدیریت و نتیجه عملیات</button>
-      : <Link className="button button--secondary button--sm" to={`/servers/${server.id}`}>مشاهده جزئیات</Link>
-      : server.tracking?.failure ? <div className="server-provisioning-failure">
-        <p>{server.tracking.failure.message}</p>
-        <p>{server.tracking.failure.billing === 'refunded' ? 'مبلغ پرداخت‌شده به کیف پول بازگردانده شد.'
-          : server.tracking.failure.billing === 'not_charged' ? 'مبلغی بابت این سفارش از کیف پول کسر نشده است.' : 'مبلغ کسرشده هنوز بازگردانده نشده و نیازمند پیگیری است.'}</p>
-        <p>{server.tracking.failure.nextStep}</p>
-        <small>شمارهٔ پیگیری: <bdi>{server.tracking.failure.reference}</bdi></small>
-        <Link className="text-link" to="/tickets">پیگیری از پشتیبانی</Link>
-        {server.tracking.failure.canChooseAlternative && <Link className="text-link" to="/servers/create">انتخاب پلن یا دیتاسنتر دیگر</Link>}
-      </div> : <span className="server-tracking-hint">{server.tracking ? `پیگیری ${server.tracking.reference.slice(0, 8)}` : 'در انتظار اطلاعات معتبر'}</span>}</td>
-  </tr>
+    <td className="server-row-actions">{canInspect ? server.platformServerId
+      ? <><button type="button" className="server-list-control" title="مدیریت و نتیجه عملیات" onClick={onPlatformManage} disabled={!onPlatformManage} aria-describedby={!onPlatformManage ? `${id}-unavailable` : undefined}><span className="server-row-action-label">مدیریت و نتیجه عملیات</span></button>
+        {!onPlatformManage && <small id={`${id}-unavailable`} title="اتصال به پلتفرم در دسترس نیست">اتصال به پلتفرم در دسترس نیست</small>}</>
+      : <Link className="server-list-control" to={`/servers/${server.id}`}>مشاهده جزئیات</Link>
+      : <button type="button" id={`${id}-trigger`} className="server-list-control" aria-expanded={expanded} aria-controls={`${id}-details`} onClick={() => setExpanded(value => !value)}>
+        {expanded ? 'بستن جزئیات' : failureState ? 'علت خطا و پیگیری' : 'پیگیری وضعیت'}<ChevronDown size={16} aria-hidden="true" /></button>}</td>
+  </tr>{!canInspect && <tr className="server-failure-details-row" hidden={!expanded} id={`${id}-details`} aria-labelledby={`${id}-trigger`}>
+    <td colSpan={5}><FailureDetailsPanel server={server} failureState={failureState} /></td>
+  </tr>}</Fragment>
 }
