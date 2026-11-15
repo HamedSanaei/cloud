@@ -7,6 +7,8 @@ import { ParserverEnamadSeal } from '../components/ParserverEnamadSeal'
 import { ParserverTabaPaySeal } from '../components/ParserverTabaPaySeal'
 import { HomeTariffs } from '../components/HomeTariffs'
 
+const HETZNER_ACCOUNT_URL = 'https://pluspremium.ir/'
+
 const providers = [
   { id: 'asiatech', name: 'آسیاتک', logo: '/providers/asiatech.svg', region: 'ایران', title: 'خرید سرور ایران', tone: 'blue', link: '#iran-server', action: 'وضعیت عرضه و تعرفهٔ ایران', bullets: ['میزبانی در ایران برای مخاطبان داخل کشور', 'تعرفهٔ ماهانهٔ منابع پس از تأیید منتشر می‌شود'] },
   { id: 'hetzner', name: 'Hetzner', logo: '/providers/hetzner.svg', region: 'اروپا', title: 'خرید سرور هتزنر', tone: 'rose', link: '#hetzner-server', action: 'مشاهدهٔ پلن‌های هتزنر', bullets: ['مقایسهٔ موقعیت، منابع و ترافیک مشمول', 'دوره‌های پرداخت مطابق پلن‌های قابل سفارش'] },
@@ -95,7 +97,7 @@ export function LandingPage({ initialTariffs }: { initialTariffs?: string } = {}
         <section className="landing-section public-container landing-faq">
           <div className="landing-section-heading"><span>پرسش‌های متداول</span><h2>قبل از شروع، بیشتر بدانید</h2></div>
           {[['سرور ایران برای چه کاربردی مناسب است؟', 'نزدیکی به کاربران داخل کشور می‌تواند تأخیر را کاهش دهد. پیش از سفارش، وضعیت عرضه، ترافیک ورودی و خروجی و نیاز به IP را بررسی کنید.'], ['چطور یک سرور ارزان هتزنر انتخاب کنم؟', 'برای مقایسهٔ پلن ساعتی یا ماهانه، CPU، RAM، دیسک و سهمیهٔ ترافیک موردنیازتان را مشخص کنید. در جدول بالا می‌توانید نرخ دوره‌های موجود را کنار مشخصات هر پلن ببینید.'], ['آیا خرید سرور به حساب مستقل هتزنر نیاز دارد؟', 'سرور را از پنل پارس سرور سفارش و مدیریت می‌کنید. برای پیگیری خرید حساب مستقل، به وب‌سایت پلاس پریمیوم مراجعه کنید.']].map(([question, answer]) => <details key={question}><summary>{question}<ChevronDown /></summary><p>{answer}</p></details>)}
-          <p className="landing-account-link"><a className="button primary" href="https://pluspremium.ir/" rel="sponsored">خرید اکانت هتزنر <ArrowLeft size={16} /></a> <span>مشاهده در وب‌سایت پلاس پریمیوم</span></p>
+          <p className="landing-account-link"><a className="button primary" href={HETZNER_ACCOUNT_URL} rel="sponsored">خرید اکانت هتزنر <ArrowLeft size={16} /></a> <span>مشاهده در وب‌سایت پلاس پریمیوم</span></p>
         </section>
       </main>
 
@@ -105,7 +107,13 @@ export function LandingPage({ initialTariffs }: { initialTariffs?: string } = {}
             <Link className="public-logo inverse" to="/"><BrandMark /><strong>{BRAND_NAME}</strong></Link>
             <p>پنل فارسی مدیریت زیرساخت و میزبانی ابری.</p>
           </div>
-          <nav aria-label={`خدمات ${BRAND_NAME}`}><a href="#iran-server">سرور ایران</a><a href="#hetzner-server">سرور هتزنر</a><a href="#hourly">سرور ساعتی و ماهانه</a><a href="#tariffs">تعرفه‌ها</a></nav>
+          <nav aria-label={`خدمات ${BRAND_NAME}`}>
+            <a href="#iran-server">سرور ایران</a>
+            <a href="#hetzner-server">سرور هتزنر</a>
+            <a href="#hourly">سرور ساعتی و ماهانه</a>
+            <a href="#tariffs">تعرفه‌ها</a>
+            <a href={HETZNER_ACCOUNT_URL} rel="sponsored">خرید اکانت هتزنر</a>
+          </nav>
           <div className="landing-footer-trust" aria-label="نمادهای اعتماد">
             <ParserverEnamadSeal />
             <ParserverTabaPaySeal />
