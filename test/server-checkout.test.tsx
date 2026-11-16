@@ -54,6 +54,23 @@ async function configure() {
 }
 
 describe('Issue #3 server checkout', () => {
+  it('shows the hourly policy and both backend price states without inventing a monthly amount', async () => {
+    open()
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /Hetzner/ }))
+    await user.click(screen.getByRole('button', { name: /نورنبرگ/ }))
+    await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
+    expect(screen.queryByRole('button', { name: /روزانه/ })).toBeNull()
+    await user.click(screen.getByRole('button', { name: /ساعتی.*پرداخت/ }))
+    expect(screen.getByText(/در پرداخت ساعتی، هزینه هر ساعت با نرخ معتبر دلار/)).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
+    const card = screen.getByRole('button', { name: /Cheap/ })
+    expect(card.textContent).toContain('قیمت ساعتی:')
+    expect(card.textContent).toContain('قیمت ماهانه: در دسترس نیست')
+    expect(card.textContent).toContain('(دوره انتخابی)')
+    expect(posts).toEqual([])
+  })
+
   it('opens a public offer in its available billing period without placing an order', async () => {
     open('/servers/create?offer=Cheap&period=hourly')
     expect(await screen.findByRole('button', { name: /Ubuntu/ })).toBeTruthy()

@@ -142,6 +142,41 @@ describe.skipIf(!dbAvailable)('durable SMS event producers and dispatcher (no re
     await dispatchSms(ctx.db, send); expect(send).not.toHaveBeenCalled()
     expect((await ctx.db.query.smsOutbox.findFirst({ where: t => eq(t.eventId, 'changed-phone') }))!.status).toBe('skipped_recipient')
   })
+  it('blocks stale pattern approval on an already queued message', async () => {
+    const user = await account()
+    await enqueueSms(ctx.db, 'ticketCreated', user.id, 'old-approved-revision', { ticketNumber: '1052' })
+    await ctx.db.update(smsPreferences).set({ patternHash: 'previous-pattern-revision' }).where(eq(smsPreferences.key, 'ticketCreated'))
+    await dispatchSms(ctx.db, send)
+    expect(send).not.toHaveBeenCalled()
+    expect((await ctx.db.query.smsOutbox.findFirst({ where: t => eq(t.eventId, 'old-approved-revision') }))!.status).toBe('blocked_approval_revision')
+  })
+  it('serializes a completed disable with the provider-send boundary across workers', async () => {
+    const user = await account(), started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    await enqueueSms(ctx.db, 'ticketCreated', user.id, 'sending-boundary', { ticketNumber: '1052' })
+    const sending = vi.fn(async () => { started.resolve(); await release.promise; return {} })
+    const dispatch = dispatchSms(ctx.db, sending, 1)
+    await started.promise
+    const updaterReady = Promise.withResolvers<number>()
+    const disabling = ctx.db.transaction(async tx => {
+      const result = await tx.execute(sql`select pg_backend_pid() as pid`)
+      updaterReady.resolve(Number(result.rows[0]!.pid))
+      await updateSmsPreference(tx, user.id, 'ticketCreated', false, 0)
+    })
+    const pid = await updaterReady.promise
+    let waiting = false
+    try {
+      for (let i = 0; i < 50 && !waiting; i++) {
+        const state = await ctx.db.execute(sql`select wait_event_type from pg_stat_activity where pid=${pid}`)
+        waiting = state.rows[0]?.wait_event_type === 'Lock'
+        if (!waiting) await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      expect(waiting).toBe(true)
+    } finally { release.resolve(); await Promise.all([dispatch, disabling]) }
+    await enqueueSms(ctx.db, 'ticketCreated', user.id, 'after-completed-disable', { ticketNumber: '1053' })
+    await dispatchSms(ctx.db, sending)
+    expect(sending).toHaveBeenCalledTimes(1)
+    expect((await ctx.db.query.smsOutbox.findFirst({ where: t => eq(t.eventId, 'after-completed-disable') }))!.status).toBe('skipped_disabled')
+  })
   it('enforces admin RBAC, versioned independent switches and enhanced auth-channel confirmation', async () => {
     const user = await account(), admin = await account(true)
     const u = await createSession(ctx.db, user.id, {}), a = await createSession(ctx.db, admin.id, {})
