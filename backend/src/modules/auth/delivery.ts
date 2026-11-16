@@ -80,6 +80,10 @@ export async function sendEmailOtp(to: string, code: string, purpose: 'login' | 
 }
 
 export async function sendParsGreenSms(to: string, message: string): Promise<{ developmentCode?: string }> {
+  return sendSmsWithFallback(to, message, () => message)
+}
+
+async function sendSmsWithFallback(to: string, message: string, fallbackMessage: () => string): Promise<{ developmentCode?: string }> {
   const config = getConfig()
   if (config.AUTH_DELIVERY_MODE === 'log') {
     if (isProduction()) throw new ProviderPermanentError('ارسال پیامک در محیط عملیاتی پیکربندی نشده است')
@@ -89,13 +93,25 @@ export async function sendParsGreenSms(to: string, message: string): Promise<{ d
   if (!config.PARSGREEN_SIGNATURE || !config.PARSGREEN_FROM) {
     throw new ProviderPermanentError('تنظیمات سرویس پیامکی ParsGreen کامل نیست')
   }
+  const recipient = parsGreenRecipient(to)
+  try {
+    await sendSmsFrom(recipient, message, config.PARSGREEN_PRIMARY_FROM, 'primary')
+  } catch (error) {
+    // One bounded failover, not another OTP/challenge or a retry loop.
+    if (config.PARSGREEN_PRIMARY_FROM === config.PARSGREEN_FROM) throw error
+    await sendSmsFrom(recipient, fallbackMessage(), config.PARSGREEN_FROM, 'fallback')
+  }
+  return {}
+}
 
+async function sendSmsFrom(recipient: string, message: string, sender: string, senderRoute: 'primary' | 'fallback'): Promise<void> {
+  const config = getConfig()
   const envelope = `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
   <soap:Body><SendGroupSMS xmlns="${PARSGREEN_SOAP_NAMESPACE}">
     <signature>${xmlEscape(config.PARSGREEN_SIGNATURE)}</signature>
-    <from>${xmlEscape(config.PARSGREEN_FROM)}</from>
-    <to><string>${xmlEscape(parsGreenRecipient(to))}</string></to>
+    <from>${xmlEscape(sender)}</from>
+    <to><string>${xmlEscape(recipient)}</string></to>
     <text>${xmlEscape(message)}</text><isFlash>false</isFlash><udh></udh><success>0</success><retStr />
   </SendGroupSMS></soap:Body>
 </soap:Envelope>`
@@ -120,11 +136,11 @@ export async function sendParsGreenSms(to: string, message: string): Promise<{ d
     if (!response.ok || fault || diagnostics.providerResult !== 1 || diagnostics.acceptedCount !== 1) {
       throw new Error('provider rejected message')
     }
-    return {}
+    return
   } catch (error) {
     // Never log the envelope, response, recipient, OTP, credentials or raw
     // exception: SOAP faults may echo the entire authenticated request.
-    createLogger('sms-delivery').warn(diagnostics, 'ParsGreen delivery failed')
+    createLogger('sms-delivery').warn({ ...diagnostics, senderRoute }, 'ParsGreen delivery failed')
     if (error instanceof ProviderPermanentError) throw error
     throw new ProviderRetryableError('ارسال پیامک ناموفق بود؛ کمی بعد دوباره تلاش کنید')
   }
@@ -133,9 +149,13 @@ export async function sendParsGreenSms(to: string, message: string): Promise<{ d
 export async function sendSmsOtp(to: string, code: string, loginOrigin?: string): Promise<{ developmentCode?: string; smsAutofill?: true }> {
   const config = getConfig()
   const pattern = config.PARSGREEN_APPROVED_PHONE_LOGIN_PATTERN
+  const directMessage = `کد ورود پارس سرور: ${code}\nاین کد را در اختیار دیگران قرار ندهید.`
   if (pattern && config.AUTH_DELIVERY_MODE === 'live' && loginOrigin === new URL(config.FRONTEND_URL).origin) {
-    await sendParsGreenSms(to, pattern.replaceAll('%%', code))
+    const host = new URL(config.FRONTEND_URL).hostname
+    // The dedicated line gets direct text, never a legacy template. Render the
+    // already-approved legacy pattern only if that primary attempt fails.
+    await sendSmsWithFallback(to, `${directMessage}\n@${host} #${code}`, () => pattern.replaceAll('%%', code))
     return { smsAutofill: true }
   }
-  return sendParsGreenSms(to, `کد ورود پارس سرور: ${code}\nاین کد را در اختیار دیگران قرار ندهید.`)
+  return sendParsGreenSms(to, directMessage)
 }

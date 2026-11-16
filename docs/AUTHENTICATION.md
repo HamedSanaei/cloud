@@ -51,15 +51,20 @@ delivery.
 Email requires `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`,
 `SMTP_PASSWORD`, and `SMTP_FROM`.
 
-ParsGreen requires `PARSGREEN_SIGNATURE` and `PARSGREEN_FROM`. The provider URL
+ParsGreen requires `PARSGREEN_SIGNATURE` and the existing `PARSGREEN_FROM` for
+fallback. `PARSGREEN_PRIMARY_FROM` defaults to the purchased service line
+`9998883511`; direct SMS first uses that line, with one legacy attempt only on
+failure. Keep the old `PARSGREEN_FROM` value so fallback remains available.
+The provider URL
 is configurable through `PARSGREEN_ENDPOINT`; the default targets the ParsGreen
 `SendGroupSMS` SOAP service. Mobile storage uses `+989...` and the ParsGreen
 recipient is sent as local `09...`. `sendParsGreenSms()` is the shared server-side
-transport for SMS OTP. The operator-supplied notification samples and their
+transport for SMS OTP. Login patterns are used only by the fallback route; a
+successful primary send does not invoke them. The operator-supplied notification samples and their
 approval statuses are documented in [PARSGREEN_TEMPLATES.md](PARSGREEN_TEMPLATES.md).
 Approved OTP samples are recorded separately in `PARSGREEN_AUTH_SAMPLES`.
 Their actual approved dynamic patterns still need verification before changing
-the legacy runtime OTP text. Confirm WhiteText/blacklist support and actual
+the legacy fallback OTP text. Confirm WhiteText/blacklist support and actual
 handset delivery with ParsGreen; sample approval alone is insufficient.
 SOAP 1.1 requires the `http://ParsGreen.com/` namespace and quoted
 `"http://ParsGreen.com/SendGroupSMS"` action (not `tempuri.org`). Failures emit

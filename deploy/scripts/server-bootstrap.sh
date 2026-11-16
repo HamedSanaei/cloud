@@ -186,6 +186,7 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     echo "SMTP_PASSWORD="
     echo "SMTP_FROM="
     echo "PARSGREEN_SIGNATURE="
+    echo "PARSGREEN_PRIMARY_FROM=9998883511"
     echo "PARSGREEN_FROM="
     echo "GOOGLE_CLIENT_ID="
     echo "GOOGLE_CLIENT_SECRET="

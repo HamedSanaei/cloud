@@ -4,6 +4,37 @@ Source: operator-supplied ParsGreen WhiteText screen, 2026-11-12.
 Canonical exact samples and event keys: backend/src/modules/auth/parsgreen-templates.ts.
 Agents must update BOTH files when a message, approval status or event changes.
 
+## Delivery priority — dedicated service line
+
+`PARSGREEN_PRIMARY_FROM` defaults to the operator-purchased `9998883511`.
+All sends through the shared SMS transport first attempt this line with direct
+message text. The existing `PARSGREEN_FROM` remains unchanged as the fallback
+sender. Do not replace it with the new line: doing so removes the distinct
+fallback route. Compose, generated deployment Compose and bootstrap defaults
+preserve this priority without requiring another credential.
+
+Only if the primary request fails (provider rejection, SOAP/HTTP failure,
+malformed response or transport timeout) is the previous route attempted once.
+For domain-bound login, the old configured/approved pattern is rendered only
+on that fallback; the primary sends direct OTP text with the same domain suffix.
+Otherwise fallback retains the previous manual OTP text. Both attempts use the
+same issued code/recipient; no new challenge is created, and a successful primary
+acceptance never triggers a second send. Identical sender settings do not cause
+a repeated attempt against the same line.
+
+Each attempt retains the configured timeout (10 seconds by default). SMS start
+and resend requests in the web client allow 30 seconds for bounded failover.
+If a timeout happens after provider acceptance, a fallback can cause duplicate
+delivery of the same code; there is no automatic handset/DLR-based retry or
+claim of exactly-once delivery. Diagnostics record only `primary`/`fallback` and
+safe numeric/fixed reason fields, never message/code/recipient/credentials.
+
+This routing change does not approve any rejected/unknown catalog entry or add
+new notification triggers. Existing pattern approval rules below still apply
+to fallback. No live SMS is sent by tests, and API acceptance is not proof of
+delivery to a handset. The new line must be enabled for the existing ParsGreen
+account/signature when the committed code is eventually deployed.
+
 ## Approval semantics
 
 These are message samples from the ParsGreen panel, NOT ParsGreen API template IDs.
@@ -57,7 +88,8 @@ texts in sync with the ParsGreen panel after approvals or modifications.
   require a mobile number.
 - Numbers are stored as +989... and sent to ParsGreen SendGroupSMS as 09....
 - Current sender is sendSmsOtp in backend/src/modules/auth/delivery.ts, using
-  PARSGREEN_SIGNATURE, PARSGREEN_FROM and PARSGREEN_ENDPOINT.
+  PARSGREEN_SIGNATURE, PARSGREEN_PRIMARY_FROM, fallback PARSGREEN_FROM and
+  PARSGREEN_ENDPOINT.
 - Four approved OTP **samples** are recorded in `PARSGREEN_AUTH_SAMPLES`:
   phoneVerification, phoneLogin, passwordRecovery and accountOperation.
   The first, third and fourth were supplied by the operator; phoneLogin was
@@ -115,7 +147,8 @@ separately; no live SMS was sent during this change.
 - The sender now checks both `SendGroupSMSResult=1` and `success=1` for its
   single recipient. Rejections log only HTTP status, numeric result/count
   and a fixed reason; never raw SOAP, OTP, phone, signature or exception.
-  There is no automatic resend after a timeout.
+  The initial fix did not resend after a timeout; the dedicated-line priority
+  above now permits one bounded legacy failover under the operator's instruction.
 - Publication and a post-fix handset delivery test are still required; local
   tests and the read-only probe do not establish live OTP delivery.
 

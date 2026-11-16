@@ -59,6 +59,7 @@ const envSchema = z.object({
   SMTP_FROM: z.string().default('پارس سرور <no-reply@example.com>'),
 
   PARSGREEN_SIGNATURE: z.string().default(''),
+  PARSGREEN_PRIMARY_FROM: z.string().trim().min(1).default('9998883511'),
   PARSGREEN_FROM: z.string().default(''),
   PARSGREEN_ENDPOINT: z.string().url().default('https://login.parsgreen.com/Api/SendSMS.asmx'),
   PARSGREEN_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),

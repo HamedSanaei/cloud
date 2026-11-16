@@ -44,11 +44,11 @@ export async function startRegistration(input: { email: string; password: string
 }
 
 export async function startPhoneRegistration(input: { mobile: string; firstName?: string; lastName?: string }): Promise<AuthChallenge> {
-  return (await apiPost<Data<AuthChallenge>>('/auth/register/phone/start', input)).data
+  return (await apiPost<Data<AuthChallenge>>('/auth/register/phone/start', input, { timeoutMs: 30000 })).data
 }
 
 export async function startPhoneLogin(mobile: string): Promise<AuthChallenge> {
-  return (await apiPost<Data<AuthChallenge>>('/auth/phone/start', { mobile })).data
+  return (await apiPost<Data<AuthChallenge>>('/auth/phone/start', { mobile }, { timeoutMs: 30000 })).data
 }
 
 export async function verifyChallenge(token: string, code: string, signal?: AbortSignal): Promise<AuthSession | AuthChallenge> {
@@ -70,7 +70,7 @@ export async function verifyRecoveryCode(token: string, recoveryCode: string): P
 }
 
 export async function resendChallenge(token: string): Promise<AuthChallenge> {
-  return (await apiPost<Data<AuthChallenge>>('/auth/challenge/resend', { token })).data
+  return (await apiPost<Data<AuthChallenge>>('/auth/challenge/resend', { token }, { timeoutMs: 30000 })).data
 }
 
 export async function startPasswordRecovery(email: string): Promise<AuthChallenge> {

@@ -13,6 +13,11 @@ const fixture = {
 }
 
 describe('live deployment authentication preflight', () => {
+  it('defaults to the purchased service line while preserving the existing fallback sender', () => {
+    const config = loadConfig(fixture)
+    expect(config.PARSGREEN_PRIMARY_FROM).toBe('9998883511')
+    expect(config.PARSGREEN_FROM).toBe('fixture-line')
+  })
   it('names missing configuration without exposing populated secrets', () => {
     const config = loadConfig({ ...fixture, SMTP_HOST: '', GOOGLE_CLIENT_ID: '' })
     expect(() => assertAuthenticationReady(config)).toThrow('SMTP_HOST, GOOGLE_CLIENT_ID')
