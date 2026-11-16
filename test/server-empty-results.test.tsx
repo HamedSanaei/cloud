@@ -30,6 +30,25 @@ const open = () => render(<MemoryRouter><ToastProvider><ServersPage /></ToastPro
 const emptyCard = () => within(document.querySelector('.resource-empty-card') as HTMLElement)
 
 describe('server list empty states', () => {
+  it.each([
+    ['id', 'server-UUID-89'], ['platformServerId', 'platform-UUID-89'], ['serverId', 'recorded-server-89'], ['orderId', 'order-89'],
+    ['tracking reference', 'TRACK-89'], ['tracking order', 'tracking-order-89'], ['tracking server', 'tracking-server-89'], ['failure reference', 'ORD-2026-89'],
+  ])('finds the authorized row by its %s and respects other filters', async (_field, identifier) => {
+    const user = userEvent.setup()
+    rows = [...history, { id: 'server-UUID-89', platformServerId: 'platform-UUID-89', serverId: 'recorded-server-89', orderId: 'order-89', name: 'Failed lookup node', status: 'building', lifecycle: 'failed', datacenter: 'Leaseweb', power: {},
+      tracking: { source: 'site', reference: 'TRACK-89', orderId: 'tracking-order-89', serverId: 'tracking-server-89', state: 'failed',
+        failure: { reference: 'ORD-2026-89', code: 'provider_rejected', billing: 'not_charged', message: 'Fixture failure', nextStep: 'Contact support', canChooseAlternative: false } } }]
+    open()
+    await screen.findByRole('cell', { name: /Failed lookup node/ })
+    await user.type(screen.getByRole('textbox', { name: 'جستجو' }), ` ${identifier.toUpperCase()} `)
+    expect(screen.getByRole('cell', { name: /Failed lookup node/ })).toBeTruthy()
+    expect(screen.queryByRole('cell', { name: 'Past server A' })).toBeNull()
+    await user.selectOptions(screen.getByRole('combobox', { name: 'وضعیت' }), 'failed')
+    expect(screen.getByRole('cell', { name: /Failed lookup node/ })).toBeTruthy()
+    await user.selectOptions(screen.getByRole('combobox', { name: 'دیتاسنتر' }), 'Hetzner')
+    expect(emptyCard().getByText('سروری با این جستجو یا فیلترها یافت نشد')).toBeTruthy()
+  })
+
   it('filters failed lifecycle and tracking-only records while preserving search, datacenter and reset', async () => {
     const user = userEvent.setup()
     rows = [

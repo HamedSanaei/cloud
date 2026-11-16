@@ -10,14 +10,23 @@ import { acknowledgeServerPassword, actionLabels, claimServerPassword, type Mana
 export function ServerPowerActionButton({ action, disabled, onClick }: { action: ManagementAction; disabled: boolean; onClick: () => void }) {
   return <Button variant={action === 'power_off' || action === 'reset' ? 'danger' : 'secondary'} className="server-power-action" icon={<Power size={18} />} disabled={disabled} onClick={onClick}>{actionLabels[action]}</Button>
 }
-export function DestructiveConfirmation({ server, action, busy, error, onClose, onConfirm, children }: { server: ServerDetail; action: ServerOperation['action']; busy: boolean; error: string; onClose: () => void; onConfirm: () => void; children?: React.ReactNode }) {
+export interface ProtectionChange { flag: 'delete' | 'rebuild'; from: boolean; to: boolean }
+export function DestructiveConfirmation({ server, action, busy, error, onClose, onConfirm, children, protectionChange }: { server: ServerDetail; action: ServerOperation['action']; busy: boolean; error: string; onClose: () => void; onConfirm: () => void; children?: React.ReactNode; protectionChange?: ProtectionChange }) {
   const [typed, setTyped] = useState(''), [ack, setAck] = useState(false)
   const destructive = ['delete', 'rebuild'].includes(action)
   const forced = ['power_off', 'reset'].includes(action)
-  return <Modal className={`server-management-modal ${action === 'delete' ? 'server-delete-modal' : ''}`} trapFocus open onClose={() => { if (!busy) onClose() }} title={actionLabels[action]} description={`سرور ${server.name} — ${server.providerIdentity}`}
-    footer={<><Button variant="secondary" disabled={busy} onClick={onClose}>انصراف</Button><Button variant={destructive || forced ? 'danger' : 'primary'} disabled={busy || !ack || typed !== server.name} onClick={onConfirm}>{busy ? 'در حال ثبت درخواست…' : `تأیید ${actionLabels[action]}`}</Button></>}>
+  const protectionLabel = protectionChange?.flag === 'delete' ? 'حذف' : 'نصب مجدد (Rebuild)'
+  const intent = action === 'change_protection' && protectionChange ? `${protectionChange.to ? 'فعال‌سازی' : 'غیرفعال‌سازی'} حفاظت ${protectionLabel}` : actionLabels[action]
+  return <Modal className={`server-management-modal ${action === 'delete' ? 'server-delete-modal' : action === 'change_protection' ? 'server-protection-modal' : ''}`} trapFocus open onClose={() => { if (!busy) onClose() }} title={intent} description={`سرور ${server.name} — ${server.providerIdentity}`}
+    footer={<><Button variant="secondary" disabled={busy} onClick={onClose}>انصراف</Button><Button variant={destructive || forced ? 'danger' : 'primary'} disabled={busy || !ack || typed !== server.name || (action === 'change_protection' && !protectionChange)} onClick={onConfirm}>{busy ? 'در حال ثبت درخواست…' : `تأیید ${intent}`}</Button></>}>
     <div className="server-confirmation">
       {children}
+      {action === 'change_protection' && (protectionChange ? <>
+        <dl className="server-facts"><div><dt>نوع حفاظت</dt><dd>{protectionLabel}</dd></div><div><dt>وضعیت فعلی</dt><dd>{protectionChange.from ? 'فعال' : 'غیرفعال'}</dd></div><div><dt>وضعیت پس از تغییر</dt><dd>{protectionChange.to ? 'فعال' : 'غیرفعال'}</dd></div></dl>
+        <p className="server-notice">{protectionChange.flag === 'delete'
+          ? protectionChange.to ? 'این حفاظت مانع حذف سرور می‌شود تا زمانی که آن را غیرفعال کنید.' : 'پس از غیرفعال‌سازی حفاظت، حذف سرور مجاز می‌شود. این تغییر به‌خودی‌خود سرور را حذف نمی‌کند.'
+          : protectionChange.to ? 'این حفاظت مانع نصب مجدد سیستم‌عامل می‌شود تا زمانی که آن را غیرفعال کنید.' : 'پس از غیرفعال‌سازی حفاظت، نصب مجدد سیستم‌عامل مجاز می‌شود. این تغییر به‌خودی‌خود نصب مجدد انجام نمی‌دهد.'}</p>
+      </> : <p role="alert">نوع تغییر حفاظت قابل تأیید نیست؛ وضعیت سرور را دوباره بررسی کنید.</p>)}
       {(destructive || forced) && <p className="server-danger-note"><TriangleAlert size={20} />{destructive ? 'این عملیات داده‌های دیسک سرور را از بین می‌برد و بازگشت‌پذیر نیست.' : 'این فرمان بدون انتظار برای خاموش‌شدن نرم سیستم‌عامل اجرا می‌شود و ممکن است داده‌های ذخیره‌نشده از بین بروند.'}</p>}
       {action === 'delete' && <p className="server-notice">تمدید و برداشت‌های آیندهٔ همین سرور فقط پس از تأیید حذف در Hetzner به‌طور نهایی متوقف می‌شوند. منابع مستقل مانند Volume، Snapshot و IP ممکن است باقی بمانند. برای دورهٔ پیش‌پرداخت، بازپرداخت خودکار انجام نمی‌شود.</p>}
       <Input autoComplete="off" label={`برای تأیید، ${server.name} را دقیق تایپ کنید`} value={typed} onChange={event => setTyped(event.target.value)} disabled={busy} dir="ltr" />
