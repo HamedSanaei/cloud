@@ -31,7 +31,7 @@ export function createLogger(name = 'cloud-server') {
         'req.headers["x-system-proof"]',
         '*.merchant', '*.encrypted', '*.proof', '*.secret', '*.code', '*.recoveryCodes', '*.STORE_SECRET_KEY', '*.SYSTEM_BACKUP_KEY',
         '*.TABAPAY_MERCHANT',
-        '*.password',
+        '*.password', '*.currentPassword', '*.totp',
         '*.passwordHash',
         '*.token',
         '*.tokenHash',

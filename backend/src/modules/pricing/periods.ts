@@ -14,7 +14,7 @@ export function nativePeriod(option: ProviderBillingOption): RetailPeriod | null
 }
 
 /** Exact integer representation; provider currency supports eight decimal places. */
-function scaledDecimal(value: string, scale: number): bigint {
+export function scaledDecimal(value: string, scale: number): bigint {
   const match = /^(\d+)(?:\.(\d+))?$/.exec(value)
   if (!match || (match[2]?.length ?? 0) > scale) throw new ValidationError('قیمت سرویس‌دهنده نامعتبر است')
   return BigInt(match[1]!) * 10n ** BigInt(scale) + BigInt((match[2] ?? '').padEnd(scale, '0') || '0')
@@ -52,12 +52,12 @@ export function offeredPeriods(options: ProviderBillingOption[]): RetailPeriod[]
     try {
       exactProviderCents(option)
       periods.add(period)
-      if (period === 'hourly') periods.add('daily')
     } catch (error) {
       if (!(error instanceof ValidationError)) throw error
     }
   }
-  return (['hourly', 'daily', 'monthly'] as const).filter((period) => periods.has(period))
+  // DAILY remains understood for historical subscriptions, never offered anew.
+  return (['hourly', 'monthly'] as const).filter((period) => periods.has(period))
 }
 
 /** Fractional cents -> rials, with decimal scaling and no binary-float multiplication. */

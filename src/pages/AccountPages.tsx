@@ -1,3 +1,4 @@
+import { AccountPasswordSettings } from '../components/AccountPasswordSettings'
 import { Clock3, Laptop, LogOut, MapPin, Save, ShieldCheck, UserRound, UserRoundCheck } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { Button } from '../components/ui/Button'
@@ -222,6 +223,7 @@ export function SettingsPage() {
   return (
     <div className="page-stack">
       <PageHeader title="تنظیمات" subtitle="ترجیحات نمایش و تنظیمات حساب کاربری" />
+      <AccountPasswordSettings />
       <Card className="settings-card">
         <SectionHeading title="منطقه زمانی" icon={<MapPin size={20} />} />
         <Select label="منطقه زمانی" value={timezone} onChange={(event) => setTimezone(event.target.value)} hint="تمام تاریخ‌ها و زمان‌ها بر اساس این منطقه زمانی نمایش داده می‌شوند.">

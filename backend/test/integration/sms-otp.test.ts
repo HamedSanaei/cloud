@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { authChallenges } from '../../src/db/schema.js'
-import { issueChallenge, verifyChallengeCode } from '../../src/modules/auth/challenges.js'
+import { assertCanResend, issueChallenge, verifyChallengeCode } from '../../src/modules/auth/challenges.js'
 import { dbAvailable, getTestContext, truncateAll } from '../helpers.js'
 
 describe.skipIf(!dbAvailable)('SMS challenge budget and rotation', () => {
@@ -39,4 +39,16 @@ describe.skipIf(!dbAvailable)('SMS challenge budget and rotation', () => {
     const results = await Promise.allSettled([verifyChallengeCode(ctx.db, second.token, '123456'), verifyChallengeCode(ctx.db, second.token, '123456')])
     expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
   })
+  it('signals expired resends with a machine-readable code and permits a fresh budget only after expiry', async () => {
+    const first = await issueChallenge(ctx.db, input('+989000000015'))
+    await expect(verifyChallengeCode(ctx.db, first.token, '000000')).rejects.toMatchObject({ details: { attemptsRemaining: 2 } })
+    const row = (await ctx.db.query.authChallenges.findFirst({ where: t => eq(t.identifier, '+989000000015') }))!
+    await ctx.db.update(authChallenges).set({ expiresAt: new Date(Date.now() - 1), resendAfter: new Date(0) }).where(eq(authChallenges.id, row.id))
+    await expect(assertCanResend(ctx.db, first.token)).rejects.toMatchObject({ status: 410, code: 'challenge_expired' })
+    const fresh = await issueChallenge(ctx.db, input('+989000000015'))
+    expect(fresh.token).not.toBe(first.token)
+    const current = await verifyChallengeCode(ctx.db, fresh.token, '123456')
+    expect(current.attempts).toBe(0)
+  })
+
 })

@@ -59,7 +59,7 @@ describe.skipIf(!dbAvailable)('USD = USDT pricing with a local-currency ledger',
     for (const providerCurrency of ['USD', 'USDT']) {
       const snapshot = await computePriceSnapshot(ctx.db, { provider: 'leaseweb.hourly', providerCurrency, billingOption: { billingCycle: 'hourly', amount: '0.0055' }, fxRate: '1' })
       expect(snapshot.subtotalRial).toBe(14513)
-      expect(snapshot.totalRial).toBe(14510)
+      expect(snapshot.totalRial).toBe(14513)
     }
 
     const mock = ctx.mockProvider
@@ -76,10 +76,10 @@ describe.skipIf(!dbAvailable)('USD = USDT pricing with a local-currency ledger',
     await creditWallet(ctx.db, user.id, wallet.id, quote.totalRial * 168, { type: 'manual_credit' })
     const { order } = await createOrderFromQuote(ctx.db, { userId: user.id, quoteId: quote.id, walletId: wallet.id, hostname: 'dollar-funded' })
     expect(order.currency).toBe('IRR')
-    expect(order.totalRial).toBe(14510)
+    expect(order.totalRial).toBe(14513)
     expect((await ctx.db.query.wallets.findFirst({ where: (t) => eq(t.id, wallet.id) }))!.balanceRial).toBe(quote.totalRial * 167)
     const debit = await ctx.db.query.walletTransactions.findFirst({ where: (t) => and(eq(t.walletId, wallet.id), eq(t.type, 'purchase')) })
-    expect(debit!.amountRial).toBe(-14510)
+    expect(debit!.amountRial).toBe(-14513)
   })
 
   it('refreshes an expired Tether quote instead of using a fiat-dollar rate', async () => {

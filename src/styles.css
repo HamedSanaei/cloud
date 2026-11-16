@@ -2243,3 +2243,7 @@ textarea:focus-visible {
 @media (max-width: 520px) {
   .recovery-code-box > div { grid-template-columns: 1fr; }
 }
+
+.storefront-dual-prices{display:flex;flex-direction:column;gap:.5rem;font-size:1rem;line-height:1.9}
+
+.billing-period-explanation{font-size:1rem;line-height:2;color:var(--ink);text-align:right}

@@ -19,7 +19,7 @@ export interface ServerDetail extends Server {
     outgoingTrafficBytes: number | null; includedTrafficBytes: number | null; trafficPeriod: string | null;
     protection: { delete: boolean; rebuild: boolean } | null; rescueEnabled: boolean | null; isoId: string | null; backupWindow: string | null;
     volumes: number[]; privateNetworks: Array<{ id: number; ip: string }>; firewalls: Array<{ id: number; status: string }>; floatingIps: number[] }
-  billing: { subscriptionId: string | null; state: string | null; period: string | null; customerPriceRial: number | null; nextInvoiceAt: string | null;
+  billing: { comparisonPrices?: Array<{ period: string; totalRial: number }>; subscriptionId: string | null; state: string | null; period: string | null; customerPriceRial: number | null; nextInvoiceAt: string | null;
     currentPeriodEnd: string | null; autoRenew: boolean; futureDebits: 'stopped' | 'held_pending_confirmation' | 'normal'; refundPolicy: string;
     providerQuotedRate: { currency: string; amountCents: number; period: string; observedAt: string } | null }
   capabilities: { power: boolean; resize: boolean; rebuild: boolean; resetPassword: boolean; console: boolean; rescue: boolean; protection: boolean;

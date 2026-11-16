@@ -7,7 +7,7 @@ import path from 'node:path'
 
 let sink: DbClient | undefined, inFlight = 0, nextCleanup = 0
 export function installEventSink(db: DbClient) { sink = db }
-const safeKeys = new Set(['userId', 'walletId', 'adjustmentId', 'backupId', 'requestId', 'requestedBy', 'approvedBy', 'originalActorId', 'amountRial', 'beforeRial', 'afterRial', 'direction', 'status', 'result', 'code', 'queue', 'jobId', 'operation', 'enabled', 'sandbox', 'method', 'route', 'httpStatus', 'elapsedMs', 'integration', 'profileId', 'revision', 'orderId', 'operationId'])
+const safeKeys = new Set(['key', 'previousEnabled', 'previousApproval', 'approval', 'version', 'segments', 'units', 'eventId', 'userId', 'walletId', 'adjustmentId', 'backupId', 'requestId', 'requestedBy', 'approvedBy', 'originalActorId', 'amountRial', 'beforeRial', 'afterRial', 'direction', 'status', 'result', 'code', 'queue', 'jobId', 'operation', 'enabled', 'sandbox', 'method', 'route', 'httpStatus', 'elapsedMs', 'integration', 'profileId', 'revision', 'orderId', 'operationId'])
 export function safeMetadata(value: unknown) {
   if (!value || typeof value !== 'object') return {}
   return Object.fromEntries(Object.entries(value).filter(([k, v]) => safeKeys.has(k) && (k !== 'code' || typeof v === 'string' && /^[a-z][a-z0-9_]{0,80}$/i.test(v)) && (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string' && !/^eyJ|^Bearer/i.test(v) && /^[a-zA-Z0-9_:/ .-]{1,100}$/.test(v))))

@@ -78,7 +78,8 @@ export const registerFrontendCompatRoutes: FastifyPluginAsync<{ ctx: AppContext 
     const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
     const ticket = await db.query.tickets.findFirst({ where: t => eq(t.id, id) })
     if (!ticket || ticket.userId !== user.id) throw new NotFoundError('تیکت یافت نشد.')
-    return { data: ticketToDto(ticket) }
+    const replies = await db.query.ticketReplies.findMany({ where: t => eq(t.ticketId, id), orderBy: (t, { asc }) => [asc(t.createdAt)], columns: { id: true, body: true, createdAt: true } })
+    return { data: { ...ticketToDto(ticket), replies } }
   })
   app.get('/tickets', async (request) => {
     const user = requireUser(request)

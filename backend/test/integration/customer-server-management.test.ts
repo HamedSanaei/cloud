@@ -426,7 +426,7 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     actions.get(actionId)!.status = 'success'; await handleServerSync(ctx, { serverId: p.server.id })
     const confirmed = (await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.id, id) }))!
     expect(managementDto(confirmed)).toMatchObject({ resize: { powerBefore: 'suspended', powerAfter: 'active', startedAfterResize: true } })
-    expect((await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.id, sub.id) }))!.priceRial).toBe(preview.priceRial)
+    expect((await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.id, sub.id) }))!.priceRial).toBe(sub.priceRial)
     expect((await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, p.wallet.id) }))!.balanceRial).toBe(balance)
     expect((await ctx.db.query.invoices.findFirst({ where: t => eq(t.orderId, p.orderId) }))!.totalRial).toBe(sub.priceRial)
     expect(await ctx.db.query.subscriptionEvents.findFirst({ where: t => eq(t.subscriptionId, sub.id) })).toBeTruthy()

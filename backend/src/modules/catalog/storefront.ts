@@ -103,7 +103,7 @@ export async function getStorefront(db: DbClient, admin = false, providerFilter?
         name: provider.displayName,
         logo: `/providers/${provider.id}.svg`,
         locations: locations.filter((location) => location.provider === provider.id && codes.has(location.code)).map((location) => ({ code: location.code, country: location.country, city: location.city })),
-        billingPeriods: (['hourly', 'daily', 'monthly'] as const).filter((period) => periods.has(period)),
+        billingPeriods: (['hourly', 'monthly'] as const).filter((period) => periods.has(period)),
       }
     }),
     offers,

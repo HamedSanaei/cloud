@@ -1,3 +1,4 @@
+import { confirmedNoCreditStop } from '../notifications/sms-events.js'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray } from 'drizzle-orm'
 import type { DbClient, DbOrTx } from '../../db/index.js'
@@ -112,6 +113,7 @@ export async function updateServerFromView(db: DbOrTx, serverId: string, view: P
       }
     }
     await tx.update(servers).set(update).where(eq(servers.id, serverId))
+    await confirmedNoCreditStop(tx, server, view.state === 'suspended')
     if (server.subscriptionId && (view.state === 'suspended' || (view.state === 'active' && !billingBlocked))) {
       // Hourly subscriptions do not keep charging while the provider proves the server is off.
       await tx.update(subscriptions).set({ status: view.state === 'active' ? 'active' : 'suspended', updatedAt: new Date() }).where(and(

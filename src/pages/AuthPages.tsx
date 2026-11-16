@@ -13,6 +13,7 @@ import {
   resetPassword,
   startEmailLogin,
   startPasswordRecovery,
+  startPhonePasswordRecovery,
   startPhoneLogin,
   startPhoneRegistration,
   startRegistration,
@@ -73,6 +74,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
   const [success, setSuccess] = useState(false)
   const [countdown, setCountdown] = useState(0)
   const [otpLocked, setOtpLocked] = useState(false)
+  const [challengeExpired, setChallengeExpired] = useState(false)
   const [receivedSms, setReceivedSms] = useState<{ token: string; code: string; controller: AbortController }>()
   const smsReader = useRef<AbortController | null>(null)
   const sending = useRef<AbortController | null>(null)
@@ -96,6 +98,10 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
 
   useEffect(() => {
     setCountdown(challenge?.resendAfter ?? 0)
+    setChallengeExpired(false)
+    if (!challenge || challenge.challengeType === 'totp' || !Number.isFinite(challenge.expiresIn)) return
+    const timer = window.setTimeout(() => setChallengeExpired(true), challenge.expiresIn * 1000)
+    return () => window.clearTimeout(timer)
   }, [challenge])
 
   useEffect(() => {
@@ -151,7 +157,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
       let result: AuthChallenge | AuthSession
       if (intent === 'register' && method === 'phone') result = await startPhoneRegistration({ mobile, firstName, lastName })
       else if (intent === 'register') result = await startRegistration({ email, password, firstName, lastName })
-      else if (intent === 'forgot') result = await startPasswordRecovery(email)
+      else if (intent === 'forgot') result = method === 'phone' ? await startPhonePasswordRecovery(mobile) : await startPasswordRecovery(email)
       else if (method === 'phone') result = await requestSms(() => startPhoneLogin(mobile))
       else result = await startEmailLogin(email, password)
       if (controller.signal.aborted) return
@@ -179,7 +185,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
     try {
       if (intent === 'forgot') {
         if (password !== confirmPassword) throw new Error('تکرار رمز عبور با رمز اصلی یکسان نیست.')
-        await resetPassword(challenge.challengeToken, submittedCode, password)
+        await resetPassword(challenge.challengeToken, submittedCode, password, recoveryCode || undefined)
         setSuccess(true)
         window.setTimeout(() => navigate('/login', { replace: true }), 1000)
       } else if (challenge.challengeType === 'totp' && recoveryMode) {
@@ -198,6 +204,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
       }
     } catch (caught) {
       if (controller.signal.aborted || !mounted.current) return
+      if (caught instanceof ApiError && caught.status === 410) { setChallengeExpired(true); smsReader.current?.abort() }
       let message = caught instanceof Error ? caught.message : 'کد تأیید معتبر نیست.'
       if (challenge.challengeType === 'sms') {
         setCode('')
@@ -244,6 +251,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
       setChallenge(next)
       setCode('')
     } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 410) setChallengeExpired(true)
       if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : 'ارسال مجدد ناموفق بود.')
     } finally {
       if (sending.current === controller) {
@@ -304,10 +312,10 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
               </div>
               {!challenge ? (
                 <form className="auth-form" onSubmit={submitEntry}>
-                  {intent !== 'forgot' && (
+                  {(
                     <div className="auth-method-tabs" role="tablist" aria-label={intent === 'register' ? 'روش ثبت‌نام' : 'روش ورود'}>
                       <button aria-selected={method === 'phone'} className={method === 'phone' ? 'active' : ''} disabled={busy} onClick={() => { setMethod('phone'); setError('') }} role="tab" type="button"><Phone size={17} /> {intent === 'register' ? 'ثبت‌نام با شماره همراه' : 'شماره همراه'}</button>
-                      <button aria-selected={method === 'email'} className={method === 'email' ? 'active' : ''} disabled={busy} onClick={() => { setMethod('email'); setError('') }} role="tab" type="button"><Mail size={17} /> {intent === 'register' ? 'ثبت‌نام با ایمیل' : 'ایمیل و رمز عبور'}</button>
+                      <button aria-selected={method === 'email'} className={method === 'email' ? 'active' : ''} disabled={busy} onClick={() => { setMethod('email'); setError('') }} role="tab" type="button"><Mail size={17} /> {intent === 'register' ? 'ثبت‌نام با ایمیل' : intent === 'forgot' ? 'ایمیل بازیابی' : 'ایمیل و رمز عبور'}</button>
                     </div>
                   )}
                   {intent === 'register' && (
@@ -316,7 +324,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
                       <label className="auth-field"><span>نام خانوادگی</span><input autoComplete="family-name" onChange={(e) => setLastName(e.target.value)} value={lastName} /></label>
                     </div>
                   )}
-                  {method === 'phone' && intent !== 'forgot' ? (
+                  {method === 'phone' ? (
                     <label className="auth-field"><span>شماره همراه</span><input autoComplete="tel" dir="ltr" inputMode="tel" onChange={(e) => setMobile(e.target.value)} placeholder="09123456789" required value={mobile} /></label>
                   ) : (
                     <label className="auth-field"><span>آدرس ایمیل</span><input autoComplete="email" dir="ltr" onChange={(e) => setEmail(e.target.value)} placeholder="example@email.com" required type="email" value={email} /></label>
@@ -345,13 +353,14 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
                       <label className="auth-field"><span>تکرار رمز جدید</span><input autoComplete="new-password" dir="ltr" minLength={8} onChange={(e) => setConfirmPassword(e.target.value)} required type="password" value={confirmPassword} /></label>
                     </>
                   )}
+                  {intent === 'forgot' && <label className="auth-field"><span>کد برنامهٔ دومرحله‌ای (اگر فعال است)</span><input inputMode="numeric" dir="ltr" value={recoveryCode} onChange={e => setRecoveryCode(e.target.value)} autoComplete="off" /></label>}
                   {challenge.developmentCode && <p className="auth-dev-code">حالت توسعه — کد: <b dir="ltr">{challenge.developmentCode}</b></p>}
                   {error && <p className="auth-error" role="alert">{error}</p>}
                   <button className="auth-primary-button" disabled={busy || success || otpLocked || (!recoveryMode && code.length !== 6)} type="submit">{busy ? <RefreshCw className="spin" size={19} /> : intent === 'forgot' ? 'ثبت رمز عبور جدید' : intent === 'register' ? 'تأیید و تکمیل ثبت‌نام' : 'تأیید هویت و ورود'}</button>
                   {challenge.challengeType === 'totp' ? (
                     <button className="auth-secondary-button" disabled={busy} onClick={() => { setRecoveryMode((value) => !value); setError('') }} type="button"><LockKeyhole size={17} /> {recoveryMode ? 'استفاده از کد برنامه' : 'استفاده از کد بازیابی'}</button>
                   ) : (
-                    <button className="auth-resend" disabled={busy || success || otpLocked || countdown > 0} onClick={resend} type="button"><RefreshCw size={16} /> {countdown > 0 ? `ارسال مجدد تا ${countdown} ثانیه دیگر` : 'ارسال مجدد کد'}</button>
+                    challengeExpired ? <button className="auth-resend" disabled={busy} onClick={() => { smsReader.current?.abort(); setChallenge(null); setCode(''); setError(''); setOtpLocked(false); setReceivedSms(undefined) }} type="button">درخواست منقضی شده؛ شروع دوباره و دریافت کد جدید</button> : <button className="auth-resend" disabled={busy || success || otpLocked || countdown > 0} onClick={resend} type="button"><RefreshCw size={16} /> {countdown > 0 ? `ارسال مجدد تا ${countdown} ثانیه دیگر` : 'ارسال مجدد کد'}</button>
                   )}
                   <button className="auth-back" disabled={busy || success} onClick={() => { cancelSmsRead(); setChallenge(null); setCode(''); setError(''); setOtpLocked(false) }} type="button">اصلاح اطلاعات ورود</button>
                 </form>

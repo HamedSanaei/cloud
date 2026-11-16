@@ -15,7 +15,7 @@ export function readCheckoutDraft(userId?: string): CheckoutDraft | null {
     for (const key of ['providerId', 'location', 'offerId', 'os', 'name', 'purchaseKey']) {
       if (typeof data[key] !== 'string' || data[key].length > 200) return null
     }
-    if (!['', 'hourly', 'daily', 'monthly'].includes(data.billingPeriod)) return null
+    if (!['', 'hourly', 'monthly'].includes(data.billingPeriod)) return null
     return data as CheckoutDraft
   } catch { return null }
 }
@@ -27,7 +27,7 @@ export function clearCheckoutDraft(userId?: string) {
   if (userId) try { sessionStorage.removeItem(storageKey(userId)) } catch { /* No stored draft. */ }
 }
 export function minimumCreationBalance(totalRial: number, period: BillingPeriod): number {
-  return totalRial * ({ hourly: 168, daily: 7, monthly: 1 }[period])
+  return totalRial * ({ hourly: 168, monthly: 1 }[period])
 }
 export interface FundingShortfall { balanceRial: number; requiredBalanceRial: number; shortfallRial: number; orderTotalRial: number }
 export function checkoutFailure(error: unknown): { message: string; funding?: FundingShortfall } {

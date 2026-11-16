@@ -446,6 +446,7 @@ export const quotes = pgTable(
     providerCurrency: varchar('provider_currency', { length: 8 }).notNull(),
     // Exact provider cents, including fractional cents for hourly cloud prices.
     providerAmountCents: numeric('provider_amount_cents', { precision: 20, scale: 6, mode: 'number' }).notNull(),
+    pricingSnapshot: jsonb('pricing_snapshot'),
     fxRate: numeric('fx_rate', { precision: 20, scale: 6 }).notNull(),
     markupPercent: numeric('markup_percent', { precision: 10, scale: 4 }).notNull(),
     markupFixedRial: bigint('markup_fixed_rial', { mode: 'number' }).notNull(),
@@ -808,6 +809,15 @@ export const tickets = pgTable(
   (t) => [index('tickets_user_idx').on(t.userId, t.createdAt)],
 )
 
+export const ticketReplies = pgTable('ticket_replies', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ticketId: uuid('ticket_id').notNull().references(() => tickets.id, { onDelete: 'cascade' }),
+  actorId: uuid('actor_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  requestId: uuid('request_id').notNull().unique(),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
 export const chargeRequests = pgTable(
   'charge_requests',
   {
@@ -851,6 +861,38 @@ export const walletPayments = pgTable('wallet_payments', {
 // ---------------------------------------------------------------------------
 // Settings (admin-configurable key/value)
 // ---------------------------------------------------------------------------
+export const smsPreferences = pgTable('sms_preferences', {
+  key: varchar('key', { length: 64 }).primaryKey(),
+  enabled: boolean('enabled').notNull(),
+  approval: varchar('approval', { length: 32 }).notNull(),
+  patternHash: text('pattern_hash').notNull(),
+  version: integer('version').notNull().default(0),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+export const smsOutbox = pgTable('sms_outbox', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  eventId: text('event_id').notNull(),
+  key: varchar('key', { length: 64 }).notNull(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  recipientHash: text('recipient_hash').notNull(),
+  maskedRecipient: text('masked_recipient').notNull(),
+  values: jsonb('values').$type<Record<string, string>>().notNull(),
+  status: varchar('status', { length: 40 }).notNull(),
+  segments: integer('segments'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  attemptedAt: timestamp('attempted_at', { withTimezone: true }),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+}, t => [uniqueIndex('sms_outbox_event_recipient').on(t.eventId, t.key, t.userId), index('sms_outbox_pending').on(t.status, t.createdAt)])
+
+export const serviceIncidents = pgTable('service_incidents', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  serverId: uuid('server_id').notNull().references(() => servers.id, { onDelete: 'restrict' }),
+  openedBy: uuid('opened_by').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  note: text('note').notNull(),
+  openedAt: timestamp('opened_at', { withTimezone: true }).notNull().defaultNow(),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+}, t => [uniqueIndex('service_incidents_open').on(t.serverId).where(sql`${t.resolvedAt} is null`)])
+
 export const settings = pgTable('settings', {
   key: varchar('key', { length: 100 }).primaryKey(),
   value: jsonb('value').notNull(),

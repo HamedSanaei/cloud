@@ -1,3 +1,4 @@
+import { registerSmsAdmin } from '../notifications/admin.js'
 import { createReadStream } from 'node:fs'
 import type { FastifyPluginAsync } from 'fastify'
 import { and, desc, eq, sql } from 'drizzle-orm'
@@ -65,6 +66,7 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     systemAdmin(admin)
   })
   app.addHook('onClose', waitBackupJobs)
+  registerSmsAdmin(app, db)
   app.get('/capabilities', async request => {
     const c = getConfig(), user = requireAdmin(request)
     let allowed = true

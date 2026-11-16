@@ -21,7 +21,7 @@ const createQuoteSchema = z.object({
   billingOption: billingOptionSchema,
   operatingSystem: z.string().optional(),
   serviceLevel: z.object({ id: z.string().min(1), label: z.string().optional() }).optional(),
-  billingPeriod: z.enum(['hourly', 'daily', 'monthly']).optional(),
+  billingPeriod: z.enum(['hourly', 'monthly']).optional(),
 })
 
 export const registerQuoteRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {

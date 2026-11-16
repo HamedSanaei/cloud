@@ -1,8 +1,10 @@
+import { enqueueSms } from '../notifications/sms.js'
+import { smsToman } from '../notifications/sms-events.js'
 import { eq, sql } from 'drizzle-orm'
-import { randomInt } from 'node:crypto'
+import { randomInt, randomUUID, createHash } from 'node:crypto'
 import type { DbClient, DbOrTx } from '../../db/index.js'
 import { invoices, invoiceItems, orderEvents, orderItems, orders } from '../../db/schema.js'
-import { ConflictError, NotFoundError, ValidationError } from '../../lib/errors.js'
+import { AppError, ConflictError, NotFoundError, ValidationError } from '../../lib/errors.js'
 import { writeAudit } from '../audit/service.js'
 import { assertQuoteValid, getQuote, lockQuote, markQuoteAccepted } from '../quotes/service.js'
 import { applyWalletTransaction, getWallet } from '../wallets/service.js'
@@ -61,6 +63,7 @@ export async function transitionOrder(
 }
 
 async function notifyOrder(db: DbOrTx, order: typeof orders.$inferSelect, status: OrderStatus) {
+  if (status === 'paid') await enqueueSms(db, 'orderPaid', order.userId, `order:${order.id}:paid`, { orderNumber: order.orderNumber, amount: smsToman(order.totalRial) })
   const titles = { paid: 'پرداخت سفارش تأیید شد', awaiting_payment: 'سفارش در انتظار پرداخت است',
     failed: 'ایجاد سرور ناموفق بود', requires_review: 'سفارش نیازمند بررسی است', cancelled: 'سفارش لغو شد', refunded: 'وجه سفارش بازگشت داده شد' } as const
   if (!(status in titles)) return
@@ -129,6 +132,7 @@ export async function createOrderFromQuote(db: DbClient, input: CreateOrderInput
     // never consume the same quote.
     const lockedQuote = await lockQuote(tx, quote.id)
     await assertQuoteValid(tx, lockedQuote)
+    if (!['HOURLY', 'MONTHLY'].includes(lockedQuote.billingInterval)) throw new ValidationError('خرید جدید فقط ساعتی یا ماهانه امکان‌پذیر است')
     await markQuoteAccepted(tx, lockedQuote.id)
 
     const locationRow = lockedQuote.locationId
@@ -194,7 +198,7 @@ export async function createOrderFromQuote(db: DbClient, input: CreateOrderInput
         discountRial: 0,
         totalRial: lockedQuote.totalRial,
         description: `سفارش ${orderNumber} — VPS ${lockedQuote.providerProductId}`,
-        snapshot: { quoteId: lockedQuote.id, fxRate: lockedQuote.fxRate, providerAmountCents: lockedQuote.providerAmountCents },
+        snapshot: { ...(lockedQuote.pricingSnapshot as Record<string, unknown> ?? {}), quoteId: lockedQuote.id, fxRate: lockedQuote.fxRate, providerAmountCents: lockedQuote.providerAmountCents, markupPercent: lockedQuote.markupPercent, markupFixedRial: lockedQuote.markupFixedRial, taxPercent: lockedQuote.taxPercent, subtotalRial: lockedQuote.subtotalRial, taxRial: lockedQuote.taxRial, totalRial: lockedQuote.totalRial },
         issuedAt: new Date(),
         dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         paidAt: paying ? new Date() : null,
@@ -225,6 +229,8 @@ export async function createOrderFromQuote(db: DbClient, input: CreateOrderInput
       })
     }
 
+    await enqueueSms(tx, 'orderCreated', order.userId, `order:${order.id}:created`, { orderNumber })
+    await enqueueSms(tx, 'invoiceIssued', order.userId, `invoice:${invoice.id}:issued`, { invoiceNumber, amount: smsToman(invoice.totalRial) })
     await notifyOrder(tx, order, order.status)
     return { order, invoice, created: true }
   })
@@ -242,7 +248,7 @@ export async function createOrderFromQuote(db: DbClient, input: CreateOrderInput
 // ---------------------------------------------------------------------------
 // Pay an awaiting_payment order from a wallet
 // ---------------------------------------------------------------------------
-export async function payOrder(
+async function payOrderAttempt(
   db: DbClient,
   input: { userId: string; orderId: string; walletId?: string; idempotencyKey?: string },
 ) {
@@ -257,6 +263,10 @@ export async function payOrder(
     const [txOrder] = await tx.select().from(orders).where(eq(orders.id, input.orderId)).for('update')
     if (txOrder?.status === 'paid') return txOrder
     if (!txOrder || txOrder.status !== 'awaiting_payment') throw new ConflictError('این سفارش قابل پرداخت نیست')
+    if (txOrder.billingInterval === 'HOURLY') {
+      const quote = txOrder.quoteId ? await tx.query.quotes.findFirst({ where: t => eq(t.id, txOrder.quoteId!) }) : null
+      if (!quote || quote.expiresAt <= new Date()) throw new ConflictError('قیمت سفارش ساعتی منقضی شده است؛ پیش از پرداخت، سفارش تازه با قیمت معتبر ثبت کنید')
+    }
     await assertProviderPurchaseAllowed(tx, txOrder.provider, input.userId)
     await assertCreationFunding(tx, { userId: input.userId, walletId: wallet.id, totalRial: txOrder.totalRial, billingInterval: txOrder.billingInterval })
 
@@ -341,4 +351,17 @@ export async function getOrder(db: DbClient, userId: string, orderId: string) {
 
 export async function markOrderError(db: DbClient, orderId: string, error: string) {
   await db.update(orders).set({ error, updatedAt: new Date() }).where(eq(orders.id, orderId))
+}
+
+/** A rejected wallet payment is definitive; timeouts/unknown provider results are not. */
+export async function payOrder(db: DbClient, input: { userId: string; orderId: string; walletId?: string; idempotencyKey?: string }) {
+  try { return await payOrderAttempt(db, input) }
+  catch (error) {
+    if (error instanceof AppError && error.code === 'insufficient_funds') await db.transaction(async tx => {
+      const [order] = await tx.select().from(orders).where(eq(orders.id, input.orderId)).for('share')
+      if (order?.userId === input.userId && order.status === 'awaiting_payment') await enqueueSms(tx, 'orderPaymentFailed', order.userId,
+        `order:${order.id}:payment-rejected:${createHash('sha256').update(input.idempotencyKey ?? randomUUID()).digest('hex')}`, { orderNumber: order.orderNumber })
+    })
+    throw error
+  }
 }

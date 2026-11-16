@@ -33,7 +33,11 @@ export const registerUserRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
     const updates: Record<string, unknown> = {}
     if (input.firstName !== undefined) updates.firstName = input.firstName
     if (input.lastName !== undefined) updates.lastName = input.lastName
-    if (input.mobile !== undefined) updates.mobile = input.mobile
+    if (input.mobile !== undefined) {
+      const current = await db.query.users.findFirst({ where: t => eq(t.id, user.id) })
+      updates.mobile = input.mobile
+      if (input.mobile !== current?.mobile) updates.mobileVerifiedAt = null
+    }
     if (input.nationalCode !== undefined) updates.nationalCode = input.nationalCode
     if (input.timezone !== undefined) updates.timezone = input.timezone
     updates.updatedAt = new Date()

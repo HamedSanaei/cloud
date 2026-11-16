@@ -51,7 +51,7 @@ export function SystemSettingsLayout() {
   const isOutbound = useLocation().pathname.replace(/\/$/, '').endsWith('/outbound')
   return <div className="page-stack system-settings"><header><h1><Settings2 /> تنظیمات فروشگاه</h1><p>درگاه، رویدادها، پشتیبان‌گیری و عملیات مالی امن</p></header>
     <nav className="system-tabs" aria-label="بخش‌های تنظیمات فروشگاه">{[
-      { to: 'gateway', label: 'درگاه‌ها', icon: CreditCard }, { to: 'logs', label: 'لاگ‌ها', icon: FileClock },
+      { to: 'sms', label: 'پیامک‌های پارس‌گرین', icon: Settings2 }, { to: 'gateway', label: 'درگاه‌ها', icon: CreditCard }, { to: 'logs', label: 'لاگ‌ها', icon: FileClock },
       { to: 'backups', label: 'پشتیبان‌گیری و بازیابی', icon: Database }, { to: 'finance', label: 'عملیات مالی کاربران', icon: WalletCards },
       { to: 'iran-tariffs', label: 'تعرفهٔ سرور ایران', icon: Settings2 },
       ...(capabilities.data?.primaryIpv4Pricing ? [{ to: 'primary-ipv4', label: 'تعرفهٔ تعویض IPv4', icon: Settings2 }] : []),

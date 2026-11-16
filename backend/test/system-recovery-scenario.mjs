@@ -8,7 +8,7 @@ import { eq } from 'drizzle-orm'
 import { loadConfig, getConfig } from './dist/config.js'
 import { createDb } from './dist/db/index.js'
 import { migrate } from './dist/db/migrate.js'
-import { users, tickets, orders, servers, serverSecrets } from './dist/db/schema.js'
+import { users, tickets, orders, servers, serverSecrets, smsOutbox } from './dist/db/schema.js'
 import { encryptOutput } from './dist/modules/servers/secrets.js'
 import { buildApp } from './dist/app.js'
 import { createLogger } from './dist/logger.js'
@@ -85,6 +85,14 @@ try {
     const job = await requestRestore(db, a, rehearsal.id, await authorize(a, 'backup.restore', { rehearsalId: rehearsal.id, confirm: 'RESTORE DATABASE' }))
     return jobDone(job.id)
   }
+  // A real sending receipt must block rewind even when its template is now off.
+  // This is a synthetic receipt inside the disposable DB; no SMS is transmitted.
+  const [receipt] = await db.insert(smsOutbox).values({ key: 'newLogin', userId: customer.id, eventId: 'fixture-accepted-login',
+    recipientHash: 'fixture-only', maskedRecipient: '09***001', values: { ip: '192.0.2.15' }, status: 'accepted', segments: 1 }).returning()
+  const refusedSmsRewind = await restoreAttempt()
+  assert.equal(refusedSmsRewind.status, 'failed')
+  assert.match(refusedSmsRewind.message, /از زمان Backup تغییر کرده/)
+  await db.delete(smsOutbox).where(eq(smsOutbox.id, receipt.id))
   // Simulate a lost success acknowledgement AFTER the primary restore commits.
   // The fallback must actually restore the pre-operation ticket, not just report
   // that a failed pg_restore left its transaction untouched.

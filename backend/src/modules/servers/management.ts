@@ -293,7 +293,11 @@ async function applyResizeSnapshot(tx: DbOrTx, server: Server, op: Operation, ob
   if (!input?.serverType || input.serverType !== observedType || !Number.isSafeInteger(input.priceRial) || !input.priceRial || !server.subscriptionId) throw new ConflictError('پلن یا پیش‌نمایش قیمت با نتیجهٔ ارائه‌دهنده مطابقت ندارد')
   const [sub] = await tx.select().from(subscriptions).where(eq(subscriptions.id, server.subscriptionId)).for('update')
   if (!sub || sub.status === 'cancelled') throw new ConflictError('اشتراک دیگر قابل تغییر نیست')
-  await tx.update(subscriptions).set({ priceRial: input.priceRial, updatedAt: new Date() }).where(eq(subscriptions.id, sub.id))
+  // Hourly/monthly paid amounts stay immutable. Renewal reads this confirmed
+  // operation's quote as the new cost basis at the next boundary.
+  if (sub.billingInterval !== 'HOURLY' && sub.billingInterval !== 'MONTHLY') {
+    await tx.update(subscriptions).set({ priceRial: input.priceRial, updatedAt: new Date() }).where(eq(subscriptions.id, sub.id))
+  }
   await tx.update(servers).set({ providerProductId: input.serverType + ':' + server.providerProductId.split(':').at(-1) }).where(eq(servers.id, server.id))
   await tx.insert(subscriptionEvents).values({ subscriptionId: sub.id, event: 'resize_price_confirmed', metadata: { operationId: op.id, quoteId: input.quoteId, previousPriceRial: sub.priceRial, futurePriceRial: input.priceRial, nextInvoiceAt: sub.nextInvoiceAt.toISOString(), settledPeriodsUnchanged: true } })
 }

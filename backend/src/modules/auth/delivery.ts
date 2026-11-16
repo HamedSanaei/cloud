@@ -1,8 +1,9 @@
 import nodemailer from 'nodemailer'
 import { getConfig, isProduction } from '../../config.js'
-import { ProviderPermanentError, ProviderRetryableError } from '../../lib/errors.js'
+import { ProviderPermanentError, ProviderRetryableError, ProviderUnknownError } from '../../lib/errors.js'
 import { createLogger } from '../../logger.js'
 import { outboundFetch } from '../outbound/client.js'
+import { smsSegments } from './parsgreen-templates.js'
 
 // SOAP 1.1 contract published by /Api/SendSMS.asmx?op=SendGroupSMS.
 const PARSGREEN_SOAP_NAMESPACE = 'http://ParsGreen.com/'
@@ -79,11 +80,11 @@ export async function sendEmailOtp(to: string, code: string, purpose: 'login' | 
   }
 }
 
-export async function sendParsGreenSms(to: string, message: string): Promise<{ developmentCode?: string }> {
-  return sendSmsWithFallback(to, message, () => message)
+export async function sendParsGreenSms(to: string, message: string, options: { stopOnUnknown?: boolean } = {}): Promise<{ developmentCode?: string }> {
+  return sendSmsWithFallback(to, message, () => message, options.stopOnUnknown)
 }
 
-async function sendSmsWithFallback(to: string, message: string, fallbackMessage: () => string): Promise<{ developmentCode?: string }> {
+async function sendSmsWithFallback(to: string, message: string, fallbackMessage: () => string, stopOnUnknown = false): Promise<{ developmentCode?: string }> {
   const config = getConfig()
   if (config.AUTH_DELIVERY_MODE === 'log') {
     if (isProduction()) throw new ProviderPermanentError('ارسال پیامک در محیط عملیاتی پیکربندی نشده است')
@@ -97,6 +98,7 @@ async function sendSmsWithFallback(to: string, message: string, fallbackMessage:
   try {
     await sendSmsFrom(recipient, message, config.PARSGREEN_PRIMARY_FROM, 'primary')
   } catch (error) {
+    if (stopOnUnknown && error instanceof ProviderUnknownError) throw error
     // One bounded failover, not another OTP/challenge or a retry loop.
     if (config.PARSGREEN_PRIMARY_FROM === config.PARSGREEN_FROM) throw error
     await sendSmsFrom(recipient, fallbackMessage(), config.PARSGREEN_FROM, 'fallback')
@@ -136,26 +138,31 @@ async function sendSmsFrom(recipient: string, message: string, sender: string, s
     if (!response.ok || fault || diagnostics.providerResult !== 1 || diagnostics.acceptedCount !== 1) {
       throw new Error('provider rejected message')
     }
+    createLogger('sms-delivery').info({ senderRoute, status: 'accepted', ...smsSegments(message) }, 'ParsGreen accepted SMS (not a handset receipt)')
     return
   } catch (error) {
     // Never log the envelope, response, recipient, OTP, credentials or raw
     // exception: SOAP faults may echo the entire authenticated request.
-    createLogger('sms-delivery').warn({ ...diagnostics, senderRoute }, 'ParsGreen delivery failed')
+    createLogger('sms-delivery').warn({ ...diagnostics, senderRoute, ...smsSegments(message) }, 'ParsGreen delivery failed')
     if (error instanceof ProviderPermanentError) throw error
+    if (diagnostics.reason === 'transport_failure' || diagnostics.providerResult === null || diagnostics.acceptedCount === null) throw new ProviderUnknownError('ارسال پیامک ناموفق بود؛ وضعیت پذیرش نامشخص است')
     throw new ProviderRetryableError('ارسال پیامک ناموفق بود؛ کمی بعد دوباره تلاش کنید')
   }
 }
 
 export async function sendSmsOtp(to: string, code: string, loginOrigin?: string): Promise<{ developmentCode?: string; smsAutofill?: true }> {
   const config = getConfig()
-  const pattern = config.PARSGREEN_APPROVED_PHONE_LOGIN_PATTERN
+  const frontendHost = new URL(config.FRONTEND_URL).hostname
+  const pattern = frontendHost === 'parserver.ir' ? 'پارس سرور: کد ورود %%؛ محرمانه\n@parserver.ir #%%' : config.PARSGREEN_APPROVED_PHONE_LOGIN_PATTERN
   const directMessage = `کد ورود پارس سرور: ${code}\nاین کد را در اختیار دیگران قرار ندهید.`
   if (pattern && config.AUTH_DELIVERY_MODE === 'live' && loginOrigin === new URL(config.FRONTEND_URL).origin) {
     const host = new URL(config.FRONTEND_URL).hostname
     // The dedicated line gets direct text, never a legacy template. Render the
     // already-approved legacy pattern only if that primary attempt fails.
-    await sendSmsWithFallback(to, `${directMessage}\n@${host} #${code}`, () => pattern.replaceAll('%%', code))
+    const compact = host === 'parserver.ir' ? `پارس سرور: کد ورود ${code}؛ محرمانه\n@${host} #${code}` : `${directMessage}\n@${host} #${code}`
+    await sendSmsWithFallback(to, compact, () => pattern.replaceAll('%%', code))
     return { smsAutofill: true }
   }
+  if (frontendHost === 'parserver.ir' && config.AUTH_DELIVERY_MODE === 'live') return sendSmsWithFallback(to, directMessage, () => pattern.replaceAll('%%', code))
   return sendParsGreenSms(to, directMessage)
 }

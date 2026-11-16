@@ -1,3 +1,5 @@
+import { enqueueSms } from '../notifications/sms.js'
+import { fundingPrice } from '../pricing/renewal.js'
 import { and, eq, inArray, isNull, lte, or } from 'drizzle-orm'
 import type { DbOrTx } from '../../db/index.js'
 import { orders, providerOperations, servers, subscriptions, users, wallets } from '../../db/schema.js'
@@ -63,9 +65,11 @@ export async function loadFundingFleet(db: DbOrTx, userId: string, lockWallets =
     const walletId = row.walletId ?? canonical?.id ?? null
     const wallet = ownedWallets.find((item) => item.id === walletId)
     if (row.subscription.billingInterval !== 'HOURLY') {
-      prepaid.push({ ...row, walletId, balanceRial: wallet?.balanceRial ?? 0 })
+      const estimatedPrice = await fundingPrice(db, row.subscription)
+      prepaid.push({ ...row, subscription: { ...row.subscription, priceRial: estimatedPrice }, walletId, balanceRial: wallet?.balanceRial ?? 0 })
       continue
     }
+    row.subscription.priceRial = await fundingPrice(db, row.subscription)
     const key = walletId ?? 'missing'
     let group = groups.get(key)
     if (!group) {
@@ -132,6 +136,7 @@ export async function warnLowBalance(db: DbOrTx, userId: string, fleet: FundingF
   const minutes = Math.floor(Math.min(...endangered.map((group) => group.shortageAt - now.getTime())) / 60000)
   const topUpToman = Math.ceil(endangered.reduce((sum, group) => sum + group.topUpRial, 0) / 10)
   const names = endangered.flatMap((group) => group.names)
+  await enqueueSms(db, 'walletLowBalance', userId, `wallet-low:${now.toISOString()}`, { serviceName: names.join('، ') })
   await publishNotification(db, {
     userId,
     eventKey: `low-balance:${now.toISOString()}`, href: '/wallet',

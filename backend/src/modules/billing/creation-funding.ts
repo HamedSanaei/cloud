@@ -1,3 +1,4 @@
+import { fundingPrice, renewalPrice } from '../pricing/renewal.js'
 import { and, eq, inArray } from 'drizzle-orm'
 import type { DbOrTx } from '../../db/index.js'
 import { orders, servers, subscriptions, wallets } from '../../db/schema.js'
@@ -19,16 +20,22 @@ export async function walletCommitments(db: DbOrTx, input: { userId: string; wal
   const pending = await db.query.orders.findMany({ where: t => and(
     eq(t.userId, input.userId), eq(t.walletId, input.walletId), inArray(t.status, ['paid', 'queued', 'provisioning', 'requires_review']),
   ) })
-  let commitments = pending.reduce((sum, order) => sum + minimumCreationBalanceRial(order.totalRial, order.billingInterval) - order.totalRial, 0)
+  let commitments = 0
+  for (const order of pending) {
+    commitments += order.billingInterval === 'HOURLY'
+      ? (await renewalPrice(db, order.id, 'HOURLY', now)).totalRial * 167
+      : minimumCreationBalanceRial(order.totalRial, order.billingInterval) - order.totalRial
+  }
   const existing = await db.select({ subscription: subscriptions }).from(subscriptions)
     .innerJoin(orders, eq(subscriptions.orderId, orders.id))
     .innerJoin(servers, eq(subscriptions.serverId, servers.id))
     .where(and(eq(orders.userId, input.userId), eq(orders.walletId, input.walletId),
       eq(servers.status, 'active'), inArray(subscriptions.status, ['active', 'grace']), eq(orders.status, 'active')))
   for (const { subscription } of existing) {
+    const priceRial = await fundingPrice(db, subscription)
     let at = Math.max(now.getTime(), subscription.nextInvoiceAt.getTime())
     while (at < horizon) {
-      commitments += subscription.priceRial
+      commitments += priceRial
       at = addInterval(new Date(at), subscription.billingInterval).getTime()
     }
   }
