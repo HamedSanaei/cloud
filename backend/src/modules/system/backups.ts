@@ -50,13 +50,18 @@ async function snapshot(client: PoolClient): Promise<Snapshot> {
   const counts: Record<string, number> = {}, hash = createHash('sha256')
   // Read under a single exported repeatable-read snapshot when backing up.
   for (const table of ['sms_preferences', 'sms_outbox', 'service_incidents', 'ticket_replies', 'users', 'tickets', 'wallets', 'wallet_transactions', 'orders', 'order_items', 'order_events', 'invoices', 'invoice_items', 'subscriptions', 'subscription_events', 'renewal_attempts', 'servers', 'provider_operations', 'wallet_payments', 'gateway_credentials', 'admin_adjustments', 'pricing_rules']) {
-    counts[table] = Number((await client.query(`select count(*) as n from public.${table}`)).rows[0].n)
+    // Authorizing recovery creates sessions. Their permanently disabled login
+    // notices have no sending side effect, just like transient session records.
+    // Every preference and every pending/sending/accepted/unknown SMS still
+    // participates in freshness verification. pg_dump archives ALL rows.
+    const ignoredLogin = table === 'sms_outbox' ? "not (key='newLogin' and status='skipped_disabled')" : 'true'
+    counts[table] = Number((await client.query(`select count(*) as n from public.${table} where ${ignoredLogin}`)).rows[0].n)
     if (table === 'tickets') continue
     const idColumn = table === 'sms_preferences' ? 'key' : 'id'
     let after = ['order_events', 'subscription_events'].includes(table) ? '0' : table === 'sms_preferences' ? '' : '00000000-0000-0000-0000-000000000000'
     for (;;) {
       const record = table === 'users' ? `jsonb_build_object('id',id,'email',email,'mobile',mobile,'role',role,'status',status,'password',password_hash,'totp',totp_secret_encrypted,'twoFactor',two_factor_enabled,'recovery',recovery_codes_hash,'emailVerified',email_verified_at,'mobileVerified',mobile_verified_at)` : 'row_to_json(t)'
-      const { rows } = await client.query(`select ${idColumn} as id, ${record} as data from public.${table} t where ${idColumn} > $1 order by ${idColumn} limit 1000`, [after])
+      const { rows } = await client.query(`select ${idColumn} as id, ${record} as data from public.${table} t where ${idColumn} > $1 and ${ignoredLogin} order by ${idColumn} limit 1000`, [after])
       if (!rows.length) break
       for (const row of rows) hash.update(JSON.stringify(row.data))
       after = rows.at(-1).id
