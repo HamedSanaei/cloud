@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { sendParsGreenSms, sendSmsOtp } from '../../src/modules/auth/delivery.js'
 import { isDomainBoundLoginPattern } from '../../src/modules/auth/sms-autofill.js'
 
-const { warn, smsConfig } = vi.hoisted(() => ({ warn: vi.fn(), smsConfig: { pattern: '', primary: '9998883511', mode: 'live' as 'live' | 'log' } }))
-vi.mock('../../src/logger.js', () => ({ createLogger: () => ({ warn }) }))
+const { warn, smsConfig } = vi.hoisted(() => ({ warn: vi.fn(), smsConfig: { frontend: 'https://login.example.test/login', pattern: '', primary: '9998883511', mode: 'live' as 'live' | 'log' } }))
+vi.mock('../../src/logger.js', () => ({ createLogger: () => ({ warn, info: vi.fn() }) }))
 
 vi.mock('../../src/config.js', () => ({
   getConfig: () => ({
@@ -15,12 +15,12 @@ vi.mock('../../src/config.js', () => ({
     PARSGREEN_ENDPOINT: 'https://login.parsgreen.com/Api/SendSMS.asmx',
     PARSGREEN_TIMEOUT_MS: 1000,
     PARSGREEN_APPROVED_PHONE_LOGIN_PATTERN: smsConfig.pattern,
-    FRONTEND_URL: 'https://login.example.test/login',
+    FRONTEND_URL: smsConfig.frontend,
   }),
   isProduction: () => false,
 }))
 
-afterEach(() => { smsConfig.pattern = ''; smsConfig.primary = '9998883511'; smsConfig.mode = 'live'; vi.unstubAllGlobals(); vi.clearAllMocks() })
+afterEach(() => { smsConfig.frontend = 'https://login.example.test/login'; smsConfig.pattern = ''; smsConfig.primary = '9998883511'; smsConfig.mode = 'live'; vi.unstubAllGlobals(); vi.clearAllMocks() })
 
 const accepted = '<SendGroupSMSResponse xmlns="http://ParsGreen.com/"><SendGroupSMSResult>1</SendGroupSMSResult><success>1</success><retStr><string>fixture-message-id</string></retStr></SendGroupSMSResponse>'
 
@@ -184,7 +184,7 @@ describe('ParsGreen SOAP delivery contract', () => {
       { status: 500 },
     )))
     await expect(sendSmsOtp('+989000000000', '123456')).rejects.toThrow('ارسال پیامک ناموفق بود')
-    expect(warn).toHaveBeenCalledWith({ reason: 'soap_fault', httpStatus: 500, providerResult: null, acceptedCount: null, senderRoute: 'primary' }, 'ParsGreen delivery failed')
+    expect(warn).toHaveBeenCalledWith({ reason: 'soap_fault', httpStatus: 500, providerResult: null, acceptedCount: null, senderRoute: 'primary', units: 64, segments: 1 }, 'ParsGreen delivery failed')
     expect(JSON.stringify(warn.mock.calls)).not.toMatch(/fixture-signature|09000000000|123456|tempuri/)
   })
 
@@ -213,8 +213,27 @@ describe('ParsGreen SOAP delivery contract', () => {
     vi.stubGlobal('fetch', request)
     await expect(sendSmsOtp('+989000000000', '123456')).rejects.toThrow('ارسال پیامک ناموفق بود')
     expect(request).toHaveBeenCalledTimes(2)
-    expect(warn).toHaveBeenCalledWith({ reason: 'transport_failure', senderRoute: 'primary' }, 'ParsGreen delivery failed')
-    expect(warn).toHaveBeenCalledWith({ reason: 'transport_failure', senderRoute: 'fallback' }, 'ParsGreen delivery failed')
+    expect(warn).toHaveBeenCalledWith({ reason: 'transport_failure', senderRoute: 'primary', units: 64, segments: 1 }, 'ParsGreen delivery failed')
+    expect(warn).toHaveBeenCalledWith({ reason: 'transport_failure', senderRoute: 'fallback', units: 64, segments: 1 }, 'ParsGreen delivery failed')
     expect(JSON.stringify(warn.mock.calls)).not.toMatch(/fixture-private|fixture-signature|123456/)
+  })
+})
+
+describe('confirmed ParsServer short OTP and conservative business failover', () => {
+  it('uses the registered one-part pattern on both primary and legacy service routes', async () => {
+    smsConfig.frontend = 'https://parserver.ir'
+    const request = vi.fn().mockResolvedValueOnce(new Response('<SendGroupSMSResult>0</SendGroupSMSResult><success>0</success>')).mockResolvedValueOnce(new Response(accepted))
+    vi.stubGlobal('fetch', request)
+    await expect(sendSmsOtp('+989000000000', '479125', 'https://parserver.ir')).resolves.toEqual({ smsAutofill: true })
+    expect(request).toHaveBeenCalledTimes(2)
+    for (const call of request.mock.calls) expect(call[1].body).toContain('پارس سرور: کد ورود 479125؛ محرمانه\n@parserver.ir #479125</text>')
+    expect(request.mock.calls[0]![1].body).toContain('<from>9998883511</from>')
+    expect(request.mock.calls[1]![1].body).toContain('<from>fixture-sender</from>')
+  })
+  it('does not blindly duplicate a business event after an ambiguous primary timeout', async () => {
+    const request = vi.fn().mockRejectedValue(new Error('transport timeout'))
+    vi.stubGlobal('fetch', request)
+    await expect(sendParsGreenSms('+989000000000', 'fixture notice', { stopOnUnknown: true })).rejects.toMatchObject({ code: 'provider_unknown_error' })
+    expect(request).toHaveBeenCalledTimes(1)
   })
 })

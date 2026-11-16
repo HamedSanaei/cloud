@@ -30,3 +30,5 @@
 .system-monospace { overflow-wrap: anywhere; font-family: ui-monospace,monospace; font-size: 13px; }
 @media (max-width:1000px) { .system-columns { grid-template-columns: minmax(0,1fr); } .system-filter { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width:600px) { .system-filter { grid-template-columns: minmax(0,1fr); } .system-tabs a { flex: 1 1 40%; padding: 10px; justify-content: center; } .system-search { flex-direction: column; align-items: stretch; } .system-log { grid-template-columns: minmax(0,1fr); } }
+
+.sms-pattern{white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit;direction:rtl}

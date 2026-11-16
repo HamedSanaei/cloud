@@ -1,7 +1,9 @@
+import { nativePeriod } from '../../src/modules/pricing/periods.js'
+import type { ProviderBillingOption } from '../../src/modules/providers/provider.interface.js'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { getTestContext, truncateAll, dbAvailable, type TestContext } from '../helpers.js'
-import { subscriptions, users } from '../../src/db/schema.js'
+import { subscriptions, users, fxRates } from '../../src/db/schema.js'
 import { createSession, registerUser } from '../../src/modules/auth/service.js'
 import { buildApp } from '../../src/app.js'
 import { testLogger } from '../helpers.js'
@@ -14,7 +16,7 @@ import { ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/ser
 import { handleProvision, handleRenewalSweep } from '../../src/modules/provisioning/handlers.js'
 
 // Provider transport is an isolated fixture; wallet, quote, order and renewal use PostgreSQL.
-describe.skipIf(!dbAvailable)('hourly and daily purchase boundaries', () => {
+describe.skipIf(!dbAvailable)('hourly billing and grandfathered daily boundaries', () => {
   let ctx: TestContext
   beforeAll(async () => {
     ctx = await getTestContext()
@@ -26,7 +28,7 @@ describe.skipIf(!dbAvailable)('hourly and daily purchase boundaries', () => {
       id: 'hetzner',
       async syncCatalog() {
         const catalog = await original.syncCatalog()
-        return { ...catalog, offers: catalog.offers.map((offer) => ({ ...offer, provider: 'hetzner', category: 'cloud' as const, billingOptions: [{ billingCycle: 'hourly', amount: '0.0055' }] })) }
+        return { ...catalog, offers: catalog.offers.map((offer) => ({ ...offer, provider: 'hetzner', category: 'cloud' as const, billingOptions: [{ billingCycle: 'hourly', amount: '0.0055' }, ...offer.billingOptions] })) }
       },
     })
     await syncProviderCatalog(ctx.db, getProvider('hetzner'), { mode: 'live' })
@@ -35,14 +37,14 @@ describe.skipIf(!dbAvailable)('hourly and daily purchase boundaries', () => {
   afterAll(async () => { registerConfiguredProviders(); await ctx.close() })
   afterEach(() => vi.useRealTimers())
 
-  async function buy(period: 'hourly' | 'daily', email: string) {
+  async function buy(period: 'hourly' | 'daily' | 'monthly', email: string) {
     const user = await registerUser(ctx.db, { email, password: 'Retail-boundary-123!' })
     const wallet = await ensureDefaultWallet(ctx.db, user.id)
-    await creditWallet(ctx.db, user.id, wallet.id, 1000000, { type: 'manual_credit' })
+    await creditWallet(ctx.db, user.id, wallet.id, 1000000000, { type: 'manual_credit' })
     const offer = await findOfferByProductAndLocation(ctx.db, 'hetzner', 'VPS02_4', 'FRA-01')
     const quote = await createQuote(ctx.db, {
       userId: user.id, offerId: offer!.id, locationCode: 'FRA-01',
-      billingOption: { billingCycle: 'hourly' }, billingPeriod: period, operatingSystem: 'ubuntu-24.04',
+      billingOption: period === 'monthly' ? (offer!.billingOptions as ProviderBillingOption[]).find(o => nativePeriod(o) === 'monthly')! : { billingCycle: 'hourly' }, billingPeriod: period, operatingSystem: 'ubuntu-24.04',
     })
     const result = await createOrderFromQuote(ctx.db, { userId: user.id, quoteId: quote.id, walletId: wallet.id, hostname: `retail-${period}` })
     await handleProvision(ctx, { orderId: result.order.id })
@@ -50,14 +52,15 @@ describe.skipIf(!dbAvailable)('hourly and daily purchase boundaries', () => {
     return { quote, order: result.order, subscription: subscription!, wallet }
   }
 
-  it('preserves daily billing and native hourly contract through quote, order and subscription', async () => {
-    const purchase = await buy('daily', 'daily-boundary@test.local')
-    expect(purchase.quote.providerAmountCents).toBe(13.2)
-    expect(purchase.order.billingOption).toMatchObject({ billingCycle: 'hourly', amount: '0.0055' })
-    expect(purchase.order.billingInterval).toBe('DAILY')
-    expect(purchase.subscription.billingInterval).toBe('DAILY')
-    expect(purchase.subscription.currentPeriodEnd.getTime() - purchase.subscription.currentPeriodStart.getTime()).toBe(86400000)
-    expect((await ctx.db.query.orders.findFirst({ where: (t) => eq(t.id, purchase.order.id) }))?.status).toBe('active')
+  it('blocks a new daily quote while preserving grandfathered daily records', async () => {
+    await expect(buy('daily', 'daily-blocked@test.local')).rejects.toMatchObject({ code: 'validation_error' })
+    const purchase = await buy('hourly', 'legacy-daily@test.local')
+    const end = new Date(purchase.subscription.currentPeriodStart.getTime() + 86400000)
+    await ctx.db.update(subscriptions).set({ billingInterval: 'DAILY', currentPeriodEnd: end, nextInvoiceAt: end, nextDueAt: end }).where(eq(subscriptions.id, purchase.subscription.id))
+    await handleRenewalSweep(ctx)
+    const preserved = await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.id, purchase.subscription.id) })
+    expect(preserved!.billingInterval).toBe('DAILY')
+    expect(preserved!.currentPeriodEnd).toEqual(end)
   })
 
   it('never debits early and charges only once when concurrent sweeps cross an hourly boundary', async () => {
@@ -83,6 +86,7 @@ describe.skipIf(!dbAvailable)('hourly and daily purchase boundaries', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     for (let period = 0; period < 3; period++) {
       vi.setSystemTime(firstDue + period * 3600000 + (period + 1) * 60000)
+      await setFxRate(ctx.db, '620000')
       await Promise.all([handleRenewalSweep(ctx), handleRenewalSweep(ctx)])
       const sub = (await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.id, purchase.subscription.id) }))!
       expect(sub.currentPeriodStart.getTime()).toBe(firstDue + period * 3600000)
@@ -106,4 +110,51 @@ describe.skipIf(!dbAvailable)('hourly and daily purchase boundaries', () => {
       expect(postingTimes[2] - postingTimes[1]).toBe(61 * 60000)
     } finally { await app.close() }
   })
+  it('prices each new hour using fresh FX, with an exact immutable invoice and one debit on retries', async () => {
+    await setFxRate(ctx.db, '620000')
+    const purchase = await buy('hourly', 'changing-hour@test.local')
+    const before = (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, purchase.wallet.id) }))!.balanceRial
+    const due = new Date(Date.now() - 1000)
+    await ctx.db.update(subscriptions).set({ currentPeriodEnd: due, nextInvoiceAt: due, nextDueAt: due }).where(eq(subscriptions.id, purchase.subscription.id))
+    await setFxRate(ctx.db, '1240000')
+    await Promise.all([handleRenewalSweep(ctx), handleRenewalSweep(ctx)])
+    const invoice = (await ctx.db.query.invoices.findMany({ where: t => eq(t.subscriptionId, purchase.subscription.id) }))[0]!
+    expect(invoice.totalRial).toBe(8525)
+    expect(before - (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, purchase.wallet.id) }))!.balanceRial).toBe(8525)
+    expect(invoice.snapshot).toMatchObject({ fxRate: '1240000.000000', totalRial: 8525, ledgerPrecisionRial: 1 })
+    await setFxRate(ctx.db, '2480000')
+    await handleRenewalSweep(ctx)
+    expect((await ctx.db.query.invoices.findFirst({ where: t => eq(t.id, invoice.id) }))!.snapshot).toEqual(invoice.snapshot)
+    const debits = (await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.walletId, purchase.wallet.id) })).filter(t => t.type === 'renewal')
+    expect(debits).toHaveLength(1); expect(debits[0]!.amountRial).toBe(-invoice.totalRial)
+  })
+  it('keeps a prepaid monthly invoice and dates unchanged after FX rises; only the next paid month reprices', async () => {
+    await setFxRate(ctx.db, '620000')
+    const purchase = await buy('monthly', 'fixed-month@test.local')
+    const before = (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, purchase.wallet.id) }))!.balanceRial
+    const original = await ctx.db.query.invoices.findFirst({ where: t => eq(t.orderId, purchase.order.id) })
+    await setFxRate(ctx.db, '1860000')
+    await handleRenewalSweep(ctx)
+    expect((await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.id, purchase.subscription.id) }))!.priceRial).toBe(purchase.order.totalRial)
+    expect((await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, purchase.wallet.id) }))!.balanceRial).toBe(before)
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(purchase.subscription.currentPeriodEnd.getTime() + 1000)
+    await setFxRate(ctx.db, '1860000')
+    await handleRenewalSweep(ctx)
+    const next = (await ctx.db.query.invoices.findMany({ where: t => eq(t.subscriptionId, purchase.subscription.id) }))[0]!
+    expect(next.totalRial).toBe(purchase.order.totalRial * 3)
+    expect(next.status).toBe('paid')
+    expect((await ctx.db.query.invoices.findFirst({ where: t => eq(t.id, original!.id) }))!.snapshot).toEqual(original!.snapshot)
+  })
+  it('refuses an hour with unavailable FX without creating an invoice or changing the wallet', async () => {
+    await setFxRate(ctx.db, '620000')
+    const purchase = await buy('hourly', 'missing-hour-fx@test.local')
+    const before = (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, purchase.wallet.id) }))!.balanceRial
+    const due = new Date(Date.now() - 1000)
+    await ctx.db.update(subscriptions).set({ currentPeriodEnd: due, nextInvoiceAt: due, nextDueAt: due }).where(eq(subscriptions.id, purchase.subscription.id))
+    await ctx.db.delete(fxRates)
+    await expect(handleRenewalSweep(ctx)).rejects.toMatchObject({ code: 'renewal_fx_unavailable' })
+    expect((await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, purchase.wallet.id) }))!.balanceRial).toBe(before)
+    expect(await ctx.db.query.invoices.findMany({ where: t => eq(t.subscriptionId, purchase.subscription.id) })).toHaveLength(0)
+  })
+
 })

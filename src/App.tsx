@@ -1,3 +1,4 @@
+import { SystemSmsSettings } from './admin/SystemSmsSettings'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from './components/layout/AppShell'
 import { ChargeRequestsPage, InvoicesPage, WalletPage } from './pages/FinancePages'
@@ -42,6 +43,7 @@ export function App({ initialTariffs }: { initialTariffs?: string } = {}) {
         <Route path="settings" element={<SystemSettingsLayout />}>
           <Route path="outbound" element={<SystemOutboundProxies />} />
           <Route path="primary-ipv4" element={<SystemPrimaryIpv4Pricing />} />
+          <Route path="sms" element={<SystemSmsSettings />} />
           <Route path="iran-tariffs" element={<SystemIranTariffs />} />
           <Route index element={<Navigate to="gateway" replace />} />
           <Route path="gateway" element={<SystemGateway />} /><Route path="logs" element={<SystemLogs />} />

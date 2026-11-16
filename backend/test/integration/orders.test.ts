@@ -51,8 +51,8 @@ describe.skipIf(skip)('orders + vertical slice (integration)', () => {
     const { user, wallet } = await fundedUser('slice@test.local')
     const quote = await makeMonthlyQuote(user.id)
     expect(quote.totalRial).toBeGreaterThan(0)
-    // Snapshot math: 1450 cents * 620000/100 = 8,990,000; +25% = 11,237,500; rounded 11,238,000
-    expect(quote.totalRial).toBe(11_238_000)
+    // Snapshot math: 1450 cents * 620000/100 = 8,990,000; +25% = 11,237,500; exact IRR 11,237,500
+    expect(quote.totalRial).toBe(11_237_500)
 
     const before = (await ctx.db.query.wallets.findFirst({ where: (t) => eq(t.id, wallet.id) }))!.balanceRial
 

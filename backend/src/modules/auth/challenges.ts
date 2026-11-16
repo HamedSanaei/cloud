@@ -1,15 +1,15 @@
 import { createHash, createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto'
 import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import { getConfig } from '../../config.js'
-import type { DbClient } from '../../db/index.js'
+import type { DbOrTx } from '../../db/index.js'
 import { authChallenges } from '../../db/schema.js'
 import { AppError, BadRequestError, ForbiddenError } from '../../lib/errors.js'
 
-export type ChallengeKind = 'email_login' | 'email_register' | 'phone_login' | 'phone_register' | 'password_recovery' | 'totp' | 'google_oauth'
+export type ChallengeKind = 'email_login' | 'email_register' | 'phone_login' | 'phone_register' | 'phone_recovery' | 'phone_operation' | 'password_recovery' | 'totp' | 'google_oauth'
 
 // SMS has a separate fixed security policy; email/TOTP keep their configuration.
 const SMS_MAX_ATTEMPTS = 3
-const smsKinds = ['phone_login', 'phone_register']
+const smsKinds = ['phone_login', 'phone_register', 'phone_recovery', 'phone_operation']
 function lockedOtp(): AppError {
   return new AppError(403, 'otp_locked', 'تعداد تلاش‌ها بیش از حد مجاز است؛ پس از پایان اعتبار کد، دوباره درخواست دهید', { attemptsRemaining: 0 })
 }
@@ -29,7 +29,7 @@ function codeMatches(id: string, expectedHash: string, code: string): boolean {
 }
 
 export async function issueChallenge(
-  db: DbClient,
+  db: DbOrTx,
   input: {
     kind: ChallengeKind
     identifier: string
@@ -102,10 +102,11 @@ export async function issueChallenge(
   }
 }
 
-export async function findChallenge(db: DbClient, token: string, kind?: ChallengeKind) {
+export async function findChallenge(db: DbOrTx, token: string, kind?: ChallengeKind) {
   const row = await db.query.authChallenges.findFirst({ where: (t) => eq(t.tokenHash, hashToken(token)) })
   if (!row || (kind && row.kind !== kind)) throw new BadRequestError('درخواست تأیید معتبر نیست؛ دوباره از ابتدا تلاش کنید')
-  if (row.consumedAt || row.expiresAt <= new Date()) throw new BadRequestError('کد تأیید منقضی شده است؛ کد جدید دریافت کنید')
+  if (row.consumedAt) throw new BadRequestError('درخواست تأیید مصرف شده است؛ دوباره از ابتدا تلاش کنید')
+  if (row.expiresAt <= new Date()) throw new AppError(410, 'challenge_expired', 'درخواست تأیید منقضی شده است؛ از ابتدا کد جدید درخواست کنید')
   if (smsKinds.includes(row.kind)) row.maxAttempts = Math.min(row.maxAttempts, SMS_MAX_ATTEMPTS)
   if (row.attempts >= row.maxAttempts) {
     if (smsKinds.includes(row.kind)) throw lockedOtp()
@@ -114,7 +115,7 @@ export async function findChallenge(db: DbClient, token: string, kind?: Challeng
   return row
 }
 
-export async function verifyChallengeCode(db: DbClient, token: string, code: string, kind?: ChallengeKind) {
+export async function verifyChallengeCode(db: DbOrTx, token: string, code: string, kind?: ChallengeKind) {
   const row = await findChallenge(db, token, kind)
   if (!codeMatches(row.id, row.codeHash, code)) {
     const [updated] = await db
@@ -137,7 +138,7 @@ export async function verifyChallengeCode(db: DbClient, token: string, code: str
   return row
 }
 
-export async function consumeChallenge(db: DbClient, challengeId: string): Promise<boolean> {
+export async function consumeChallenge(db: DbOrTx, challengeId: string): Promise<boolean> {
   const [consumed] = await db
     .update(authChallenges)
     .set({ consumedAt: new Date() })
@@ -146,7 +147,7 @@ export async function consumeChallenge(db: DbClient, challengeId: string): Promi
   return Boolean(consumed)
 }
 
-export async function recordChallengeFailure(db: DbClient, challengeId: string, attempts: number, maxAttempts: number): Promise<never> {
+export async function recordChallengeFailure(db: DbOrTx, challengeId: string, attempts: number, maxAttempts: number): Promise<never> {
   const [updated] = await db
     .update(authChallenges)
     .set({ attempts: sql`${authChallenges.attempts} + 1` })
@@ -157,7 +158,7 @@ export async function recordChallengeFailure(db: DbClient, challengeId: string, 
   throw new BadRequestError('کد تأیید نامعتبر است', { attemptsRemaining: maxAttempts - next })
 }
 
-export async function assertCanResend(db: DbClient, token: string) {
+export async function assertCanResend(db: DbOrTx, token: string) {
   const row = await findChallenge(db, token)
   const config = getConfig()
   if (row.resendCount >= config.AUTH_OTP_MAX_RESENDS) {

@@ -1,3 +1,4 @@
+import { staffTicketAction } from '../tickets/service.js'
 /**
  * Admin console backed by the website PostgreSQL DB, with audited operator actions.
  * No provider credentials, password hashes, TOTP material or platform tokens
@@ -87,6 +88,12 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
   app.addHook('preHandler', async request => {
     requireAdmin(request)
     ensureSiteAuthority()
+  })
+  app.post('/tickets/:id/action', async request => {
+    const admin = requireAdmin(request)
+    const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
+    const input = parse(z.union([z.object({ requestId: z.string().uuid(), reply: z.string().trim().min(1).max(10000) }).strict(), z.object({ requestId: z.string().uuid(), close: z.literal(true) }).strict()]), request.body)
+    return { data: await staffTicketAction(ctx.db, admin.id, id, input) }
   })
   app.get('/tickets', async request => {
     const q = parse(paging, request.query)

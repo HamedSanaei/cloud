@@ -54,7 +54,7 @@ export interface CreateServerPayload {
   idempotencyKey?: string
 }
 
-export type BillingPeriod = 'hourly' | 'daily' | 'monthly'
+export type BillingPeriod = 'hourly' | 'monthly'
 
 export interface StorefrontDatacenter {
   id: string
@@ -185,6 +185,7 @@ export type TicketStatus = 'pending' | 'review' | 'answered' | 'closed'
 export type TicketDepartment = 'technical' | 'finance' | 'sales'
 
 export interface Ticket {
+  replies?: Array<{ id: string; body: string; createdAt: string }>
   id: string
   title: string
   department: string

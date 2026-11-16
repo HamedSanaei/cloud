@@ -129,7 +129,7 @@ export function TicketsPage() {
                 <td>{ticket.department}</td>
                 <td>{ticket.relatedServer?.name ?? 'سفارشی ندارم'}</td>
                 <td><Badge>{ticket.status}</Badge></td>
-                <td><Button variant="secondary" size="sm" onClick={() => setDetail(ticket)}>مشاهده تیکت</Button></td>
+                <td><Button variant="secondary" size="sm" onClick={() => setSearch({ ticket: ticket.id })}>مشاهده تیکت</Button></td>
               </tr>
             ))}
           </Table>
@@ -155,7 +155,7 @@ export function TicketsPage() {
         </form>
       </Modal>
       <Modal open={!!selected || !!linkedId} onClose={closeDetail} title={selected?.title || 'جزئیات تیکت'}>
-        {selected ? <div className="form-stack"><p>{selected.description}</p><strong>سرور مربوطه: {selected.relatedServer?.name ?? 'سفارشی ندارم'}</strong>
+        {selected ? <div className="form-stack"><p>{selected.description}</p>{selected.replies?.map(reply => <article key={reply.id}><strong>پاسخ پشتیبانی — {new Date(reply.createdAt).toLocaleString('fa-IR')}</strong><p style={{ whiteSpace: 'pre-wrap' }}>{reply.body}</p></article>)}<strong>سرور مربوطه: {selected.relatedServer?.name ?? 'سفارشی ندارم'}</strong>
           {selected.relatedServer ? <><CopyableIp value={selected.relatedServer.ip} />{!selected.serverId ? <p>این سرور حذف شده است؛ اطلاعات زمان ثبت درخواست نگه داشته شده است.</p> : null}</> : null}</div>
           : linked.error ? <QueryError message={linked.error} onRetry={linked.refetch} /> : <LoadingState label="در حال دریافت تیکت…" />}
       </Modal>

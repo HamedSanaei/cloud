@@ -28,8 +28,8 @@ import { LocationCards } from '../components/ui/LocationCards'
 import { checkoutFailure, clearCheckoutDraft, minimumCreationBalance, readCheckoutDraft, saveCheckoutDraft } from '../lib/serverCheckout'
 
 const serverSteps = ['دیتاسنتر و موقعیت', 'دوره پرداخت', 'نوع و منابع سرور', 'سیستم عامل', 'کیف پول', 'تایید نهایی']
-const periodLabels: Record<BillingPeriod, string> = { hourly: 'ساعتی', daily: 'روزانه', monthly: 'ماهانه' }
-const periodOrder: BillingPeriod[] = ['hourly', 'daily', 'monthly']
+const periodLabels: Record<BillingPeriod, string> = { hourly: 'ساعتی', monthly: 'ماهانه' }
+const periodOrder: BillingPeriod[] = ['hourly', 'monthly']
 const priceLabel = (totalRial: number) => `${formatFaNumber(totalRial / 10)} تومان`
 
 export function CreateServerPage() {
@@ -175,21 +175,22 @@ export function CreateServerPage() {
                 <button type="button" key={period} aria-pressed={billingPeriod === period} className={`choice-card ${billingPeriod === period ? 'choice-card--selected' : ''}`}
                   onClick={() => { if (billingPeriod !== period) { setBillingPeriod(period); resetOffer() } }}>
                   <WalletCards size={26} /><strong>{periodLabels[period]}</strong>
-                  <span>{period === 'daily' ? 'پرداخت برای ۲۴ ساعت' : period === 'hourly' ? 'پرداخت برای هر ساعت' : 'محصول با دوره ماهانه واقعی'}</span>
+                  <span>{period === 'hourly' ? 'پرداخت برای هر ساعت' : 'محصول با دوره ماهانه واقعی'}</span>
                 </button>
               ))}</div>
+              {billingPeriod && <p className="info-box">{periodExplanation[billingPeriod]}</p>}
+              {billingPeriod && <div className="storefront-grid">{locationOffers.map(item => <div key={item.id} className="info-box"><strong>{item.name}</strong><DualPrices prices={item.prices} selected={billingPeriod} /></div>)}</div>}
               {!periods.length ? <div className="storefront-state"><p>برای این موقعیت، دوره پرداخت قابل سفارشی موجود نیست.</p><Button variant="secondary" onClick={reloadCatalog}>دریافت دوباره کاتالوگ</Button></div> : null}
             </div> : null}
             {step === 2 ? <div className="storefront-stack">
               <div className="choice-grid storefront-grid">{visibleOffers.map((item) => {
-                const itemPrice = item.prices.find((entry) => entry.period === billingPeriod)!
                 return <button type="button" key={item.id} aria-pressed={offerId === item.id} className={`choice-card plan-card ${offerId === item.id ? 'choice-card--selected' : ''}`}
                   onClick={() => { if (offerId !== item.id) { resetOffer(); setOfferId(item.id) } }}>
                   <Cpu size={26} /><strong dir="auto">{item.name}</strong><span>{item.category === 'cloud' ? 'سرور ابری' : item.category === 'vps' ? 'سرور مجازی' : item.category}</span>
                   <span>{formatFaNumber(item.vcpu)} هسته · {formatFaNumber(item.memoryMb / 1024)} گیگابایت حافظه</span>
                   <span><Database size={14} />{formatFaNumber(item.diskGb)} گیگابایت دیسک</span>
                   {item.trafficGb !== null ? <span>{formatFaNumber(item.trafficGb)} گیگابایت ترافیک</span> : null}
-                  <small>{priceLabel(itemPrice.totalRial)} / {billingPeriod ? periodLabels[billingPeriod] : ''}</small>
+                  <DualPrices prices={item.prices} selected={billingPeriod} />
                 </button>
               })}</div>
               {!visibleOffers.length ? <div className="storefront-state"><p>محصول قابل سفارشی با این انتخاب‌ها موجود نیست.</p><Button variant="secondary" onClick={reloadCatalog}>دریافت دوباره کاتالوگ</Button></div> : null}
@@ -210,6 +211,8 @@ export function CreateServerPage() {
               <div className="info-box"><WalletCards size={20} /><span>{price ? `مبلغ ${priceLabel(price.totalRial)} برای دوره ${billingPeriod ? periodLabels[billingPeriod] : ''} پرداخت می‌شود. حداقل اعتبار این سرور برای ۷ روز: ${priceLabel(requiredBalanceRial)}. تعهد سرورهای دیگر هنگام ثبت سفارش بررسی می‌شود؛ اعتبار اضافه برداشت نمی‌شود.` : 'ابتدا محصول و دوره پرداخت معتبر انتخاب کنید.'}</span></div>
             </div> : null}
             {step === 5 ? <div className="review-grid">
+              {billingPeriod && <p className="info-box">{periodExplanation[billingPeriod]}</p>}
+              {offer && <DualPrices prices={offer.prices} selected={billingPeriod} />}
               {shared ? <p className="info-box">نام اولیه سرور توسط سرویس مرجع تعیین می‌شود. مبلغ تومانی برآورد نرخ جاری است؛ تسویه با تعرفه و نرخ معتبر هنگام ثبت سفارش انجام می‌شود.</p> : <Input label="نام سرور" value={name} disabled={submitting} maxLength={63} dir="ltr" placeholder="my-server" onChange={(event) => { setName(event.target.value); setSubmitError(null) }}
                 hint="۳ تا ۶۳ نویسه انگلیسی، عدد یا خط تیره؛ ابتدا و انتها حرف یا عدد باشد." error={name && !nameValid ? 'نام سرور معتبر نیست.' : undefined} />
               }
@@ -354,4 +357,15 @@ export function RegisterDomainPage() {
       </Card>
     </div>
   )
+}
+
+const periodExplanation: Record<BillingPeriod, string> = {
+  monthly: 'با پرداخت ماهانه، قیمت سرور برای کل یک ماه پرداخت‌شده ثابت می‌ماند و تغییر نرخ دلار در طول این دوره مبلغ شما را افزایش نمی‌دهد. مبلغ دوره بعد هنگام تمدید بر اساس تعرفه معتبر آن زمان تعیین می‌شود.',
+  hourly: 'در پرداخت ساعتی، هزینه هر ساعت با نرخ معتبر دلار در همان ساعت محاسبه و از کیف پول کسر می‌شود. به دلیل نوسانات ارزی و حاشیه سود پایین، قیمت ساعتی ممکن است هر ساعت تغییر کند. مبلغ واقعی برداشت دقیق است و گرد کردن صرفاً برای نمایش قیمت انجام می‌شود.',
+}
+function DualPrices({ prices, selected }: { prices: Array<{ period: BillingPeriod; totalRial: number }>; selected: BillingPeriod | '' }) {
+  return <span className="storefront-dual-prices">{periodOrder.map(period => {
+    const price = prices.find(p => p.period === period)
+    return <span key={period}><strong>قیمت {periodLabels[period]}: </strong>{price ? priceLabel(price.totalRial) : 'در دسترس نیست'} / {period === 'hourly' ? 'ساعت' : 'ماه'}{selected === period ? ' (دوره انتخابی)' : ' (مقایسه)'}</span>
+  })}</span>
 }

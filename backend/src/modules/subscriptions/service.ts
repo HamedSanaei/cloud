@@ -1,3 +1,4 @@
+import { enqueueSms } from '../notifications/sms.js'
 import { eq } from 'drizzle-orm'
 import type { DbClient, DbOrTx } from '../../db/index.js'
 import { subscriptionEvents, subscriptions } from '../../db/schema.js'
@@ -136,9 +137,15 @@ export async function enterGracePeriod(db: DbOrTx, subscriptionId: string): Prom
 }
 
 export async function suspendSubscription(db: DbClient, subscriptionId: string): Promise<void> {
-  await db.update(subscriptions).set({ status: 'suspended', updatedAt: new Date() }).where(eq(subscriptions.id, subscriptionId))
-  await db.insert(subscriptionEvents).values({ subscriptionId, event: 'suspended' })
-  await writeAudit(db, { action: 'subscription.suspended', targetType: 'subscription', targetId: subscriptionId })
+  await db.transaction(async tx => {
+    const [sub] = await tx.select().from(subscriptions).where(eq(subscriptions.id, subscriptionId)).for('update')
+    if (!sub || sub.status !== 'grace') return
+    await tx.update(subscriptions).set({ status: 'suspended', updatedAt: new Date() }).where(eq(subscriptions.id, subscriptionId))
+    await tx.insert(subscriptionEvents).values({ subscriptionId, event: 'suspended' })
+    const order = sub.orderId ? await tx.query.orders.findFirst({ where: t => eq(t.id, sub.orderId!) }) : null
+    await enqueueSms(tx, 'serviceSuspended', sub.userId, `subscription:${sub.id}:suspended:${sub.currentPeriodEnd.toISOString()}`, { serviceName: order?.hostname ?? 'سرور' })
+    await writeAudit(tx, { action: 'subscription.suspended', targetType: 'subscription', targetId: subscriptionId })
+  })
 }
 
 /** Subscriptions that need a renewal invoice (active or in grace, invoice due within horizon). */
@@ -162,6 +169,15 @@ export async function findGraceExpiredSubscriptions(db: DbClient) {
 
 export function addInterval(date: Date, interval: typeof subscriptions.$inferSelect.billingInterval): Date {
   const out = new Date(date)
+  const months = ({ MONTHLY: 1, QUARTERLY: 3, SEMIANNUAL: 6, ANNUAL: 12 } as Partial<Record<string, number>>)[interval]
+  if (months) {
+    const day = out.getUTCDate()
+    out.setUTCDate(1)
+    out.setUTCMonth(out.getUTCMonth() + months)
+    const lastDay = new Date(Date.UTC(out.getUTCFullYear(), out.getUTCMonth() + 1, 0)).getUTCDate()
+    out.setUTCDate(Math.min(day, lastDay))
+    return out
+  }
   switch (interval) {
     case 'HOURLY':
       out.setUTCHours(out.getUTCHours() + 1)

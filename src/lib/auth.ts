@@ -77,8 +77,8 @@ export async function startPasswordRecovery(email: string): Promise<AuthChalleng
   return (await apiPost<Data<AuthChallenge>>('/auth/password/forgot', { email })).data
 }
 
-export async function resetPassword(token: string, code: string, password: string): Promise<void> {
-  await apiPost('/auth/password/reset', { token, code, password })
+export async function resetPassword(token: string, code: string, password: string, totp?: string): Promise<void> {
+  await apiPost('/auth/password/reset', { token, code, password, ...(totp ? { totp } : {}) })
 }
 
 export async function getGoogleLoginUrl(redirectTo = '/dashboard'): Promise<string> {
@@ -110,4 +110,8 @@ export async function enableTwoFactor(code: string): Promise<void> {
 
 export async function disableTwoFactor(password: string): Promise<void> {
   await apiPost('/auth/2fa/disable', { password })
+}
+
+export async function startPhonePasswordRecovery(mobile: string): Promise<AuthChallenge> {
+  return (await apiPost<Data<AuthChallenge>>('/auth/password/forgot/phone', { mobile }, { timeoutMs: 30000 })).data
 }

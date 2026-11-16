@@ -1,7 +1,8 @@
+import { enqueueSms } from '../notifications/sms.js'
 import { createHash, randomBytes } from 'node:crypto'
 import argon2 from 'argon2'
 import { and, eq, gte, isNull } from 'drizzle-orm'
-import type { DbClient } from '../../db/index.js'
+import type { DbClient, DbOrTx } from '../../db/index.js'
 import { sessions, users } from '../../db/schema.js'
 import { ConflictError, NotFoundError, UnauthorizedError } from '../../lib/errors.js'
 import { writeAudit } from '../audit/service.js'
@@ -44,13 +45,14 @@ export interface SessionUser {
 }
 
 export async function createSession(
-  db: DbClient,
+  db: DbOrTx,
   userId: string,
   meta: { userAgent?: string; ip?: string },
 ): Promise<{ token: string; sessionId: string; expiresAt: Date }> {
   const token = generateSessionToken()
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS)
-  const [session] = await db
+  return db.transaction(async tx => {
+  const [session] = await tx
     .insert(sessions)
     .values({
       userId,
@@ -61,7 +63,9 @@ export async function createSession(
     })
     .returning({ id: sessions.id })
   if (!session) throw new Error('failed to create session')
+  await enqueueSms(tx, 'newLogin', userId, `session:${session.id}:login`, { ip: meta.ip ?? 'نامشخص' })
   return { token, sessionId: session.id, expiresAt }
+  })
 }
 
 export async function registerUser(

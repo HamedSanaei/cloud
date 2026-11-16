@@ -1,14 +1,13 @@
 /**
  * API DTO mappings.
  *
- * Money: the DB stores integer rials; the API exposes integer TOMAN values
- * (the unit the UI displays) plus exact rial fields where useful. Never send
- * floats. Provider amounts are exposed in cents + currency.
+ * Money: the DB stores integer rials; the API exposes TOMAN values with one decimal
+ * (the unit the UI displays) plus exact rial fields where useful. Never feed
+ * rounded display amounts back into billing. Provider amounts are exposed in cents + currency.
  *
  * Status tokens follow the tokens the current frontend consumes
  * (active|building|inactive, pending|paid|cancelled|refunded, ...).
  */
-import { rialToToman } from './money.js'
 import type { ServerPowerPolicy } from '../modules/billing/funding.js'
 import type { ServerTracking } from '../contracts/server-lifecycle.js'
 
@@ -64,7 +63,7 @@ export function walletToDto(wallet: { id: string; name: string; balanceRial: num
   return {
     id: wallet.id,
     name: wallet.name,
-    balance: rialToToman(wallet.balanceRial),
+    balance: wallet.balanceRial / 10,
     balanceRial: wallet.balanceRial,
     isDefault: wallet.isDefault,
     description: wallet.description ?? undefined,
@@ -90,7 +89,7 @@ export function transactionToDto(tx: {
   return {
     id: tx.id,
     description: tx.description ?? tx.type,
-    amount: rialToToman(tx.amountRial),
+    amount: tx.amountRial / 10,
     amountRial: tx.amountRial,
     date: tx.createdAt.toISOString(),
     ...(tx.scheduledAt ? { scheduledAt: tx.scheduledAt.toISOString() } : {}),
@@ -118,7 +117,7 @@ export function invoiceToDto(invoice: {
     id: invoice.id,
     number: invoice.invoiceNumber,
     description: invoice.description ?? '',
-    amount: rialToToman(invoice.totalRial),
+    amount: invoice.totalRial / 10,
     amountRial: invoice.totalRial,
     status: mapInvoiceStatus(invoice.status),
     date: invoice.createdAt.toISOString(),
@@ -163,7 +162,7 @@ export function orderToDto(order: {
     id: order.id,
     orderNumber: order.orderNumber,
     status: order.status,
-    amount: rialToToman(order.totalRial),
+    amount: order.totalRial / 10,
     amountRial: order.totalRial,
     product: order.providerProductId,
     location: order.providerLocation,
@@ -184,7 +183,7 @@ export function subscriptionToDto(sub: {
   return {
     id: sub.id,
     billingInterval: sub.billingInterval,
-    price: rialToToman(sub.priceRial),
+    price: sub.priceRial / 10,
     priceRial: sub.priceRial,
     status: sub.status,
     autoRenew: sub.autoRenew,

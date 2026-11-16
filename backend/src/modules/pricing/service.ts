@@ -1,17 +1,18 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, lte } from 'drizzle-orm'
 import type { DbClient } from '../../db/index.js'
 import { fxRates, pricingRules } from '../../db/schema.js'
 import { AppError, NotFoundError, ValidationError } from '../../lib/errors.js'
 import { outboundFetch } from '../outbound/client.js'
-import { percentOf, roundTo } from '../../lib/money.js'
 import { writeAudit } from '../audit/service.js'
 import type { ProviderBillingOption } from '../providers/provider.interface.js'
-import { exactProviderCents, providerCentsToRial } from './periods.js'
+import { exactProviderCents, scaledDecimal } from './periods.js'
 import { getConfig } from '../../config.js'
 import { z } from 'zod'
 
-type FxRate = { rate: string; from: string; to: string; createdAt: Date }
+type FxRate = { rate: string; from: string; to: string; createdAt: Date; id?: number; source?: string }
 const usdtRefreshes = new WeakMap<DbClient, Promise<FxRate>>()
+/** Market USDT expires at the configured TTL; operator-set non-USDT rates last 24h. */
+export const fxMaxAgeMs = (currency: string) => (['USD', 'USDT'].includes(currency) ? getConfig().USDT_RATE_MAX_AGE_SECONDS : 86400) * 1000
 const usdtTicker = z.object({
   data: z.object({ markets: z.object({ USDTIRT: z.object({
     symbol: z.literal('USDT'),
@@ -28,8 +29,8 @@ export async function getActiveFxRate(db: DbClient, currency = 'EUR'): Promise<F
   if (currency === 'IRR') return { rate: '1', from: 'IRR', to: 'IRR', createdAt: new Date() }
   const canonicalCurrency = currency === 'USD' ? 'USDT' : currency
   const row = await db.query.fxRates.findFirst({
-    where: (t) => and(eq(t.fromCurrency, canonicalCurrency), eq(t.toCurrency, 'IRR')),
-    orderBy: (t, { desc }) => [desc(t.createdAt)],
+    where: (t) => and(eq(t.fromCurrency, canonicalCurrency), eq(t.toCurrency, 'IRR'), lte(t.createdAt, new Date())),
+    orderBy: (t, { desc }) => [desc(t.createdAt), desc(t.id)],
   })
   if (canonicalCurrency === 'USDT' && (!row || Date.now() - row.createdAt.getTime() >= getConfig().USDT_RATE_MAX_AGE_SECONDS * 1000)) {
     let refresh = usdtRefreshes.get(db)
@@ -44,7 +45,8 @@ export async function getActiveFxRate(db: DbClient, currency = 'EUR'): Promise<F
       `نرخ ارز ${currency} به IRR تنظیم نشده است؛ ادمین باید نرخ این ارز را ثبت کند.`,
     )
   }
-  return { rate: row.rate, from: row.fromCurrency, to: row.toCurrency, createdAt: row.createdAt }
+  if (Date.now() - row.createdAt.getTime() >= fxMaxAgeMs(currency)) throw new AppError(503, 'fx_rate_stale', 'نرخ معتبر ارز در دسترس نیست؛ نرخ تازه لازم است')
+  return { rate: row.rate, from: row.fromCurrency, to: row.toCurrency, createdAt: row.createdAt, id: row.id, source: row.note ?? (row.setBy ? 'operator-approved' : 'stored FX history') }
 }
 
 export async function setFxRate(db: DbClient, rate: string, opts: { actorId?: string | null; note?: string; currency?: string; source?: 'market' } = {}) {
@@ -55,7 +57,7 @@ export async function setFxRate(db: DbClient, rate: string, opts: { actorId?: st
   const currency = opts.currency === 'USD' ? 'USDT' : opts.currency ?? 'EUR'
   const [row] = await db
     .insert(fxRates)
-    .values({ fromCurrency: currency, toCurrency: 'IRR', rate, setBy: opts.actorId ?? null, note: opts.note ?? null })
+    .values({ fromCurrency: currency, toCurrency: 'IRR', rate, setBy: opts.actorId ?? null, note: opts.note ?? null, createdAt: new Date() })
     .returning()
   if (!row) throw new Error('failed to set fx rate')
   await writeAudit(db, {
@@ -70,7 +72,7 @@ export async function listFxRateHistory(db: DbClient, limit = 20, currency = 'EU
   const canonicalCurrency = currency === 'USD' ? 'USDT' : currency
   return db.query.fxRates.findMany({
     where: (t) => and(eq(t.fromCurrency, canonicalCurrency), eq(t.toCurrency, 'IRR')),
-    orderBy: (t, { desc }) => [desc(t.createdAt)],
+    orderBy: (t, { desc }) => [desc(t.createdAt), desc(t.id)],
     limit,
   })
 }
@@ -93,7 +95,7 @@ async function refreshUsdtRate(db: DbClient): Promise<FxRate> {
     throw new AppError(503, 'usdt_rate_unavailable', 'نرخ معتبر تتر به ریال در دسترس نیست؛ قیمت‌گذاری دلاری تا دریافت نرخ تازه متوقف است.')
   }
   const row = await setFxRate(db, rate, { currency: 'USDT', source: 'market', note: 'AbanTether USDTIRT buy_price (toman × 10); USD = USDT' })
-  return { rate: row.rate, from: row.fromCurrency, to: row.toCurrency, createdAt: row.createdAt }
+  return { rate: row.rate, from: row.fromCurrency, to: row.toCurrency, createdAt: row.createdAt, id: row.id, source: row.note ?? (row.setBy ? 'operator-approved' : 'stored FX history') }
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +154,9 @@ export interface PriceSnapshot {
   subtotalRial: number
   taxRial: number
   totalRial: number
+  fxRateId?: number
+  fxAt?: string
+  fxSource?: string
 }
 
 export interface PricingRuleValues {
@@ -178,11 +183,18 @@ export function computePriceFromRules(input: {
     throw new ValidationError('محصول انتخابی قیمت معتبری ندارد')
   }
 
-  const providerRial = providerCentsToRial(input.providerAmountCents, input.fxRate)
-  const base = providerRial + rules.markupFixedRial
-  const subtotal = base + percentOf(base, rules.markupPercent)
-  const tax = percentOf(subtotal, rules.taxPercent)
-  const total = roundTo(subtotal + tax, rules.roundingToRial)
+  if (!Number.isSafeInteger(rules.markupFixedRial) || rules.markupFixedRial < 0) throw new ValidationError('قاعده قیمت نامعتبر است')
+  const cost = scaledDecimal(String(input.providerAmountCents), 6) * scaledDecimal(input.fxRate, 6)
+  const denominator = 100_000_000_000_000n
+  const percentScale = 1_000_000n // four percentage decimals / 100
+  const subtotalNumerator = (cost + BigInt(rules.markupFixedRial) * denominator) * (percentScale + scaledDecimal(rules.markupPercent, 4))
+  const subtotal = Number(subtotalNumerator / (denominator * percentScale))
+  // One deterministic downward conversion at the ledger's single IRR boundary.
+  // Preserve fractional provider cents and markup until this final calculation.
+  const exactTotal = subtotalNumerator * (percentScale + scaledDecimal(rules.taxPercent, 4)) / (denominator * percentScale * percentScale)
+  if (exactTotal <= 0n || exactTotal > BigInt(Number.MAX_SAFE_INTEGER)) throw new ValidationError('مبلغ محاسبه‌شده خارج از دقت دفترکل است')
+  const total = Number(exactTotal)
+  const tax = total - subtotal
 
   return {
     providerCurrency: input.providerCurrency,
@@ -211,7 +223,7 @@ export async function computePriceSnapshot(
     ? { rate: input.fxRate }
     : await getActiveFxRate(db, input.providerCurrency)
   const providerAmountCents = exactProviderCents(input.billingOption)
-  return computePriceFromRules({
+  return { ...computePriceFromRules({
     providerCurrency: input.providerCurrency,
     providerAmountCents,
     fxRate: fx.rate,
@@ -222,5 +234,5 @@ export async function computePriceSnapshot(
       roundingToRial: rules.roundingToRial,
       enabled: rules.enabled,
     },
-  })
+  }), fxAt: 'createdAt' in fx ? (fx.createdAt as Date).toISOString() : new Date().toISOString(), fxRateId: 'id' in fx ? fx.id : undefined, fxSource: 'source' in fx ? fx.source : 'explicit quote FX' }
 }

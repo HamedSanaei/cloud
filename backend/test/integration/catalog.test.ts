@@ -128,7 +128,7 @@ describe.skipIf(skip)('catalog retail safety (integration)', () => {
     const before = (offer.billingOptions as Array<{ amountCents?: number }>)[0]?.amountCents ?? offer.providerPriceCents!
 
     const quoteA = await makeQuote(user.id)
-    expect(quoteA.totalRial).toBe(11_238_000) // 1450 EUR-cents snapshot
+    expect(quoteA.totalRial).toBe(11_237_500) // 1450 EUR-cents snapshot
 
     // Provider raises the price in the monthly billing option.
     const newOptions = JSON.parse(JSON.stringify(offer.billingOptions)) as Array<Record<string, unknown>>

@@ -1,18 +1,19 @@
+import { enqueueSms, deliverAuthSms } from '../notifications/sms.js'
 import { randomBytes } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
-import { eq } from 'drizzle-orm'
+import { and, eq, ne, isNull } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppContext } from '../../app.js'
 import { sessionCookieOptions, AUTH_COOKIE } from '../../app.js'
 import { getConfig, isProduction } from '../../config.js'
-import { users } from '../../db/schema.js'
+import { users, sessions } from '../../db/schema.js'
 import { requireUser } from '../../http/auth.js'
 import { parse } from '../../http/validate.js'
-import { BadRequestError, ConflictError, ForbiddenError } from '../../lib/errors.js'
+import { AppError, BadRequestError, ConflictError, ForbiddenError } from '../../lib/errors.js'
 import { writeAudit } from '../audit/service.js'
 import { ensureDefaultWallet } from '../wallets/service.js'
 import { assertCanResend, consumeChallenge, findChallenge, issueChallenge, recordChallengeFailure, verifyChallengeCode, type ChallengeKind } from './challenges.js'
-import { maskEmail, maskMobile, normalizeIranMobile, sendEmailOtp, sendSmsOtp } from './delivery.js'
+import { maskEmail, maskMobile, normalizeIranMobile, sendEmailOtp } from './delivery.js'
 import { beginGoogleOAuth, completeGoogleOAuth } from './google.js'
 import { createRecoveryCodes, createTotpSecret, decryptTotpSecret, encryptTotpSecret, buildOtpAuthUri, hashRecoveryCode, verifyTotp } from './totp.js'
 import { createSession, hashPassword, login, logout, registerUser, rotateSession, verifyPrimaryCredentials } from './service.js'
@@ -65,9 +66,11 @@ function challengeResponse(
   }
 }
 
-async function deliverChallenge(kind: string, identifier: string, code: string, origin?: string): Promise<{ developmentCode?: string; smsAutofill?: true }> {
-  if (kind === 'phone_login') return sendSmsOtp(identifier, code, origin)
-  if (kind === 'phone_register') return sendSmsOtp(identifier, code)
+async function deliverChallenge(db: AppContext['db'], kind: string, identifier: string, code: string, origin?: string): Promise<{ developmentCode?: string; smsAutofill?: true }> {
+  if (kind === 'phone_login') return deliverAuthSms(db, 'phoneLogin', identifier, code, origin)
+  if (kind === 'phone_register') return deliverAuthSms(db, 'phoneVerification', identifier, code)
+  if (kind === 'phone_recovery') return deliverAuthSms(db, 'passwordRecovery', identifier, code)
+  if (kind === 'phone_operation') return deliverAuthSms(db, 'accountOperation', identifier, code)
   if (kind === 'email_register') return sendEmailOtp(identifier, code, 'register')
   if (kind === 'password_recovery') return sendEmailOtp(identifier, code, 'recovery')
   return sendEmailOtp(identifier, code, 'login')
@@ -161,7 +164,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
     }
     if (!user) throw new Error('failed to prepare phone registration')
     const challenge = await issueChallenge(db, { kind: 'phone_register', identifier: normalized, userId: user.id })
-    const delivery = await sendSmsOtp(normalized, challenge.code)
+    const delivery = await deliverAuthSms(db, 'phoneVerification', normalized, challenge.code)
     return reply.status(202).send({ data: challengeResponse(challenge, 'sms', maskMobile(normalized), delivery.developmentCode) })
   })
 
@@ -175,7 +178,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
     }
     if (user.status === 'disabled') throw new ForbiddenError('این حساب غیرفعال است')
     const challenge = await issueChallenge(db, { kind: 'phone_login', identifier: normalized, userId: user.id })
-    const delivery = await sendSmsOtp(normalized, challenge.code, request.headers.origin)
+    const delivery = await deliverAuthSms(db, 'phoneLogin', normalized, challenge.code, request.headers.origin)
     return reply.status(202).send({ data: challengeResponse(challenge, 'sms', maskMobile(normalized), delivery.developmentCode, delivery.smsAutofill) })
   })
 
@@ -193,7 +196,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
     }
     const user = await db.query.users.findFirst({ where: (t) => eq(t.id, challenge.userId!) })
     if (!user) throw new BadRequestError('حساب کاربری یافت نشد')
-    if (challenge.kind === 'phone_login' && (user.status !== 'active' || !user.mobileVerifiedAt)) {
+    if (challenge.kind === 'phone_login' && (user.status !== 'active' || !user.mobileVerifiedAt || user.mobile !== challenge.identifier)) {
       throw new ForbiddenError('شماره همراه این حساب تأیید نشده است')
     }
     if (challenge.kind === 'phone_login' && getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED && user.twoFactorEnabled) {
@@ -206,7 +209,16 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
   app.post('/auth/challenge/resend', { config: { rateLimit: sendLimiter } }, async (request, reply) => {
     const input = parse(tokenSchema, request.body)
     const old = await assertCanResend(db, input.token)
-    if (!['email_login', 'email_register', 'phone_login', 'phone_register', 'password_recovery'].includes(old.kind)) throw new BadRequestError('ارسال مجدد برای این روش امکان‌پذیر نیست')
+    if (!['email_login', 'email_register', 'phone_login', 'phone_register', 'phone_recovery', 'phone_operation', 'password_recovery'].includes(old.kind)) throw new BadRequestError('ارسال مجدد برای این روش امکان‌پذیر نیست')
+    let canDeliver = true
+    if (old.kind.startsWith('phone_')) {
+      const account = old.userId ? await db.query.users.findFirst({ where: t => eq(t.id, old.userId!) }) : null
+      if (!account && old.kind === 'phone_recovery') canDeliver = false // Same non-enumerating behavior as start.
+      else if (!account || account.mobile !== old.identifier || (old.kind === 'phone_register'
+        ? account.status !== 'pending'
+        : account.status !== 'active' || !account.mobileVerifiedAt)) throw new BadRequestError('شماره یا وضعیت حساب تغییر کرده است؛ درخواست تازه ثبت کنید')
+      if (old.kind === 'phone_operation' && old.payload?.sessionId !== requireUser(request).sessionId) throw new ForbiddenError('این کد به نشست جاری تعلق ندارد')
+    }
     const challenge = await issueChallenge(db, {
       kind: old.kind as ChallengeKind,
       identifier: old.identifier,
@@ -215,8 +227,8 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
       resendCount: old.resendCount + 1,
       resendToken: input.token,
     })
-    const delivery = await deliverChallenge(old.kind, old.identifier, challenge.code, request.headers.origin)
-    const isSms = old.kind === 'phone_login' || old.kind === 'phone_register'
+    const delivery = canDeliver ? await deliverChallenge(db, old.kind, old.identifier, challenge.code, request.headers.origin) : {}
+    const isSms = old.kind.startsWith('phone_')
     return reply.status(202).send({ data: challengeResponse(challenge, isSms ? 'sms' : 'email', isSms ? maskMobile(old.identifier) : maskEmail(old.identifier), delivery.developmentCode, delivery.smsAutofill) })
   })
 
@@ -228,13 +240,60 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
     return reply.status(202).send({ data: challengeResponse(challenge, 'email', maskEmail(input.email), delivery.developmentCode) })
   })
 
-  app.post('/auth/password/reset', { config: { rateLimit: authLimiter } }, async (request) => {
-    const input = parse(resetSchema, request.body)
-    const challenge = await verifyChallengeCode(db, input.token, input.code, 'password_recovery')
-    if (challenge.userId) {
-      await db.update(users).set({ passwordHash: await hashPassword(input.password), updatedAt: new Date() }).where(eq(users.id, challenge.userId))
-      await writeAudit(db, { actorId: challenge.userId, action: 'user.password_reset' })
-    }
+  app.post('/auth/password/forgot/phone', { config: { rateLimit: sendLimiter } }, async (request, reply) => {
+    const input = parse(phoneSchema, request.body)
+    const mobile = normalizeIranMobile(input.mobile)
+    if (!mobile) throw new BadRequestError('شماره همراه ایرانی معتبر نیست')
+    const user = await db.query.users.findFirst({ where: t => eq(t.mobile, mobile) })
+    const eligible = user?.status === 'active' && !!user.mobileVerifiedAt
+    const challenge = await issueChallenge(db, { kind: 'phone_recovery', identifier: mobile, userId: eligible ? user.id : undefined })
+    const delivery = eligible ? await deliverAuthSms(db, 'passwordRecovery', mobile, challenge.code) : {}
+    return reply.status(202).send({ data: challengeResponse(challenge, 'sms', maskMobile(mobile), delivery.developmentCode) })
+  })
+
+  app.post('/auth/account/operation/start', { config: { rateLimit: sendLimiter } }, async (request, reply) => {
+    const auth = requireUser(request)
+    const user = await db.query.users.findFirst({ where: t => eq(t.id, auth.id) })
+    if (!user?.mobileVerifiedAt || !user.mobile || user.status !== 'active') throw new BadRequestError('شماره همراه تأییدشده لازم است')
+    const challenge = await issueChallenge(db, { kind: 'phone_operation', identifier: user.mobile, userId: auth.id, payload: { operation: 'password_change', sessionId: auth.sessionId } })
+    const delivery = await deliverAuthSms(db, 'accountOperation', user.mobile, challenge.code)
+    return reply.status(202).send({ data: challengeResponse(challenge, 'sms', maskMobile(user.mobile), delivery.developmentCode) })
+  })
+
+  async function changePassword(token: string, code: string, newPassword: string, totp?: string, auth?: ReturnType<typeof requireUser>, currentPassword?: string) {
+    const outcome = await db.transaction(async tx => {
+      const raw = await findChallenge(tx, token)
+      const allowed = auth ? ['phone_operation'] : ['password_recovery', 'phone_recovery']
+      if (!allowed.includes(raw.kind)) throw new BadRequestError('نوع درخواست بازیابی معتبر نیست')
+      if (auth && (raw.userId !== auth.id || raw.payload?.operation !== 'password_change' || raw.payload?.sessionId !== auth.sessionId)) throw new ForbiddenError()
+      const user = raw.userId ? (await tx.select().from(users).where(eq(users.id, raw.userId)).for('update'))[0] : null
+      if (raw.kind.startsWith('phone_') && raw.userId && (!user?.mobileVerifiedAt || user.mobile !== raw.identifier || user.status !== 'active')) throw new ForbiddenError('شماره تأییدشده تغییر کرده است')
+      if (auth && user) await verifyPrimaryCredentials(db, { email: user.email, password: currentPassword ?? '' })
+      try {
+        if (user?.twoFactorEnabled && (!totp || !user.totpSecretEncrypted || !verifyTotp(decryptTotpSecret(user.totpSecretEncrypted), totp))) await recordChallengeFailure(tx, raw.id, raw.attempts, raw.maxAttempts)
+        await verifyChallengeCode(tx, token, code)
+      } catch (error) {
+        if (error instanceof AppError) return error
+        throw error
+      }
+      if (!user) return
+      const passwordHash = await hashPassword(newPassword)
+      await tx.update(users).set({ passwordHash, updatedAt: new Date() }).where(eq(users.id, user.id))
+      await tx.update(sessions).set({ revokedAt: new Date() }).where(and(eq(sessions.userId, user.id), isNull(sessions.revokedAt), auth ? ne(sessions.id, auth.sessionId) : undefined))
+      await writeAudit(tx, { actorId: user.id, action: 'user.password_reset' })
+      await enqueueSms(tx, 'passwordChanged', user.id, `challenge:${raw.id}:password-changed`, {})
+    })
+    if (outcome instanceof AppError) throw outcome
+  }
+  app.post('/auth/password/reset', { config: { rateLimit: authLimiter } }, async request => {
+    const input = parse(resetSchema.extend({ totp: otpCode.optional() }), request.body)
+    await changePassword(input.token, input.code, input.password, input.totp)
+    return { data: { ok: true } }
+  })
+  app.post('/auth/account/password', { config: { rateLimit: authLimiter } }, async request => {
+    const auth = requireUser(request)
+    const input = parse(resetSchema.extend({ currentPassword: z.string().min(1).max(200), totp: otpCode.optional() }), request.body)
+    await changePassword(input.token, input.code, input.password, input.totp, auth, input.currentPassword)
     return { data: { ok: true } }
   })
 

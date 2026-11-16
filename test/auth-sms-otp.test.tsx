@@ -110,6 +110,26 @@ describe('WebOTP during mobile login', () => {
     expect(verifyChallenge).toHaveBeenCalledTimes(1)
   })
 
+  it('offers a clear fresh-request path after challenge expiry without silently sending another OTP', async () => {
+    vi.useFakeTimers()
+    getCredential.mockReturnValue(new Promise(() => {}))
+    startLogin(); await act(async () => {})
+    await act(async () => { await vi.advanceTimersByTimeAsync(300001) })
+    const restart = screen.getByRole('button', { name: 'درخواست منقضی شده؛ شروع دوباره و دریافت کد جدید' })
+    expect(resendChallenge).not.toHaveBeenCalled()
+    fireEvent.click(restart)
+    expect(screen.getByLabelText('شماره همراه')).toBeTruthy()
+    expect(startPhoneLogin).toHaveBeenCalledTimes(1)
+  })
+  it('recognizes server-side expiry on resend when the local clock has not expired yet', async () => {
+    getCredential.mockReturnValue(new Promise(() => {}))
+    resendChallenge.mockRejectedValue(new ApiError('کد منقضی شده است', 410, { code: 'challenge_expired' }))
+    startLogin()
+    fireEvent.click(await screen.findByRole('button', { name: 'ارسال مجدد کد' }))
+    expect(await screen.findByRole('button', { name: 'درخواست منقضی شده؛ شروع دوباره و دریافت کد جدید' })).toBeTruthy()
+    expect(resendChallenge).toHaveBeenCalledTimes(1)
+  })
+
   it('aborts stale reads and accepts a replacement code only for the resend token', async () => {
     let resolveFirst!: (value: unknown) => void
     getCredential.mockReturnValueOnce(new Promise(resolve => { resolveFirst = resolve }))

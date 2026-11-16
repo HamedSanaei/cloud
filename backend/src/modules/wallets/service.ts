@@ -1,3 +1,5 @@
+import { enqueueSms } from '../notifications/sms.js'
+import { smsToman } from '../notifications/sms-events.js'
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 import type { DbClient, DbOrTx } from '../../db/index.js'
 import { invoices, walletTransactions, wallets } from '../../db/schema.js'
@@ -124,6 +126,13 @@ export async function applyWalletTransaction(
     if (!txRow) throw new Error('failed to insert wallet transaction')
 
     await tx.update(wallets).set({ balanceRial: balanceAfter }).where(eq(wallets.id, wallet.id))
+    if (signed > 0) {
+      await enqueueSms(tx, 'walletCredited', userId, `wallet:${txRow.id}:credit`, { amount: smsToman(signed), balance: smsToman(balanceAfter) })
+      if (input.type === 'refund' && input.referenceType === 'order' && input.referenceId) {
+        const order = await tx.query.orders.findFirst({ where: t => eq(t.id, input.referenceId!) })
+        if (order?.userId === userId) await enqueueSms(tx, 'orderRefunded', userId, `wallet:${txRow.id}:refund`, { amount: smsToman(signed), orderNumber: order.orderNumber })
+      }
+    }
     const titles = { deposit: 'کیف پول شارژ شد', refund: 'مبلغ به کیف پول بازگشت', manual_credit: 'موجودی کیف پول افزایش یافت',
       manual_debit: 'از کیف پول برداشت شد', adjustment: 'موجودی کیف پول اصلاح شد', renewal: 'پرداخت تمدید تأیید شد' } as const
     if (input.type !== 'purchase' && input.amountRial > 0) {

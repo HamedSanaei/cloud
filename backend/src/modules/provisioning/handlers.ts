@@ -1,3 +1,7 @@
+import { enqueueSms, dispatchSms } from '../notifications/sms.js'
+import { sweepSmsEvents, smsToman, smsDate } from '../notifications/sms-events.js'
+import { renewalPrice } from '../pricing/renewal.js'
+import { getActiveFxRate } from '../pricing/service.js'
 /**
  * Job handlers. These are plain functions (no BullMQ dependency) so they can
  * be unit-tested directly. The worker wraps them with retry/backoff.
@@ -23,7 +27,7 @@ import { writeAudit } from '../audit/service.js'
 import { syncProviderCatalog, findOfferByProductAndLocation } from '../catalog/service.js'
 import { generateNumber, transitionOrder } from '../orders/service.js'
 import { createServerRecord, activateServer, updateServerFromView, createServerActionOperation } from '../servers/service.js'
-import { createSubscription, enterGracePeriod, extendSubscriptionPeriod, findGraceExpiredSubscriptions, findSubscriptionsDueForRenewal, suspendSubscription } from '../subscriptions/service.js'
+import { addInterval, createSubscription, enterGracePeriod, extendSubscriptionPeriod, findGraceExpiredSubscriptions, findSubscriptionsDueForRenewal, suspendSubscription } from '../subscriptions/service.js'
 import { getProvider } from '../providers/registry.js'
 import { applyWalletTransaction, getWallet } from '../wallets/service.js'
 import type { CloudQueues } from '../../jobs/queue.js'
@@ -543,6 +547,8 @@ export async function completeOrderFromRecovery(db: DbClient, op: typeof provide
 export async function handleServerSync(ctx: HandlerContext, data: { serverId?: string }) {
   const { db, queues } = ctx
   if (!data.serverId) {
+    await sweepSmsEvents(db)
+    await dispatchSms(db)
     await purgeExpiredServerSecrets(db)
     const pending = await db.query.servers.findMany({ where: (t) => inArray(t.status, ['provisioning', 'active', 'suspended']) })
     for (const server of pending) await queues.addServerSync(server.id)
@@ -584,6 +590,9 @@ async function finishServerActivation(db: DbClient, serverId: string, view: Prov
       priceRial: order.totalRial, billingInterval: order.billingInterval,
     })
     await tx.update(servers).set({ subscriptionId: sub.id }).where(eq(servers.id, server.id))
+    await enqueueSms(tx, 'serverActivated', order.userId, `server:${server.id}:activated`, { serviceName: order.hostname, serverIp: view.ipv4 || view.ipv6 || 'در پنل' })
+    const initialInvoice = await tx.query.invoices.findFirst({ where: t => eq(t.orderId, order.id) })
+    if (initialInvoice) await tx.update(invoices).set({ snapshot: { ...(initialInvoice.snapshot as Record<string, unknown>), periodStart: sub.currentPeriodStart.toISOString(), periodEnd: sub.currentPeriodEnd.toISOString() } }).where(eq(invoices.id, initialInvoice.id))
     await tx.update(orders).set({ status: 'active', updatedAt: new Date() }).where(eq(orders.id, order.id))
     await tx.insert(orderEvents).values({ orderId: order.id, fromStatus: order.status, toStatus: 'active', reason: 'provider server is running' })
     await publishNotification(tx, { userId: order.userId, eventKey: `order:${order.id}:active`,
@@ -680,6 +689,9 @@ async function syncLegacyPowerState(db: DbClient, server: typeof servers.$inferS
 // ---------------------------------------------------------------------------
 export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed: number; failed: number; suspended: number; shutdownRequested: number }> {
   const { db, queues } = ctx
+  // Refresh before transactions; historical invoice creation still selects only FX valid in its hour.
+  const needsUsdt = await db.query.quotes.findFirst({ where: t => inArray(t.providerCurrency, ['USD', 'USDT']), columns: { id: true } })
+  if (needsUsdt) await getActiveFxRate(db, 'USDT')
   const shutdowns = await protectHourlyServers(ctx)
   const subs = await findSubscriptionsDueForRenewal(db, 0)
   let renewed = 0
@@ -706,6 +718,10 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
         orderBy: (t, { asc }) => [asc(t.createdAt)],
       })
       if (!invoice) {
+        const pricingSnapshot = current.billingInterval === 'HOURLY' || current.billingInterval === 'MONTHLY'
+          ? await renewalPrice(tx, current.orderId!, current.billingInterval, current.currentPeriodEnd)
+          : { totalRial: current.priceRial, grandfathered: true }
+        const renewalAmount = pricingSnapshot.totalRial
         const invoiceNumber = await generateNumber(tx, 'INV', invoices, invoices.invoiceNumber)
         const [created] = await tx.insert(invoices).values({
           invoiceNumber,
@@ -713,23 +729,24 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
           orderId: current.orderId,
           subscriptionId: current.id,
           status: 'open',
-          subtotalRial: current.priceRial,
-          taxRial: 0,
+          subtotalRial: 'subtotalRial' in pricingSnapshot ? pricingSnapshot.subtotalRial : renewalAmount,
+          taxRial: 'taxRial' in pricingSnapshot ? pricingSnapshot.taxRial : 0,
           discountRial: 0,
-          totalRial: current.priceRial,
+          totalRial: renewalAmount,
           description: `تمدید اشتراک ${order?.hostname ?? 'سرور'} — ${current.billingInterval}`,
-          snapshot: { priceRial: current.priceRial, billingInterval: current.billingInterval, periodStart: current.currentPeriodEnd.toISOString() },
+          snapshot: { ...pricingSnapshot, billingInterval: current.billingInterval, periodStart: current.currentPeriodEnd.toISOString(), periodEnd: addInterval(current.currentPeriodEnd, current.billingInterval).toISOString() },
           issuedAt: new Date(),
           dueAt: current.currentPeriodEnd,
         }).returning()
         if (!created) throw new Error('failed to create renewal invoice')
         invoice = created
+        await enqueueSms(tx, 'invoiceIssued', current.userId, `invoice:${invoice.id}:issued`, { invoiceNumber, amount: smsToman(invoice.totalRial) })
         await tx.insert(invoiceItems).values({
           invoiceId: invoice.id,
           description: `تمدید ${current.billingInterval} — ${order?.hostname ?? 'سرور'}`,
           quantity: 1,
-          unitAmountRial: current.priceRial,
-          totalRial: current.priceRial,
+          unitAmountRial: renewalAmount,
+          totalRial: renewalAmount,
           referenceType: 'subscription',
           referenceId: current.id,
         })
@@ -748,13 +765,13 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
         subscriptionId: current.id,
         invoiceId: invoice.id,
         status: 'pending',
-        amountRial: current.priceRial,
+        amountRial: invoice.totalRial,
       }).returning()
       if (!attempt) throw new Error('failed to create renewal attempt')
       try {
         const wallet = await getWallet(tx, current.userId, order?.walletId ?? undefined)
         await applyWalletTransaction(tx, current.userId, wallet.id, {
-          amountRial: current.priceRial,
+          amountRial: invoice.totalRial,
           type: 'renewal',
           referenceType: 'subscription',
           referenceId: current.id,
@@ -778,7 +795,11 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
       }
       await tx.update(invoices).set({ status: 'paid', paidAt: new Date() }).where(eq(invoices.id, invoice.id))
       await tx.update(renewalAttempts).set({ status: 'succeeded' }).where(eq(renewalAttempts.id, attempt.id))
+      await tx.update(subscriptions).set({ priceRial: invoice.totalRial }).where(eq(subscriptions.id, current.id))
       await extendSubscriptionPeriod(tx, current.id, { scheduledHourly: true })
+      const renewedSub = await tx.query.subscriptions.findFirst({ where: t => eq(t.id, current.id) })
+      await tx.update(invoices).set({ snapshot: { ...(invoice.snapshot as Record<string, unknown>), periodStart: renewedSub!.currentPeriodStart.toISOString(), periodEnd: renewedSub!.currentPeriodEnd.toISOString() } }).where(eq(invoices.id, invoice.id))
+      await enqueueSms(tx, 'serviceRenewed', current.userId, `invoice:${invoice.id}:renewed`, { serviceName: order?.hostname ?? 'سرور', endDate: smsDate(renewedSub!.currentPeriodEnd) })
       return 'renewed'
     })
     if (outcome === 'renewed') renewed++

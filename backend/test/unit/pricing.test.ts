@@ -10,7 +10,7 @@ const baseRules = {
 }
 
 describe('price engine', () => {
-  it('computes EUR -> IRR with markup and rounding', () => {
+  it('computes EUR -> IRR with markup at IRR precision', () => {
     const snap = computePriceFromRules({
       providerCurrency: 'EUR',
       providerAmountCents: 1450, // 14.50 EUR
@@ -19,9 +19,9 @@ describe('price engine', () => {
     })
     expect(snap.providerAmountCents).toBe(1450)
     expect(snap.fxRate).toBe('620000')
-    // 1450 * 620000 / 100 = 8,990,000 rials; +25% = 11,237,500; round to 1000
+    // 1450 * 620000 / 100 = 8,990,000 rials; +25% = 11,237,500; keep exact IRR
     expect(snap.subtotalRial).toBe(11_237_500)
-    expect(snap.totalRial).toBe(11_238_000)
+    expect(snap.totalRial).toBe(11_237_500)
   })
 
   it('applies fixed markup in addition to percent markup', () => {
@@ -65,7 +65,7 @@ describe('price engine', () => {
       taxPercent: '0',
       subtotalRial: 6_393_750, // 825*620000/100 = 5,115,000; +25% markup = 6,393,750
       taxRial: 0,
-      totalRial: 6_394_000, // rounded to 1000
+      totalRial: 6_393_750, // rounded to 1000
     })
     // A snapshot is a plain value object: changing inputs later must not
     // change the snapshot (no shared mutable state).
@@ -76,7 +76,7 @@ describe('price engine', () => {
       rules: baseRules,
     })
     expect(snap2.totalRial).not.toBe(snap.totalRial)
-    expect(snap.totalRial).toBe(6_394_000)
+    expect(snap.totalRial).toBe(6_393_750)
   })
 
   it('rejects disabled pricing', () => {

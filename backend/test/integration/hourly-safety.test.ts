@@ -182,7 +182,9 @@ describe.skipIf(!dbAvailable)('hourly funding safety', () => {
   })
 
   it('warns for an unfunded daily renewal without cutting off the prepaid day', async () => {
-    const purchase = await purchasedServer(undefined, 'daily')
+    const purchase = await purchasedServer(undefined, 'hourly')
+    const end = new Date(Date.now() + 86400000)
+    await ctx.db.update(subscriptions).set({ billingInterval: 'DAILY', currentPeriodEnd: end, nextInvoiceAt: end, nextDueAt: end }).where(eq(subscriptions.id, purchase.server.subscriptionId!))
     await setBalance(purchase, 0)
     await handleRenewalSweep(ctx)
     expect((await ctx.mockProvider.getServer(purchase.server.providerServerId!)).state).toBe('active')

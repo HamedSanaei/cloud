@@ -22,7 +22,7 @@ const wizardSchema = z.object({
   offerId: z.string().uuid(),
   os: z.string().min(1),
   walletId: z.string().uuid().optional(),
-  billingPeriod: z.enum(['hourly', 'daily', 'monthly']),
+  billingPeriod: z.enum(['hourly', 'monthly']),
 }).strict()
 
 export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {

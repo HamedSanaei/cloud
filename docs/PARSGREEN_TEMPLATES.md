@@ -1,190 +1,74 @@
-# ParsGreen SMS templates — Pars Server
+# ParsGreen transactional SMS
 
-Source: operator-supplied ParsGreen WhiteText screen, 2026-11-12.
-Canonical exact samples and event keys: backend/src/modules/auth/parsgreen-templates.ts.
-Agents must update BOTH files when a message, approval status or event changes.
+The source of truth is `backend/src/modules/auth/parsgreen-templates.ts`. On 2026-11-16 the owner confirmed registration **and approval of the shortened dynamic business patterns and domain-bound OTP**, then separately confirmed dynamic password-recovery and account-operation approval. This is an **owner attestation**, not an automated query of the provider portal. The two old rejected texts (ticket reply and incident detected, recorded 2026-11-12) are superseded only by the newly approved shortened patterns; their old text must not be reused.
 
-## Delivery priority — dedicated service line
+## Sender priority
 
-`PARSGREEN_PRIMARY_FROM` defaults to the operator-purchased `9998883511`.
-All sends through the shared SMS transport first attempt this line with direct
-message text. The existing `PARSGREEN_FROM` remains unchanged as the fallback
-sender. Do not replace it with the new line: doing so removes the distinct
-fallback route. Compose, generated deployment Compose and bootstrap defaults
-preserve this priority without requiring another credential.
+1. Dedicated service line `PARSGREEN_PRIMARY_FROM`, default **9998883511**.
+2. If it explicitly rejects/is unavailable, the existing `PARSGREEN_FROM` service route gets the **same approved rendered pattern**, once.
+3. Business-message transport timeouts or undecodable responses are **unknown**, not safe rejection: no blind retry/failover. An accepted response is provider acceptance, **not handset delivery**. OTP retains the previously authorized bounded primary/fallback behavior with the **same code**, not a second challenge. A primary timeout can therefore cause two copies of that OTP; neither grants a second session.
 
-Only if the primary request fails (provider rejection, SOAP/HTTP failure,
-malformed response or transport timeout) is the previous route attempted once.
-For domain-bound login, the old configured/approved pattern is rendered only
-on that fallback; the primary sends direct OTP text with the same domain suffix.
-Otherwise fallback retains the previous manual OTP text. Both attempts use the
-same issued code/recipient; no new challenge is created, and a successful primary
-acceptance never triggers a second send. Identical sender settings do not cause
-a repeated attempt against the same line.
+The ParsServer login OTP now uses `پارس سرور: کد ورود %%؛ محرمانه` followed by exactly `@parserver.ir #%%`, with no trailing newline. On the trusted frontend origin, WebOTP remains enabled. Other origins do not enable WebOTP. An explicitly configured approved pattern for other HTTPS frontends remains supported. Never change a provider pattern/domain without renewed approval.
 
-Each attempt retains the configured timeout (10 seconds by default). SMS start
-and resend requests in the web client allow 30 seconds for bounded failover.
-If a timeout happens after provider acceptance, a fallback can cause duplicate
-delivery of the same code; there is no automatic handset/DLR-based retry or
-claim of exactly-once delivery. Diagnostics record only `primary`/`fallback` and
-safe numeric/fixed reason fields, never message/code/recipient/credentials.
+## Independent controls
 
-This routing change does not approve any rejected/unknown catalog entry or add
-new notification triggers. Existing pattern approval rules below still apply
-to fallback. No live SMS is sent by tests, and API acceptance is not proof of
-delivery to a handset. The new line must be enabled for the existing ParsGreen
-account/signature when the committed code is eventually deployed.
+Active store Super Admin policy is the existing `systemAdmin`/site-authority policy (this installation has `admin`/`user`, not a separate invented role or admin-ID list). Open **مدیریت → تنظیمات فروشگاه → پیامک‌های پارس‌گرین**.
 
-## Approval semantics
+* All 20 new business switches start **off**. The four supported auth channels start **on**, retaining existing mobile registration/login. No historical notification campaign runs on deployment.
+* Values live in PostgreSQL `sms_preferences`, one version per key. Stale saves return 409 and cannot overwrite another switch. Audit records contain actor, previous/new enabled/approval, version and time.
+* Enabled, dynamic provider approval, code readiness and configured transport are separate. An unapproved/rejected pattern never sends. Approval is tied to a SHA-256 of the exact registered pattern: a later text change blocks delivery until the admin explicitly re-attests approval.
+* Disabling an auth channel or changing approval requires the current admin password, `تأیید تغییر امنیت پیامک`, and current TOTP when configured. OTP is never bypassed. Email login/recovery remains independent. Phone-only customers must contact support if their SMS channel is disabled.
+* Provider approval may be revoked in this UI as soon as the operator learns of a provider-side change. There is no provider approval-status API polling in this implementation.
 
-These are message samples from the ParsGreen panel, NOT ParsGreen API template IDs.
-An approved-sample status means that the specific literal sample was marked
-«تایید» in the supplied table. It does NOT prove that dynamic replacements
-(ticket number, IP, amount, date, service, etc.) are approved for WhiteText
-delivery to blacklisted recipients. Obtain approved dynamic patterns and their
-official API identifiers/method before sending transactional events in production.
+## Delivery and timing
 
-- rejected: the panel explicitly marked «عدم تایید». Do not use live.
-- unknown: the panel supplied no approval status. Treat as unapproved.
-- Duplicate rows (ticketClosed and walletCredited) were recorded only once.
-- Fixture values such as 192.0.2.x, cloud-01, invoice IDs, amounts and dates
-  must NEVER be sent as if they were real customer data.
-- %% is exactly the marker in the rejected samples. Its meaning as a provider
-  variable syntax has not been confirmed.
+`enqueueSms` runs inside the successful business transaction. The outbox unique key is `(event_id, template key, user_id)`. It stores a masked recipient and phone hash, plus private rendering inputs in the database; history APIs never return those inputs or raw phone. Only active users with a currently verified Iranian mobile are eligible. Changing the profile phone clears verification.
 
-| Catalog key | Event | Status | Dynamic values |
-| --- | --- | --- | --- |
-| ticketClosed | ticket.closed | approved-sample | ticketNumber |
-| ticketReplied | ticket.replied | REJECTED | ticketNumber |
-| ticketCreated | ticket.created | approved-sample | ticketNumber |
-| incidentResolved | service.incident_resolved | approved-sample | serviceName |
-| incidentDetected | service.incident_detected | REJECTED | serviceName |
-| serviceSuspended | service.suspended | approved-sample | serviceName |
-| serverStoppedNoCredit | server.stopped_no_credit | approved-sample | serviceName |
-| walletLowBalance | wallet.low_balance | approved-sample | serviceName |
-| serviceExpiring | service.expiring | approved-sample | serviceName, endDate |
-| serviceRenewed | service.renewed | approved-sample | serviceName, endDate |
-| provisioningDelayed | server.provisioning_delayed | approved-sample | orderNumber |
-| serverActivated | server.activated | approved-sample | serviceName, serverIp |
-| orderPaymentFailed | order.payment_failed | approved-sample | orderNumber |
-| invoiceIssued | invoice.issued | approved-sample | invoiceNumber, amount |
-| orderRefunded | order.refunded | approved-sample | amount, orderNumber |
-| walletCredited | wallet.credited | approved-sample | amount, balance |
-| orderPaid | order.paid | approved-sample | orderNumber, amount |
-| orderCreated | order.created | approved-sample | orderNumber |
-| newLogin | account.new_login | approved-sample | ip |
-| passwordChanged | account.password_changed | approved-sample | none |
+The existing scheduled server-sync sweep drains up to five events per job after transaction commit. A disabled/config-blocked/unapproved/missing-recipient event is terminal and never becomes a catch-up send. Pending events re-check current settings, pattern digest and verified phone just before sending. The send holds a shared preference lock over the bounded provider request: a concurrent disable waits for an already-started send, and once disable returns no later sender can cross that boundary with the old setting. It cannot retract a provider-accepted message.
 
-The full original Persian message is retained in the TypeScript catalog; keep
-texts in sync with the ParsGreen panel after approvals or modifications.
+A row is claimed durably as `sending` before the network call. Rejection is terminal; an ambiguous result or a sending claim orphaned for five minutes becomes `unknown` and is **not automatically retried**. This intentionally favors avoiding duplicates over claiming exactly-once handset delivery. Operators must investigate unknowns rather than blindly resetting them. No delivery receipt API is implemented. Backup/restore must preserve preferences **and outbox**; replaying an older backup containing pending rows requires an operator review before enabling the worker.
 
-## Authentication SMS (separate from notification templates)
+## Event matrix
 
-- POST /api/v1/auth/register/phone/start receives an Iranian number and
-  optional name, creates a pending account, sends an SMS OTP and completes
-  registration only after POST /api/v1/auth/challenge/verify succeeds.
-- POST /api/v1/auth/phone/start is LOGIN ONLY, requiring a verified mobile.
-  Email registration via /auth/register/start uses email OTP and does not
-  require a mobile number.
-- Numbers are stored as +989... and sent to ParsGreen SendGroupSMS as 09....
-- Current sender is sendSmsOtp in backend/src/modules/auth/delivery.ts, using
-  PARSGREEN_SIGNATURE, PARSGREEN_PRIMARY_FROM, fallback PARSGREEN_FROM and
-  PARSGREEN_ENDPOINT.
-- Four approved OTP **samples** are recorded in `PARSGREEN_AUTH_SAMPLES`:
-  phoneVerification, phoneLogin, passwordRecovery and accountOperation.
-  The first, third and fourth were supplied by the operator; phoneLogin was
-  also visible as approved in the current WhiteText panel on 2026-11-12.
-  The displayed sample is not proof of the stored approved dynamic pattern.
-  The panel guide explicitly uses `%%` for variable parts and requires all
-  other text to match exactly. The stored patterns were not exposed by the
-  displayed table. Confirm them before substituting a generated OTP.
-- The legacy runtime OTP text (`کد ورود پارس سرور: ...` followed by a safety
-  notice) differs from all four approved examples. It has NOT been switched
-  to one of those examples on the assumption of dynamic approval. Confirm
-  WhiteText/blacklist support and the exact pattern before live verification.
-- A successful SOAP API response does not prove delivery to the phone.
-- AUTH_DELIVERY_MODE=log is developer-only and must not be used in production.
-  Live requires proper SMTP and ParsGreen settings. Never commit secrets.
+All rows use their own saved switch and approval. `backend/test/integration/sms-events.test.ts` drives these producers against ephemeral PostgreSQL and mock provider/SMS transports; CI emits `SMS_MATRIX` lines with keys/segment counts only.
 
-## Issue #11: saved panel evidence and remaining delivery prerequisite
+| Key | Successful producing transition | Initial enabled |
+|---|---|---|
+| ticketCreated | committed support ticket | off |
+| ticketReplied | persisted staff reply; request UUID prevents replay | off |
+| ticketClosed | persisted closed transition | off |
+| incidentDetected | admin-confirmed incident record; one open incident per server | off |
+| incidentResolved | resolution of that existing incident | off |
+| serviceSuspended | expired-grace subscription suspension | off |
+| serverStoppedNoCredit | provider-observed stopped state with billing-block marker, never queued command | off |
+| walletLowBalance | existing 72-hour forecast warning, shared six-hour cooldown | off |
+| serviceExpiring | active prepaid service ending within 24 hours; once per period end; no hourly spam reminder | off |
+| serviceRenewed | settled renewal invoice and extended period, including hourly if enabled | off |
+| provisioningDelayed | order still paid/queued/provisioning 15 minutes after payment; once per order | off |
+| serverActivated | provider-backed active observation and atomic subscription activation | off |
+| orderPaymentFailed | definitive wallet-payment rejection on a durable unpaid order; not gateway timeout or insufficient funds on an order that never existed | off |
+| invoiceIssued | committed initial/renewal invoice | off |
+| orderRefunded | committed order-referenced refund ledger entry | off |
+| walletCredited | committed positive wallet transaction, exact amount and resulting balance | off |
+| orderPaid | committed confirmed order payment | off |
+| orderCreated | committed order | off |
+| newLogin | newly persisted authenticated session; not token refresh | off |
+| passwordChanged | successful reset/change transaction | off |
+| phoneVerification | existing phone registration OTP | on |
+| phoneLogin | existing verified-phone login OTP, including compact domain variant | on |
+| passwordRecovery | `/auth/password/forgot/phone` and the password reset flow; verified active phone only | on |
+| accountOperation | `/auth/account/operation/start` then `/auth/account/password`; bound to user/session/password-change purpose and existing credentials | on |
 
-The operator-supplied `سامانه جامع پیامک.html` was inspected on 2026-11-14.
-Its WhiteText table contains approved static OTP samples, but no `patternId`,
-`otpType`, dynamic stored pattern, or OTP-specific routing contract. ASP.NET
-`ctl24`–`ctl27` control names are row indices, not provider template IDs.
-Do not commit this authenticated panel export or its companion files.
+No incident is invented from a provider timeout. The incident form requires an explicit admin-confirmed report/resolution. Staff ticket reply/close is available in the ticket detail modal; customers can read persisted replies. A failed wallet top-up has no server order reference and does **not** masquerade as `orderPaymentFailed`; its existing wallet-payment error remains separate.
 
-The saved panel FAQ says WhiteText is matched by the provider against the
-submitted message and variable sections must use `%%`; no special sending
-code is required. It recommends SendOtp for OTP, but this does not establish
-the approved parameters or blacklist coverage of this particular account.
-The official [SendOtp contract](https://login.parsgreen.com/Api/SendSMS.asmx?op=SendOtp)
-accepts `signature`, `mobile`, `Lang`, `otpType`, `patternId` and returns the
-provider-generated `otpCode`. Substituting the app-generated code or treating
-the returned code as a client-visible value would be incorrect.
+## Length and cost
 
-This PR implements SMS auto-verification and an independent three-failure
-budget, preserved with the original TTL through resend/restart. It does not
-claim the delivery/latency part of #11 is resolved. Obtain the approved dynamic
-WhiteText pattern or the account's SendOtp parameters and service/blacklist
-confirmation from ParsGreen support before changing the live sender. Then
-perform consented handset/DLR tests and record acceptance and delivery latency
-separately; no live SMS was sent during this change.
+Run `npm --prefix backend run sms:audit`. The tool prints **synthetic samples only**. UTF-16 length is counted after substitution: ≤70 = one part; otherwise `ceil(length / 67)`. Boundaries 70/71/134/135, surrogate pairs, ZWNJ/newlines and long IPv6/IDs are covered in tests. All 24 normal synthetic samples fit one part; the previous domain-bound runtime OTP was 86 units/two parts and the new one is 56/one part.
 
-## SOAP failure diagnosed on 2026-11-12
+Real UUID ticket IDs, long service names, large amounts and IPv6 can make an approved pattern multipart. Do not truncate references/security instructions to hide that cost. The example generic fallbacks proposed in #95 have **not** been separately confirmed approved, so none are sent. Outbox history shows the real rendered business-message segment estimate; low-level transport logs count every actual primary/fallback text without recording text/code/phone/credentials. Auth catalog estimates are for the displayed approved variant; provider-route logs are authoritative for manual/legacy variants.
 
-- Production used `http://tempuri.org/` in both the body namespace and
-  SOAPAction. ParsGreen rejected the request with HTTP 500 / SOAP Client
-  fault before processing its recipient or message. An operator-authorized
-  single OTP attempt reproduced the failure; no successful send was claimed.
-- [Official SendGroupSMS contract](https://login.parsgreen.com/Api/SendSMS.asmx?op=SendGroupSMS)
-  specifies namespace `http://ParsGreen.com/` and SOAPAction
-  `"http://ParsGreen.com/SendGroupSMS"`. The local adapter and regression
-  fixtures now use this exact contract. `retStr` remains an empty ArrayOfString.
-- A read-only GetSMSNumbers request from the server succeeded over HTTPS
-  with the corrected namespace/action and confirmed the configured sender
-  was in the returned list. No credentials or sender inventory were logged.
-- The sender now checks both `SendGroupSMSResult=1` and `success=1` for its
-  single recipient. Rejections log only HTTP status, numeric result/count
-  and a fixed reason; never raw SOAP, OTP, phone, signature or exception.
-  The initial fix did not resend after a timeout; the dedicated-line priority
-  above now permits one bounded legacy failover under the operator's instruction.
-- Publication and a post-fix handset delivery test are still required; local
-  tests and the read-only probe do not establish live OTP delivery.
+## Rollout and recovery
 
-## Future agent update checklist
+Migration `0013_sms-control-outbox` only adds tables and a nullable quote snapshot; it transfers/deletes no customer money or existing records. Back up the database with `pg_dump` as usual. The application backup schema-head check will reject incompatible binaries on restore. Defaults are lazy, durable and repeatable; enabling one event does not enable others. Configure the existing real signature and legacy sender; never use fabricated settings to pass readiness. This PR does not deploy, send live test messages, or perform provider operations.
 
-1. Check the current actual template text and status in ParsGreen. Never
-   promote an approved literal example into an unapproved dynamic pattern.
-2. Update the TypeScript catalog text, event, variables, status and this document.
-3. Obtain the real provider template ID/parameter syntax (if applicable) and
-   add a server-side adapter; keep credentials out of source control.
-4. Add mocked tests for rendering, recipient normalization, failure handling,
-   rate limits and rejected-template safeguards.
-5. Add idempotent event-driven notification dispatch, retries and observability
-   when order/billing/ticket emitters are integrated. This catalog currently
-   records available panel messages, not automated send hooks.
-6. With authorization, test real OTP delivery to an actual handset before
-   claiming that phone login is operational in production.
-
-## Phone login autofill rollout
-
-`PARSGREEN_APPROVED_PHONE_LOGIN_PATTERN` defaults to empty. Set it only after
-ParsGreen confirms the exact dynamic WhiteText pattern for this account, the
-configured service line, `SendGroupSMS` and the required blacklist coverage.
-The approved literal sample does not provide that confirmation. See #21.
-
-Use the provider-approved text verbatim, with one `%%` for the generated OTP in
-the body and the final line `@parserver.ir #%%`. The live login URL is
-`https://parserver.ir/login`. The final line must match `FRONTEND_URL`'s HTTPS
-hostname exactly, with no trailing text or newline. In the Compose `.env` file,
-use a double-quoted value with `\n` between lines. Start and resend use this
-format for phone login requests from the configured origin. Requests without
-that origin use the existing SMS.
-
-After approval, validate with consented numbers on Android Chrome (accept or
-deny the WebOTP prompt) and iOS Safari (tap the keyboard suggestion). Check
-manual entry and resend on both. Keep the variable empty until confirmation.
-
-- [Android WebOTP](https://developer.chrome.com/docs/identity/web-apis/web-otp)
-- [iOS domain-bound SMS autofill](https://developer.apple.com/documentation/security/enabling-autofill-for-domain-bound-sms-codes)
+For OTP expiry, resend keeps the original attempt budget and expiry. After expiry the server returns `410 challenge_expired`; the UI provides an explicit start-over path. Starting before original expiry cannot reset SMS attempts. Email recovery remains available when SMS is disabled; configured TOTP is still required for sensitive password changes.

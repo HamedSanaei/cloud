@@ -54,7 +54,7 @@ export async function createQuote(db: DbClient, input: CreateQuoteInput) {
     throw new ValidationError('گزینه صورتحساب انتخابی برای این محصول موجود نیست')
   }
   const period = input.billingPeriod ?? nativePeriod(matched)
-  if (!period) throw new ValidationError('دوره پرداخت این سرویس پشتیبانی نمی‌شود')
+  if (!period || period === 'daily') throw new ValidationError('خرید جدید فقط ساعتی یا ماهانه امکان‌پذیر است')
   const retail = retailBilling([matched], period)
 
   const snapshot = await computePriceSnapshot(db, {
@@ -64,7 +64,7 @@ export async function createQuote(db: DbClient, input: CreateQuoteInput) {
   })
 
   const ttlMinutes = getConfig().QUOTE_TTL_MINUTES
-  const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000)
+  const expiresAt = new Date(Math.min(Date.now() + ttlMinutes * 60 * 1000, retail.interval === 'HOURLY' ? (Math.floor(Date.now() / 3600000) + 1) * 3600000 : Infinity))
 
   const [quote] = await db
     .insert(quotes)
@@ -76,6 +76,7 @@ export async function createQuote(db: DbClient, input: CreateQuoteInput) {
       providerProductId: offer.providerProductId,
       providerCurrency: snapshot.providerCurrency,
       providerAmountCents: snapshot.providerAmountCents,
+      pricingSnapshot: snapshot,
       fxRate: snapshot.fxRate,
       markupPercent: snapshot.markupPercent,
       markupFixedRial: snapshot.markupFixedRial,
