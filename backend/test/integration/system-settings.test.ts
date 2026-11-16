@@ -1,3 +1,4 @@
+import { computePriceSnapshot, updatePricingRules } from '../../src/modules/pricing/service.js'
 import { randomUUID, createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -6,7 +7,7 @@ import { eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../../src/app.js'
 import * as config from '../../src/config.js'
-import { orders, users, systemEvents, settings, adminAuthorizations } from '../../src/db/schema.js'
+import { orders, quotes, users, systemEvents, settings, adminAuthorizations } from '../../src/db/schema.js'
 import { createSession, registerUser, hashPassword, authenticateToken } from '../../src/modules/auth/service.js'
 import { createTotpSecret, generateTotpCode as currentTotp, encryptTotpSecret } from '../../src/modules/auth/totp.js'
 import { ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/service.js'
@@ -154,7 +155,12 @@ describe.skipIf(!dbAvailable)('store system security and real ledger integration
   it('protects existing seven-day commitments and serializes distinct concurrent debits', async () => {
     const a = await account(), customer = await account('user')
     await creditWallet(ctx.db, customer.user.id, customer.wallet.id, 500000, { idempotencyKey: randomUUID() })
-    await ctx.db.insert(orders).values({ userId: customer.user.id, walletId: customer.wallet.id, orderNumber: randomUUID(), provider: 'hetzner', providerProductId: 'fixture', providerLocation: 'nbg1', hostname: 'fixture', operatingSystem: 'ubuntu', totalRial: 1000, billingInterval: 'HOURLY', status: 'queued' })
+    // A queued hourly commitment must carry an authoritative cost basis, not an orphaned price.
+    await updatePricingRules(ctx.db, 'hetzner', { markupPercent: 25, markupFixedRial: 0, taxPercent: 0 })
+    const pricing = await computePriceSnapshot(ctx.db, { provider: 'hetzner', providerCurrency: 'IRR', billingOption: { billingCycle: 'hourly', amount: '800' } })
+    expect(pricing.totalRial).toBe(1000)
+    const [quote] = await ctx.db.insert(quotes).values({ ...pricing, userId: customer.user.id, provider: 'hetzner', providerProductId: 'fixture', billingInterval: 'HOURLY', billingOption: { billingCycle: 'hourly', amount: '800' }, expiresAt: new Date(Date.now() + 3600000) }).returning()
+    await ctx.db.insert(orders).values({ userId: customer.user.id, walletId: customer.wallet.id, quoteId: quote!.id, orderNumber: randomUUID(), provider: 'hetzner', providerProductId: 'fixture', providerLocation: 'nbg1', hostname: 'fixture', operatingSystem: 'ubuntu', totalRial: 1000, billingInterval: 'HOURLY', status: 'queued' })
     const input = { userId: customer.user.id, walletId: customer.wallet.id, direction: 'debit', amountRial: 400000, reason: 'Fixture debit correction', reference: 'FIXTURE-DEBIT', confirm: true }
     expect((await send(a, 'POST', base + '/finance/adjustments', { ...input, proof: await proof(a, 'wallet.adjust', input) }, { 'idempotency-key': randomUUID() })).statusCode).toBe(422)
     const allowed = { ...input, amountRial: 200000 }, one = await proof(a, 'wallet.adjust', allowed), two = await proof(a, 'wallet.adjust', allowed)

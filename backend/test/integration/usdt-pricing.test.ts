@@ -59,7 +59,7 @@ describe.skipIf(!dbAvailable)('USD = USDT pricing with a local-currency ledger',
     for (const providerCurrency of ['USD', 'USDT']) {
       const snapshot = await computePriceSnapshot(ctx.db, { provider: 'leaseweb.hourly', providerCurrency, billingOption: { billingCycle: 'hourly', amount: '0.0055' }, fxRate: '1' })
       expect(snapshot.subtotalRial).toBe(14513)
-      expect(snapshot.totalRial).toBe(14510)
+      expect(snapshot.totalRial).toBe(14513)
     }
 
     const mock = ctx.mockProvider

@@ -204,6 +204,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
       }
     } catch (caught) {
       if (controller.signal.aborted || !mounted.current) return
+      if (caught instanceof ApiError && caught.status === 410) { setChallengeExpired(true); smsReader.current?.abort() }
       let message = caught instanceof Error ? caught.message : 'کد تأیید معتبر نیست.'
       if (challenge.challengeType === 'sms') {
         setCode('')

@@ -178,7 +178,7 @@ export function CreateServerPage() {
                   <span>{period === 'hourly' ? 'پرداخت برای هر ساعت' : 'محصول با دوره ماهانه واقعی'}</span>
                 </button>
               ))}</div>
-              {billingPeriod && <p className="info-box">{periodExplanation[billingPeriod]}</p>}
+              {billingPeriod && <p className="info-box billing-period-explanation">{periodExplanation[billingPeriod]}</p>}
               {billingPeriod && <div className="storefront-grid">{locationOffers.map(item => <div key={item.id} className="info-box"><strong>{item.name}</strong><DualPrices prices={item.prices} selected={billingPeriod} /></div>)}</div>}
               {!periods.length ? <div className="storefront-state"><p>برای این موقعیت، دوره پرداخت قابل سفارشی موجود نیست.</p><Button variant="secondary" onClick={reloadCatalog}>دریافت دوباره کاتالوگ</Button></div> : null}
             </div> : null}
@@ -211,7 +211,7 @@ export function CreateServerPage() {
               <div className="info-box"><WalletCards size={20} /><span>{price ? `مبلغ ${priceLabel(price.totalRial)} برای دوره ${billingPeriod ? periodLabels[billingPeriod] : ''} پرداخت می‌شود. حداقل اعتبار این سرور برای ۷ روز: ${priceLabel(requiredBalanceRial)}. تعهد سرورهای دیگر هنگام ثبت سفارش بررسی می‌شود؛ اعتبار اضافه برداشت نمی‌شود.` : 'ابتدا محصول و دوره پرداخت معتبر انتخاب کنید.'}</span></div>
             </div> : null}
             {step === 5 ? <div className="review-grid">
-              {billingPeriod && <p className="info-box">{periodExplanation[billingPeriod]}</p>}
+              {billingPeriod && <p className="info-box billing-period-explanation">{periodExplanation[billingPeriod]}</p>}
               {offer && <DualPrices prices={offer.prices} selected={billingPeriod} />}
               {shared ? <p className="info-box">نام اولیه سرور توسط سرویس مرجع تعیین می‌شود. مبلغ تومانی برآورد نرخ جاری است؛ تسویه با تعرفه و نرخ معتبر هنگام ثبت سفارش انجام می‌شود.</p> : <Input label="نام سرور" value={name} disabled={submitting} maxLength={63} dir="ltr" placeholder="my-server" onChange={(event) => { setName(event.target.value); setSubmitError(null) }}
                 hint="۳ تا ۶۳ نویسه انگلیسی، عدد یا خط تیره؛ ابتدا و انتها حرف یا عدد باشد." error={name && !nameValid ? 'نام سرور معتبر نیست.' : undefined} />
