@@ -18,9 +18,7 @@ export function formatCount(value: number): string {
   return toFaDigits(value)
 }
 
-export function formatFaDateTime(value: string, accountTimezone?: string): string {
-  const date = new Date(value)
-  if (!value || Number.isNaN(date.getTime())) return '—'
+export function displayTimeZone(accountTimezone?: string): string {
   let timeZone = 'Asia/Tehran'
   try {
     const saved = accountTimezone ?? localStorage.getItem('cloud-timezone')
@@ -29,6 +27,13 @@ export function formatFaDateTime(value: string, accountTimezone?: string): strin
   } catch {
     timeZone = 'Asia/Tehran'
   }
+  return timeZone
+}
+
+export function formatFaDateTime(value: string, accountTimezone?: string): string {
+  const date = new Date(value)
+  if (!value || Number.isNaN(date.getTime())) return '—'
+  const timeZone = displayTimeZone(accountTimezone)
   const formatted = new Intl.DateTimeFormat('fa-IR-u-ca-persian-nu-arabext', {
     timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23',

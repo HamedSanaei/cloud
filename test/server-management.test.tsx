@@ -10,6 +10,7 @@ import { OneTimePassword } from '../src/components/servers/ServerManagementContr
 import { detailServer, serverUxFixture } from './server-management-fixtures.mjs'
 import type { ServerDetail } from '../src/lib/serverManagement'
 import { formatFaDateTime } from '../src/lib/format'
+import { AuthProvider } from '../src/auth/AuthContext'
 
 let requests: Array<{ path: string; method: string; body: unknown; key?: string }>
 let detail: ServerDetail
@@ -26,9 +27,86 @@ beforeEach(() => {
 })
 afterEach(() => toast.dismiss())
 function open(tab = 'overview') {
-  return render(<MemoryRouter initialEntries={[`/servers/${detailServer.id}?tab=${tab}`]}><ToastProvider><Routes><Route path="/servers/:id" element={<ServerDetailsPage />} /></Routes></ToastProvider></MemoryRouter>)
+  return render(<MemoryRouter initialEntries={[`/servers/${detailServer.id}?tab=${tab}`]}><AuthProvider><ToastProvider><Routes><Route path="/servers/:id" element={<ServerDetailsPage />} /></Routes></ToastProvider></AuthProvider></MemoryRouter>)
 }
 describe('customer server management UI', () => {
+  it('requires a fresh confirmation if protection changes while the dialog is open', async () => {
+    const user = userEvent.setup()
+    open('network')
+    await user.click(await screen.findByRole('button', { name: 'تغییر حفاظت حذف' }))
+    const dialog = within(screen.getByRole('dialog'))
+    await user.type(dialog.getByRole('textbox'), detail.name)
+    await user.click(dialog.getByRole('checkbox'))
+    detail = { ...detail, facts: { ...detail.facts!, protection: { delete: true, rebuild: false } } }
+    act(() => window.dispatchEvent(new Event('server-lifecycle-changed')))
+    await waitFor(() => expect(requests.filter(request => request.path.includes('/management'))).toHaveLength(2))
+    await user.click(dialog.getByRole('button', { name: 'تأیید فعال‌سازی حفاظت حذف' }))
+    expect(await dialog.findByText(/وضعیت حفاظت تغییر کرده یا قابل تأیید نیست/)).toBeTruthy()
+    expect(requests.every(request => request.method === 'GET')).toBe(true)
+  })
+
+  it('uses recorded specifications for deleted overview without treating them as live data', async () => {
+    detail.lifecycle = 'terminated'; detail.providerState = 'terminated'; detail.providerAvailable = false; detail.facts = null
+    detail.cpu = '1 vCPU'; detail.ram = '1024 MB'; detail.disk = '20 GB'; detail.datacenter = 'hel1'; detail.serverType = 'cpx02'; detail.os = 'Debian 12'
+    open()
+    await screen.findByText(/مشخصات تاریخی \/ آخرین اطلاعات ثبت‌شده/)
+    const card = (label: string) => screen.getByText(label).closest('article')!
+    expect(card('پردازنده').textContent).toContain('1 vCPU')
+    expect(card('حافظه رم').textContent).toContain('1024 MB')
+    expect(card('دیسک').textContent).toContain('20 GB')
+    expect(screen.getByText('موقعیت دیتاسنتر').nextElementSibling?.textContent).toBe('hel1')
+    expect(screen.getByText('نوع سرور / سیستم‌عامل').nextElementSibling?.textContent).toBe('cpx02 / Debian 12')
+    expect(card('ترافیک خروجی').textContent).toContain('در دسترس نیست')
+    expect(screen.queryByRole('button', { name: /کپی آی‌پی/ })).toBeNull()
+    expect(requests.every(request => request.method === 'GET')).toBe(true)
+    expect(requests.some(request => request.path.includes('/metrics'))).toBe(false)
+  })
+
+  it('does not invent historical resources for a deleted server without recorded values', async () => {
+    detail.lifecycle = 'terminated'; detail.providerAvailable = false; detail.facts = null
+    detail.cpu = ''; detail.ram = ''; detail.disk = ''; detail.datacenter = ''; detail.serverType = ''; detail.os = ''
+    open()
+    await screen.findByText('اطلاعات فنی')
+    for (const label of ['پردازنده', 'حافظه رم', 'دیسک']) expect(screen.getByText(label).closest('article')?.textContent).toContain('در دسترس نیست')
+    expect(screen.getByText('موقعیت دیتاسنتر').nextElementSibling?.textContent).toBe('در دسترس نیست')
+  })
+
+  it.each(['delete', 'rebuild'] as const)('identifies enabling and disabling %s protection and submits only the intended flag', async flag => {
+    const user = userEvent.setup()
+    detail.facts!.protection = { delete: true, rebuild: true }
+    open('network')
+    await user.click(await screen.findByRole('button', { name: flag === 'delete' ? 'تغییر حفاظت حذف' : 'تغییر حفاظت Rebuild' }))
+    const dialog = within(screen.getByRole('dialog'))
+    const label = flag === 'delete' ? 'حذف' : 'نصب مجدد (Rebuild)'
+    expect(dialog.getByRole('heading', { name: `غیرفعال‌سازی حفاظت ${label}` })).toBeTruthy()
+    expect(dialog.getByText('وضعیت فعلی').nextElementSibling?.textContent).toBe('فعال')
+    expect(dialog.getByText('وضعیت پس از تغییر').nextElementSibling?.textContent).toBe('غیرفعال')
+    expect(dialog.getByText(/این تغییر به‌خودی‌خود/)).toBeTruthy()
+    const confirm = dialog.getByRole<HTMLButtonElement>('button', { name: `تأیید غیرفعال‌سازی حفاظت ${label}` })
+    expect(confirm.disabled).toBe(true)
+    await user.type(dialog.getByRole('textbox'), 'wrong-name'); await user.click(dialog.getByRole('checkbox'))
+    expect(confirm.disabled).toBe(true)
+    await user.clear(dialog.getByRole('textbox')); await user.type(dialog.getByRole('textbox'), detail.name)
+    expect(confirm.disabled).toBe(false)
+    await user.click(confirm)
+    await waitFor(() => expect(requests.filter(request => request.method === 'POST')).toHaveLength(1))
+    expect(requests.find(request => request.method === 'POST')?.body).toEqual({ action: 'change_protection', hostname: detail.name, confirm: true, delete: flag !== 'delete', rebuild: flag !== 'rebuild' })
+  })
+
+  it.each(['delete', 'rebuild'] as const)('explains enabling %s protection without submitting on cancel', async flag => {
+    detail.facts!.protection = { delete: false, rebuild: false }
+    open('network')
+    fireEvent.click(await screen.findByRole('button', { name: flag === 'delete' ? 'تغییر حفاظت حذف' : 'تغییر حفاظت Rebuild' }))
+    const dialog = within(screen.getByRole('dialog'))
+    const label = flag === 'delete' ? 'حذف' : 'نصب مجدد (Rebuild)'
+    expect(dialog.getByRole('heading', { name: `فعال‌سازی حفاظت ${label}` })).toBeTruthy()
+    expect(dialog.getByText('وضعیت فعلی').nextElementSibling?.textContent).toBe('غیرفعال')
+    expect(dialog.getByText('وضعیت پس از تغییر').nextElementSibling?.textContent).toBe('فعال')
+    expect(dialog.getByText(/این حفاظت مانع/)).toBeTruthy()
+    fireEvent.click(dialog.getByRole('button', { name: 'انصراف' }))
+    expect(requests.every(request => request.method === 'GET')).toBe(true)
+  })
+
   it.each(['lifecycle', 'provider'])('skips live monitoring and retries for %s-confirmed deletion', async source => {
     if (source === 'lifecycle') detail.lifecycle = 'terminated'
     else detail.providerState = 'terminated'

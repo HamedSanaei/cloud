@@ -81,7 +81,10 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
   const filteredServers = useMemo(() => {
     if (!server) return []
     const items = (servers.data ?? []).filter((item) => {
-      const matchesQuery = !query.trim() || item.name.includes(query.trim()) || item.datacenter.includes(query.trim())
+      const term = query.trim().toLowerCase()
+      const matchesQuery = !term || [item.name, item.datacenter, item.id, item.platformServerId, item.serverId, item.orderId,
+        item.tracking?.reference, item.tracking?.serverId, item.tracking?.orderId, item.tracking?.failure?.reference]
+        .some(value => value?.toLowerCase().includes(term))
       const matchesStatus = status === 'all' || (status === 'failed'
         ? (item.lifecycle ?? item.tracking?.state) === 'failed'
         : item.status === status)

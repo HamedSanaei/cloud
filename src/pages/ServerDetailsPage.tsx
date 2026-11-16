@@ -10,21 +10,23 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { LoadingState, QueryError } from '../components/ui/States'
 import { useToast } from '../components/ui/Toast'
 import { LifecycleBadge, ServerResourceMetricCard } from '../components/servers/ServerPrimitives'
-import { DestructiveConfirmation, OneTimePassword, ServerBillingTerminationState, ServerOperationStatus, ServerPowerActionButton } from '../components/servers/ServerManagementControls'
+import { DestructiveConfirmation, OneTimePassword, ServerBillingTerminationState, ServerOperationStatus, ServerPowerActionButton, type ProtectionChange } from '../components/servers/ServerManagementControls'
 import { ServerConsole } from '../components/servers/ServerConsole'
 import { ServerAccess, ServerCredentialList } from '../components/servers/ServerAccess'
 import { ResizeEffects, resizeEffectsVerified } from '../components/servers/ResizeEffects'
+import { MetricChart } from '../components/servers/MetricChart'
+import { useAuth } from '../auth/AuthContext'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { formatFaDateTime, formatFaNumber, formatToman } from '../lib/format'
 import { actionLabels, getResizeOptions, getServerDetail, getServerMetrics, previewResize, recheckServerOperation, submitPrimaryIpv4, submitServerAction,
-  type ManagementAction, type PrimaryIpv4Quote, type ResizePreview, type ServerDetail, type ServerMetrics, type ServerOperation } from '../lib/serverManagement'
+  type ManagementAction, type PrimaryIpv4Quote, type ResizePreview, type ServerDetail, type ServerOperation } from '../lib/serverManagement'
 
 const missing = 'در دسترس نیست'
 const byteValue = (value: number | null | undefined) => value === null || value === undefined ? missing : `${new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 2 }).format(value / 1e9)} GB`
 const amount = (value: number | null) => value === null ? missing : formatToman(value / 10)
 const periodLabels: Record<string, string> = { HOURLY: 'ساعتی', DAILY: 'روزانه', MONTHLY: 'ماهانه' }
 const tabs = [['overview', 'نمای کلی'], ['monitoring', 'مانیتورینگ'], ['operations', 'عملیات'], ['resize', 'تغییر پلن'], ['access', 'سیستم‌عامل و دسترسی'], ['console', 'کنسول و تنظیمات']] as const
-type ActionRequest = { action: ManagementAction; input: Record<string, unknown>; resizePreview?: ResizePreview } | { action: 'replace_primary_ipv4'; quote: PrimaryIpv4Quote }
+type ActionRequest = { action: ManagementAction; input: Record<string, unknown>; resizePreview?: ResizePreview; protectionChange?: ProtectionChange } | { action: 'replace_primary_ipv4'; quote: PrimaryIpv4Quote }
 export function ServerDetailsPage() {
   const { id = '' } = useParams(), [search, setSearch] = useSearchParams(), tab = search.get('tab') || 'overview'
   const fresh = useRef(false)
@@ -78,9 +80,23 @@ export function ServerDetailsPage() {
     const timer = window.setTimeout(() => { if (document.visibilityState !== 'hidden') { rounds.current++; refresh() } }, Math.min(5000 * 1.3 ** rounds.current, 30000))
     return () => window.clearTimeout(timer)
   }, [pending, detail.loading, server?.operations, refresh])
-  const ask = (action: ManagementAction, input: Record<string, unknown> = {}, resizePreview?: ResizePreview) => { key.current = crypto.randomUUID(); setError(''); setRequest({ action, input, resizePreview }) }
+  const ask = (action: ManagementAction, input: Record<string, unknown> = {}, resizePreview?: ResizePreview) => {
+    const protection = server?.facts?.protection
+    const flags = action === 'change_protection' && protection ? (['delete', 'rebuild'] as const).filter(flag => typeof input[flag] === 'boolean' && input[flag] !== protection[flag]) : []
+    const flag = flags.length === 1 ? flags[0] : undefined
+    const protectionChange = flag && protection ? { flag, from: protection[flag], to: input[flag] as boolean } : undefined
+    key.current = crypto.randomUUID(); setError(''); setRequest({ action, input, resizePreview, protectionChange })
+  }
   const confirm = async () => {
     if (!request || !server || busy) return
+    if (request.action === 'change_protection') {
+      const current = server.facts?.protection, change = request.protectionChange
+      const other = change?.flag === 'delete' ? 'rebuild' : 'delete'
+      if (!change || !current || current[change.flag] !== change.from || current[other] !== request.input[other] || disabled || detail.loading || detail.error || !server.capabilities.protection) {
+        setError('وضعیت حفاظت تغییر کرده یا قابل تأیید نیست؛ پنجره را ببندید و وضعیت سرور را دوباره بررسی کنید.')
+        return
+      }
+    }
     if (request.action === 'resize' && (!request.resizePreview || !resizeEffectsVerified(request.resizePreview) || Date.now() >= Date.parse(request.resizePreview.expiresAt))) {
       setError('جزئیات تغییر پلن یا اعتبار قیمت قابل تأیید نیست؛ پیش‌نمایش را دوباره دریافت کنید.')
       return
@@ -170,7 +186,7 @@ export function ServerDetailsPage() {
         </div>
       </div>}
     </Card>
-    {request && <DestructiveConfirmation key={key.current} server={server} action={request.action} busy={busy} error={error} onClose={() => setRequest(null)} onConfirm={() => { void confirm() }}>
+    {request && <DestructiveConfirmation key={key.current} server={server} action={request.action} protectionChange={request.action === 'change_protection' ? request.protectionChange : undefined} busy={busy} error={error} onClose={() => setRequest(null)} onConfirm={() => { void confirm() }}>
       {request.action === 'replace_primary_ipv4' && <><PrimaryIpv4Summary quote={request.quote} unavailableReason={addressUnavailable} /><PrimaryIpv4Warning /></>}
       {request.action === 'resize' && request.resizePreview && <ResizeEffects preview={request.resizePreview} />}
     </DestructiveConfirmation>}
@@ -186,35 +202,31 @@ function PrimaryIpv4Warning() {
 }
 function ServerOverview({ server }: { server: ServerDetail }) {
   const f = server.facts, b = server.billing
+  const historical = server.lifecycle === 'terminated' || server.providerState === 'terminated'
+  const cpu = f?.vcpu == null ? server.cpu : `${formatFaNumber(f.vcpu)} vCPU`
+  const ram = f?.memoryMb == null ? server.ram : `${formatFaNumber(f.memoryMb / 1024)} GB`
+  const disk = f?.diskGb == null ? server.disk : `${formatFaNumber(f.diskGb)} GB`
   const renewalEnded = server.lifecycle === 'terminated' || server.providerState === 'terminated'
     || b.futureDebits === 'stopped' || b.state === 'cancelled' || b.state === 'expired'
-  const entries = [['شناسه Hetzner / پروژه مالک', server.providerIdentity], ['نوع سرور / سیستم‌عامل', [f?.serverType, f?.image].filter(Boolean).join(' / ')], ['تاریخ ایجاد', f?.createdAt ? formatFaDateTime(f.createdAt) : missing], ['موقعیت دیتاسنتر', f?.location], ['وضعیت برق', server.providerState === 'active' ? 'روشن' : server.providerState === 'suspended' ? 'خاموش' : server.providerState === 'terminated' ? 'حذف‌شده' : missing], ['دورهٔ محاسبهٔ مصرف', f?.trafficPeriod || 'ارائه‌دهنده دورهٔ مصرف را در این پاسخ اعلام نکرده است.']]
-  return <><div className="server-metric-grid"><ServerResourceMetricCard label="پردازنده" value={f?.vcpu == null ? null : `${formatFaNumber(f.vcpu)} vCPU`} /><ServerResourceMetricCard label="حافظه رم" value={f?.memoryMb == null ? null : `${formatFaNumber(f.memoryMb / 1024)} GB`} /><ServerResourceMetricCard label="دیسک" value={f?.diskGb == null ? null : `${formatFaNumber(f.diskGb)} GB`} /><ServerResourceMetricCard label="ترافیک خروجی" value={byteValue(f?.outgoingTrafficBytes)} /></div>
+  const recordedAt = f?.createdAt || server.createdAt
+  const entries = [['شناسه Hetzner / پروژه مالک', server.providerIdentity], ['نوع سرور / سیستم‌عامل', [f?.serverType || server.serverType, f?.image || server.os].filter(Boolean).join(' / ')], ['تاریخ ایجاد', recordedAt ? formatFaDateTime(recordedAt) : missing], ['موقعیت دیتاسنتر', f?.location || server.datacenter], ['وضعیت برق', historical ? 'حذف‌شده' : server.providerState === 'active' ? 'روشن' : server.providerState === 'suspended' ? 'خاموش' : missing], ['دورهٔ محاسبهٔ مصرف', f?.trafficPeriod || 'ارائه‌دهنده دورهٔ مصرف را در این پاسخ اعلام نکرده است.']]
+  return <>{(historical || !server.providerAvailable) && <p className="server-notice">مشخصات تاریخی / آخرین اطلاعات ثبت‌شدهٔ سرور نمایش داده می‌شود؛ این مشخصات، دادهٔ زندهٔ مانیتورینگ نیست.</p>}
+    <div className="server-metric-grid"><ServerResourceMetricCard label="پردازنده" value={cpu} /><ServerResourceMetricCard label="حافظه رم" value={ram} /><ServerResourceMetricCard label="دیسک" value={disk} /><ServerResourceMetricCard label="ترافیک خروجی" value={byteValue(f?.outgoingTrafficBytes)} /></div>
     <div className="server-detail-columns"><Card><h2>اطلاعات فنی</h2><dl className="server-facts">{entries.map(([label, value]) => <div key={label}><dt>{label}</dt><dd><bdi>{value || missing}</bdi></dd></div>)}</dl></Card>
       <Card><h2>صورت‌حساب و کیف پول</h2><dl className="server-facts"><div><dt>قیمت مشتری</dt><dd>{amount(b.customerPriceRial)} / {periodLabels[b.period ?? ''] ?? missing}</dd></div><div><dt>اشتراک</dt><dd>{b.state === 'active' ? 'فعال' : b.state === 'suspended' ? 'تعلیق' : b.state === 'cancelled' || b.state === 'expired' ? 'پایان‌یافته' : missing}</dd></div><div><dt>تمدید بعدی</dt><dd>{renewalEnded ? 'تمدید نمی‌شود' : b.nextInvoiceAt ? formatFaDateTime(b.nextInvoiceAt) : missing}</dd></div></dl>
         <p className="server-muted">نرخ خرید ثبت‌شدهٔ ارائه‌دهنده، جدا از قیمت مشتری: {b.providerQuotedRate ? `${new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 8 }).format(b.providerQuotedRate.amountCents / 100)} ${b.providerQuotedRate.currency} / ${periodLabels[b.providerQuotedRate.period] ?? b.providerQuotedRate.period}` : missing}</p>
         <p className="server-notice">خاموش‌کردن VM هزینهٔ Hetzner را متوقف نمی‌کند؛ حذف کامل و تأیید آن لازم است.</p></Card></div></>
-}
-function MetricChart({ title, series }: { title: string; series: ServerMetrics['series'] }) {
-  const valid = Object.values(series).flat().filter((point): point is [number, number] => point[1] !== null)
-  if (!valid.length) return <Card className="server-chart"><h3>{title}</h3><p>داده در دسترس نیست — مقدار صفر فرض نمی‌شود.</p></Card>
-  const xs = valid.map(v => v[0]), ys = valid.map(v => v[1]), x0 = Math.min(...xs), dx = Math.max(...xs) - x0 || 1, y0 = Math.min(...ys), dy = Math.max(...ys) - y0 || 1
-  return <Card className="server-chart"><h3>{title}</h3><svg role="img" aria-label={`نمودار ${title}، ${formatFaNumber(valid.length)} نمونه واقعی`} viewBox="0 0 600 160">{Object.entries(series).map(([name, values], i) => {
-    const paths: string[] = []; let current = ''
-    values.forEach(([time, value]) => { if (value === null) { if (current) paths.push(current); current = '' } else current += `${current ? 'L' : 'M'}${10 + (time - x0) / dx * 580},${145 - (value - y0) / dy * 130} ` })
-    if (current) paths.push(current)
-    return paths.map((d, n) => <path key={`${name}:${n}`} d={d} stroke={['#2869E8', '#16A34A', '#D99A00', '#9333ea'][i % 4]} fill="none" strokeWidth="2" />)
-  })}</svg><p className="server-muted">کمینه: {new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 }).format(y0)} · بیشینه: {new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 }).format(Math.max(...ys))}</p><small dir="ltr">{Object.keys(series).join(' · ')}</small></Card>
 }
 function ServerMonitoring({ server }: { server: ServerDetail }) {
   if (server.lifecycle === 'terminated' || server.providerState === 'terminated') return <Card><h2>مانیتورینگ سرور</h2><p>این سرور حذف شده است؛ مانیتورینگ زنده در دسترس نیست.</p></Card>
   return <LiveServerMonitoring key={server.id} server={server} />
 }
 function LiveServerMonitoring({ server }: { server: ServerDetail }) {
+  const { user } = useAuth()
   const [window, setWindow] = useState('1h'), metrics = useApiQuery(() => getServerMetrics(server.id, window), [server.id, window])
   const group = (prefix: string, unit?: string) => Object.fromEntries(Object.entries(metrics.data?.series ?? {}).filter(([key]) => key.startsWith(prefix) && (!unit || key.includes(`.${unit === 'bytes' ? 'bandwidth' : unit}.`))))
   return <><div className="server-window-filter"><Select label="بازهٔ زمانی" value={window} onChange={event => setWindow(event.target.value)}><option value="1h">یک ساعت</option><option value="6h">شش ساعت</option><option value="24h">۲۴ ساعت</option></Select><Button variant="secondary" disabled={metrics.loading} onClick={metrics.refetch}>دریافت مجدد</Button></div>
-    {metrics.loading ? <LoadingState label="دریافت دادهٔ مانیتورینگ…" /> : metrics.error ? <QueryError message={metrics.error} onRetry={metrics.refetch} /> : <div className="server-chart-grid"><MetricChart title="CPU (%)" series={group('cpu')} /><MetricChart title="Network (bytes/s)" series={group('network.', 'bytes')} /><MetricChart title="Network (packets/s)" series={group('network.', 'pps')} /><MetricChart title="Disk I/O (bytes/s)" series={group('disk.', 'bandwidth')} /><MetricChart title="Disk I/O (operations/s)" series={group('disk.', 'iops')} /><Card><h3>سهمیهٔ ترافیک</h3><p>مصرف خروجی: {byteValue(server.facts?.outgoingTrafficBytes)}</p><p>سهمیهٔ اعلام‌شده: {byteValue(server.facts?.includedTrafficBytes)}</p><p className="server-muted">{server.facts?.trafficPeriod || 'دورهٔ مصرف از API ارائه نشده است.'}</p></Card></div>}
+    {metrics.loading ? <LoadingState label="دریافت دادهٔ مانیتورینگ…" /> : metrics.error ? <QueryError message={metrics.error} onRetry={metrics.refetch} /> : <div className="server-chart-grid"><MetricChart title="CPU (%)" unit="%" series={group('cpu')} metrics={metrics.data} timezone={user?.timezone} /><MetricChart title="Network (bytes/s)" unit="bytes/s" series={group('network.', 'bytes')} metrics={metrics.data} timezone={user?.timezone} /><MetricChart title="Network (packets/s)" unit="packets/s" series={group('network.', 'pps')} metrics={metrics.data} timezone={user?.timezone} /><MetricChart title="Disk I/O (bytes/s)" unit="bytes/s" series={group('disk.', 'bandwidth')} metrics={metrics.data} timezone={user?.timezone} /><MetricChart title="Disk I/O (operations/s)" unit="operations/s" series={group('disk.', 'iops')} metrics={metrics.data} timezone={user?.timezone} /><Card><h3>سهمیهٔ ترافیک</h3><p>مصرف خروجی: {byteValue(server.facts?.outgoingTrafficBytes)}</p><p>سهمیهٔ اعلام‌شده: {byteValue(server.facts?.includedTrafficBytes)}</p><p className="server-muted">{server.facts?.trafficPeriod || 'دورهٔ مصرف از API ارائه نشده است.'}</p></Card></div>}
   </>
 }
 function ServerResize({ server, disabled, recovery, checking, recheck, openOperations, ask }: {
