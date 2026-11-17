@@ -77,6 +77,8 @@ jobs:
       - name: Install dependencies including build and test tools
         working-directory: ${{ matrix.directory }}
         run: npm ci
+      - name: Verify installed matcher resists ReDoS and preserves supported globs
+        run: node build-tools/check-glob-security.mjs '${{ matrix.directory }}'
       - name: Audit all dependencies without exceptions
         working-directory: ${{ matrix.directory }}
         run: npm audit --audit-level=low

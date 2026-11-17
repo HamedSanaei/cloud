@@ -91,14 +91,37 @@ Separate live observation before changes: compressed entry transfer 221161 bytes
 TTFB 0.163s, total 0.207s. This is one HTTP sample behind Arvan, **not** a CWV score
 or a directly comparable build-compression measurement.
 
-**Blocked, not passed:**
+### Dependency audit remediation (2026-11-17)
 
-- CI dependency audit reports GHSA-fc5q-39xc-vjpf for picomatch ≤4.0.7. On
-  2026-11-17 the official advisory lists no patched release and npm latest is
-  4.0.7. No downgrade, fabricated version, audit exception or security bypass is
-  used. Both full dependency audits run independently so functional checks can
-  still execute, and are required by image publication. Release remains blocked
-  until a verified fix is available. [Official advisory](https://github.com/advisories/GHSA-fc5q-39xc-vjpf).
+The initial CI run failed GHSA-fc5q-39xc-vjpf in the existing picomatch 4.0.7
+build/test dependency. No official patched release was available. Both dependency
+trees now pin the published MIT-licensed **fork** `@ryotsu/picomatch@4.0.7-a` via
+an npm alias override; this is not an official picomatch release. Lockfiles pin
+the registry tarball's SHA-512 integrity. Its source is
+[`3ab5a7627d480259e3d9ca67fbc14c125d374f0e`](https://github.com/ryotsu-kankichi/secured-picomatch/tree/3ab5a7627d480259e3d9ca67fbc14c125d374f0e).
+
+The published tarball was compared with official 4.0.7: only parser/constants
+code, package metadata and README differ; entry points, other matcher code and
+license are unchanged. It has no dependencies or install lifecycle hooks. The
+parser collapses equivalent repeated wildcard branches to avoid nested unbounded
+repetition, and rejects unsafe complex forms; additional changes fix POSIX
+brackets/punctuation and globstar newline/extension semantics.
+
+Before replacement, the reported hostile inputs blocked the original matcher
+past a three-second isolated-process deadline. The pinned fork completed the
+same cases. `build-tools/check-glob-security.mjs` checks every installed matcher
+copy, representative Vite/test/Windows glob semantics and hostile failing inputs
+with a hard five-second child-process timeout. Both CI audit jobs require this
+regression check **and** the unchanged full `npm audit --audit-level=low`; no
+exception, severity downgrade or `continue-on-error` is used. Full application
+tests/builds remain required. Revert the temporary alias to an official release
+only after a verified upstream fix passes these checks, updating the identity
+assertion as part of that reviewed change.
+
+References: [advisory](https://github.com/advisories/GHSA-fc5q-39xc-vjpf),
+[fork's proposed upstream fix](https://github.com/micromatch/picomatch/pull/240).
+
+**External checks blocked, not passed:**
 - Mobile and desktop PSI requests returned daily API quota-exceeded responses.
   No Lighthouse score, LCP, INP or CLS has been measured for this change.
 - No authenticated Search Console property access. Index status, Google-selected
