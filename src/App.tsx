@@ -1,3 +1,4 @@
+import { HetznerPage } from './pages/HetznerPage'
 import { SystemSmsSettings } from './admin/SystemSmsSettings'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from './components/layout/AppShell'
@@ -26,6 +27,7 @@ export function App({ initialTariffs }: { initialTariffs?: string } = {}) {
   return (
     <Routes>
       <Route index element={<LandingPage initialTariffs={initialTariffs} />} />
+      <Route caseSensitive path="hetzner" element={<HetznerPage initialTariffs={initialTariffs} />} />
       <Route path="login" element={<AuthPage intent="login" />} />
       <Route path="register" element={<AuthPage intent="register" />} />
       <Route path="forgot-password" element={<AuthPage intent="forgot" />} />

@@ -1,3 +1,4 @@
+import { safeReturnPath } from '../../contracts/return-path.js'
 import { createHash, randomBytes } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import { getConfig } from '../../config.js'
@@ -20,7 +21,7 @@ export async function beginGoogleOAuth(db: DbClient, redirectTo = '/dashboard') 
     kind: 'google_oauth',
     identifier: `google:${base64url(randomBytes(12))}`,
     code: base64url(randomBytes(16)),
-    payload: { verifier, redirectTo: redirectTo.startsWith('/') ? redirectTo : '/dashboard' },
+    payload: { verifier, redirectTo: safeReturnPath(redirectTo) },
   })
   const params = new URLSearchParams({
     client_id: config.GOOGLE_CLIENT_ID,

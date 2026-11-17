@@ -14,10 +14,11 @@ import { renderHomeTariffs } from '../../contracts/home-tariffs.js'
 export const registerCatalogRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
   const { db } = ctx
   app.get('/public/home-tariffs', async (_request, reply) => {
-    const { iran, hetzner } = await getHomeTariffs(db)
+    const { scope } = parse(z.object({ scope: z.enum(['all', 'hetzner']).default('all') }), _request.query)
+    const { iran, hetzner, meta } = await getHomeTariffs(db)
     return reply.type('text/html; charset=utf-8').header('Cache-Control', 'no-store')
       .header('Content-Security-Policy', "default-src 'none'; sandbox")
-      .send(renderHomeTariffs(iran, hetzner))
+      .send(renderHomeTariffs(iran, hetzner, meta, scope))
   })
   app.get('/public/home-prices', async (_request, reply) => {
     reply.header('Cache-Control', 'no-store')

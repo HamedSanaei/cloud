@@ -2,27 +2,30 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'vite'
 
 const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom' })
+const escape = value => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 try {
-  const { renderHomepage } = await server.ssrLoadModule('/src/home-entry.tsx')
+  const { renderHomepage, publicPages, PUBLIC_ORIGIN, shareImage } = await server.ssrLoadModule('/src/home-entry.tsx')
   const shell = await readFile('dist/index.html', 'utf8')
-  const title = 'خرید سرور هتزنر و تعرفه سرور ایران | پارس سرور'
-  const description = 'پلن‌های ساعتی و ماهانهٔ قابل سفارش هتزنر را با مشخصات و تعرفهٔ تومانی مقایسه کنید و وضعیت عرضه و نرخ ماهانهٔ منابع سرور ایران را ببینید.'
-  const canonical = 'https://parserver.ir/'
-  const metadata = `<title>${title}</title>
-    <meta name="description" content="${description}">
+  if (!shell.includes('<div id="root"></div>')) throw new Error('Public mount is missing from Vite shell')
+  const clean = shell.replace(/<title>[^<]*<\/title>/, '').replace(/<meta name="(?:description|robots)"[^>]*>/g, '')
+  for (const [path, { title, description }] of Object.entries(publicPages)) {
+    const canonical = PUBLIC_ORIGIN + path
+    const schema = path === '/' ? [
+      { '@context': 'https://schema.org', '@type': 'WebSite', name: 'پارس سرور', url: canonical, inLanguage: 'fa' },
+      { '@context': 'https://schema.org', '@type': 'Organization', name: 'پارس سرور', url: PUBLIC_ORIGIN + '/', logo: PUBLIC_ORIGIN + '/favicon.png' },
+    ] : [{ '@context': 'https://schema.org', '@type': 'BreadcrumbList', itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'خانه', item: PUBLIC_ORIGIN + '/' },
+      { '@type': 'ListItem', position: 2, name: 'سرور هتزنر', item: canonical },
+    ] }]
+    const metadata = `<title>${escape(title)}</title>
+    <meta name="description" content="${escape(description)}">
     <link rel="canonical" href="${canonical}">
-    <meta property="og:type" content="website">
-    <meta property="og:locale" content="fa_IR">
-    <meta property="og:site_name" content="پارس سرور">
-    <meta property="og:title" content="${title}">
-    <meta property="og:description" content="${description}">
-    <meta property="og:url" content="${canonical}">
-    <meta name="twitter:card" content="summary">
-    <meta name="twitter:title" content="${title}">
-    <meta name="twitter:description" content="${description}">
-    <script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@type': 'WebSite', name: 'پارس سرور', url: canonical, inLanguage: 'fa' })}</script>`
-  if (!shell.includes('<div id="root"></div>')) throw new Error('Homepage mount is missing from Vite shell')
-  await writeFile('dist/home.html', shell.replace(/<title>[^<]*<\/title>/, () => metadata)
-    .replace(/<meta name="description"[^>]*>/, '')
-    .replace('<div id="root"></div>', () => `<div id="root">${renderHomepage()}</div>`))
+    <meta property="og:type" content="website"><meta property="og:locale" content="fa_IR">
+    <meta property="og:site_name" content="پارس سرور"><meta property="og:title" content="${escape(title)}">
+    <meta property="og:description" content="${escape(description)}"><meta property="og:url" content="${canonical}">
+    <meta property="og:image" content="${shareImage}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:type" content="image/png"><meta property="og:image:alt" content="پارس سرور؛ مقایسهٔ منابع و قیمت سرور ابری">
+    <meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escape(title)}"><meta name="twitter:description" content="${escape(description)}"><meta name="twitter:image" content="${shareImage}">
+    ${schema.map(value => '<script type="application/ld+json">' + JSON.stringify(value).replaceAll('<', '\\u003c') + '</script>').join('')}`
+    await writeFile('dist/' + (path === '/' ? 'home' : 'hetzner') + '.html', clean.replace('</head>', metadata + '</head>').replace('<div id="root"></div>', () => `<div id="root">${renderHomepage(path)}</div>`))
+  }
 } finally { await server.close() }
