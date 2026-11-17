@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm'
 import type { DbClient } from '../../db/index.js'
 import { getConfig } from '../../config.js'
 import { ValidationError } from '../../lib/errors.js'
-import { computePriceFromRules, getActiveFxRate, getPricingRules } from '../pricing/service.js'
+import { computePriceFromRules, fxMaxAgeMs, getActiveFxRate, getPricingRules } from '../pricing/service.js'
 import { offeredPeriods, retailBilling, type RetailPeriod } from '../pricing/periods.js'
 import type { ProviderBillingOption, ProviderOsOption } from '../providers/provider.interface.js'
 import { listProviders } from '../providers/registry.js'
@@ -19,6 +19,8 @@ interface StorefrontOffer {
   id: string
   provider: string
   location: string
+  country?: string | null
+  city?: string | null
   name: string
   category: string
   vcpu: number
@@ -80,6 +82,8 @@ export async function getStorefront(db: DbClient, admin = false, providerFilter?
       id: product.id,
       provider: product.provider,
       location: location.code,
+      country: location.country,
+      city: location.city,
       name: product.name,
       category: product.category,
       vcpu: product.vcpu,
@@ -93,7 +97,21 @@ export async function getStorefront(db: DbClient, admin = false, providerFilter?
     })
   }
   offers.sort((a, b) => a.vcpu - b.vcpu || a.memoryMb - b.memoryMb || a.name.localeCompare(b.name))
+  const now = Date.now()
+  const offeredIds = new Set(offers.map(offer => offer.id))
+  const sources = products.filter(product => offeredIds.has(product.id))
+  const catalogTimes = sources.map(product => product.lastSyncedAt.getTime())
+  const fxTimes = [...new Set(sources.map(product => product.providerCurrency))].map(currency => ({ currency, fx: fxByCurrency.get(currency)! }))
   return {
+    freshness: {
+      checkedAt: new Date(now).toISOString(),
+      validUntil: new Date(Math.min(now + 60_000,
+        ...catalogTimes.map(time => maxAgeMs > 0 ? time + maxAgeMs : Infinity),
+        ...fxTimes.map(({ currency, fx }) => fx.createdAt.getTime() + fxMaxAgeMs(currency)),
+      )).toISOString(),
+      catalogUpdatedAt: catalogTimes.length ? new Date(Math.min(...catalogTimes)).toISOString() : null,
+      fxUpdatedAt: fxTimes.length ? new Date(Math.min(...fxTimes.map(({ fx }) => fx.createdAt.getTime()))).toISOString() : null,
+    },
     datacenters: active.map((provider) => {
       const providerOffers = offers.filter((offer) => offer.provider === provider.id)
       const codes = new Set(providerOffers.map((offer) => offer.location))

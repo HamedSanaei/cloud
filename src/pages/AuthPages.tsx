@@ -1,3 +1,4 @@
+import { safeReturnPath } from '../../backend/src/contracts/return-path'
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ArrowLeft, Check, Eye, EyeOff, KeyRound, LockKeyhole, Mail, Phone, RefreshCw, Server, ShieldCheck } from 'lucide-react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
@@ -56,6 +57,7 @@ function GoogleIcon() {
 export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; adminEntry?: boolean }) {
   const navigate = useNavigate()
   const location = useLocation()
+  const requestedReturn = new URLSearchParams(location.search).get('returnTo')
   const { acceptSession } = useAuth()
   const [method, setMethod] = useState<LoginMethod>(intent === 'register' ? 'phone' : 'email')
   const [email, setEmail] = useState('')
@@ -93,8 +95,8 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
 
   const returnTo = useMemo(() => {
     const from = (location.state as { from?: string } | null)?.from
-    return adminEntry ? '/admin' : from?.startsWith('/') ? from : '/dashboard'
-  }, [location.state, adminEntry])
+    return adminEntry ? '/admin' : safeReturnPath(from ?? requestedReturn)
+  }, [location.state, requestedReturn, adminEntry])
 
   useEffect(() => {
     setCountdown(challenge?.resendAfter ?? 0)
@@ -187,7 +189,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
         if (password !== confirmPassword) throw new Error('تکرار رمز عبور با رمز اصلی یکسان نیست.')
         await resetPassword(challenge.challengeToken, submittedCode, password, recoveryCode || undefined)
         setSuccess(true)
-        window.setTimeout(() => navigate('/login', { replace: true }), 1000)
+        window.setTimeout(() => navigate('/login?returnTo=' + encodeURIComponent(returnTo), { replace: true }), 1000)
       } else if (challenge.challengeType === 'totp' && recoveryMode) {
         complete(await verifyRecoveryCode(challenge.challengeToken, recoveryCode))
       } else if (challenge.challengeType === 'totp') {
@@ -335,11 +337,11 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
                   {intent === 'register' && method === 'email' && (
                     <label className="auth-field"><span>تکرار رمز عبور</span><input autoComplete="new-password" dir="ltr" minLength={8} onChange={(e) => setConfirmPassword(e.target.value)} required type={showPassword ? 'text' : 'password'} value={confirmPassword} /></label>
                   )}
-                  {intent === 'login' && method === 'email' && <Link className="auth-text-link" to="/forgot-password">رمز عبور را فراموش کرده‌اید؟</Link>}
+                  {intent === 'login' && method === 'email' && <Link className="auth-text-link" to={`/forgot-password?returnTo=${encodeURIComponent(returnTo)}`} state={location.state}>رمز عبور را فراموش کرده‌اید؟</Link>}
                   {error && <p className="auth-error" role="alert">{error}</p>}
                   <button className="auth-primary-button" disabled={busy} type="submit">{busy ? <RefreshCw className="spin" size={19} /> : intent === 'register' ? 'ساخت حساب' : intent === 'forgot' ? 'ارسال کد بازیابی' : method === 'phone' ? 'ارسال کد پیامکی' : 'ورود به حساب'}</button>
                   {(intent === 'register' || (intent === 'login' && method === 'email')) && <button className="auth-google-button" disabled={busy} onClick={googleLogin} type="button"><GoogleIcon /> {intent === 'register' ? 'ادامه با گوگل' : 'ورود با حساب گوگل'}</button>}
-                  <p className="auth-switch-copy">{intent === 'register' ? <>حساب دارید؟ <Link to="/login" state={location.state}>وارد شوید</Link></> : intent === 'login' ? <>حساب ندارید؟ <Link to="/register" state={location.state}>ثبت‌نام کنید</Link></> : <Link to="/login"><ArrowLeft size={15} /> بازگشت به ورود</Link>}</p>
+                  <p className="auth-switch-copy">{intent === 'register' ? <>حساب دارید؟ <Link to={`/login?returnTo=${encodeURIComponent(returnTo)}`} state={location.state}>وارد شوید</Link></> : intent === 'login' ? <>حساب ندارید؟ <Link to={`/register?returnTo=${encodeURIComponent(returnTo)}`} state={location.state}>ثبت‌نام کنید</Link></> : <Link to={`/login?returnTo=${encodeURIComponent(returnTo)}`} state={location.state}><ArrowLeft size={15} /> بازگشت به ورود</Link>}</p>
                 </form>
               ) : (
                 <form className="auth-form" onSubmit={submitChallenge}>
@@ -386,7 +388,7 @@ export function GoogleCallbackPage() {
     }
     void refresh().then(() => {
       const target = params.get('redirectTo')
-      navigate(target?.startsWith('/') ? target : '/dashboard', { replace: true })
+      navigate(safeReturnPath(target), { replace: true })
     }).catch(() => setError('نشست ورود با گوگل قابل تأیید نیست.'))
   }, [navigate, params, refresh])
   return <main className="auth-page"><div className="route-loader"><span />{error ? <p>{error} <Link to="/login">بازگشت</Link></p> : <p>در حال تکمیل ورود با گوگل…</p>}</div></main>

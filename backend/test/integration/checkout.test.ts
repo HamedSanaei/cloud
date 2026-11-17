@@ -61,6 +61,10 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
     const iran = { rates: { outbound: 123450, inbound: 0, cpu: 250000, ram: null }, trafficUnit: 'TiB', tax: 'included', published: false }
     const update = (headers: Record<string, string>, value: unknown) => app.inject({ method: 'POST', url: '/api/admin/settings/iran-tariffs', headers, payload: value as object })
     const original = (await read()).hetzner.find((row: { id: string }) => row.id === offer.id)
+    const metadata = (await read()).meta
+    expect(metadata.status).toBe('available')
+    expect(Date.parse(metadata.validUntil)).toBeGreaterThan(Date.now())
+    expect(Date.parse(metadata.validUntil) - Date.parse(metadata.checkedAt)).toBeLessThanOrEqual(60_000)
     expect(original).toMatchObject({ hourly: expect.any(Number), monthly: null })
     expect(original).not.toHaveProperty('operatingSystems')
     expect(original).not.toHaveProperty('canonicalPricing')
@@ -75,6 +79,9 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
       expect(html.body).toContain('۱۲٬۳۴۵ تومان')
       expect(html.body).toContain('هر TiB برابر ۱٬۰۲۴ GiB است.')
       expect(html.body).toContain(`offer=${offer.id}&amp;period=hourly`)
+      const focused = await app.inject('/api/public/home-tariffs?scope=hetzner')
+      expect(focused.body).toContain(`offer=${offer.id}&amp;period=hourly`)
+      expect(focused.body).not.toContain('نرخ واحد منابع سرور ایران')
       await setFxRate(ctx.db, '720000')
       const repriced = (await read()).hetzner.find((row: { id: string }) => row.id === offer.id)
       expect(repriced.hourly).toBeGreaterThan(original.hourly)

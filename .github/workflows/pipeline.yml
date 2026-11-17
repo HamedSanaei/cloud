@@ -123,6 +123,9 @@ jobs:
           cache-from: type=gha,scope=cloud-web
           cache-to: type=gha,scope=cloud-web,mode=max
 
+      - name: Verify public SEO, redirects, 404s and SSR pricing in isolation
+        run: node test/public-http-smoke.mjs
+
       - name: Smoke-test the built image
         run: |
           set -euo pipefail

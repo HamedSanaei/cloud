@@ -11,12 +11,12 @@ const HETZNER_ACCOUNT_URL = 'https://pluspremium.ir/'
 
 const providers = [
   { id: 'asiatech', name: 'آسیاتک', logo: '/providers/asiatech.svg', region: 'ایران', title: 'خرید سرور ایران', tone: 'blue', link: '#iran-server', action: 'وضعیت عرضه و تعرفهٔ ایران', bullets: ['میزبانی در ایران برای مخاطبان داخل کشور', 'تعرفهٔ ماهانهٔ منابع پس از تأیید منتشر می‌شود'] },
-  { id: 'hetzner', name: 'Hetzner', logo: '/providers/hetzner.svg', region: 'اروپا', title: 'خرید سرور هتزنر', tone: 'rose', link: '#hetzner-server', action: 'مشاهدهٔ پلن‌های هتزنر', bullets: ['مقایسهٔ موقعیت، منابع و ترافیک مشمول', 'دوره‌های پرداخت مطابق پلن‌های قابل سفارش'] },
+  { id: 'hetzner', name: 'Hetzner', logo: '/providers/hetzner.svg', region: 'اروپا', title: 'خرید سرور هتزنر', tone: 'rose', link: '/hetzner', action: 'مشاهدهٔ پلن‌های هتزنر', bullets: ['مقایسهٔ موقعیت، منابع و ترافیک مشمول', 'دوره‌های پرداخت مطابق پلن‌های قابل سفارش'] },
   { id: 'leaseweb', name: 'Leaseweb', logo: '/providers/leaseweb.svg', region: 'خارج', title: 'سرور ابری لیزوب', tone: 'cyan', link: '/servers/create', action: 'بررسی موجودی لیزوب در پنل', bullets: ['موقعیت و دورهٔ پرداخت در پنل سفارش مشخص می‌شود'] },
 ]
 
 function ProviderLogo({ provider, alt }: { provider: string; alt: string }) {
-  return <img alt={alt} loading="lazy" src={`/providers/${provider}.svg`} />
+  return <img alt={alt} loading="lazy" width="48" height="48" src={`/providers/${provider}.svg`} />
 }
 
 export function LandingPage({ initialTariffs }: { initialTariffs?: string } = {}) {
@@ -29,7 +29,7 @@ export function LandingPage({ initialTariffs }: { initialTariffs?: string } = {}
           <Link className="public-logo" to="/"><BrandMark /><strong>{BRAND_NAME}</strong></Link>
           <button aria-label="نمایش فهرست" className="landing-menu-button" onClick={() => setMenuOpen((value) => !value)}>{menuOpen ? <X /> : <Menu />}</button>
           <div className={`landing-links ${menuOpen ? 'open' : ''}`}>
-            <a href="#servers">سرور ابری</a><a href="#datacenters">دیتاسنترها</a><a href="#tariffs">تعرفه‌ها</a><a href="#hourly">پرداخت ساعتی</a>
+            <a href="/hetzner">سرور هتزنر</a><a href="#servers">سرور ابری</a><a href="#datacenters">دیتاسنترها</a><a href="#tariffs">تعرفه‌ها</a><a href="#hourly">پرداخت ساعتی</a>
           </div>
           <div className={`landing-auth-actions ${user ? 'landing-auth-actions--signed-in' : ''}`}>{user ? <Link className="button primary" to="/dashboard">ورود به پنل مدیریت</Link> : <><Link className="button ghost" to="/login">ورود</Link><Link className="button primary" to="/register">ثبت‌نام</Link></>}</div>
         </nav>
@@ -39,14 +39,14 @@ export function LandingPage({ initialTariffs }: { initialTariffs?: string } = {}
         <section className="landing-hero public-container">
           <div className="hero-copy">
             <span className="eyebrow">ایران • اروپا</span>
-            <h1>سرور ابری پارس سرور<br /> <em>ایران و هتزنر</em></h1>
+            <h1>سرور ابری ایران و هتزنر<br /><em>با پنل فارسی پارس سرور</em></h1>
             <p>مشخصات و قیمت پلن‌های قابل سفارش هتزنر را مقایسه کنید و وضعیت عرضه و تعرفهٔ سرور ایران را ببینید.</p>
             <div className="hero-actions"><Link className="button primary large" to={user ? '/servers/create' : '/register'}>شروع ساخت سرور</Link><Link className="button dark large" to={user ? '/dashboard' : '/login'}>{user ? 'پنل مدیریت' : 'ورود به حساب'}</Link></div>
             <ul className="hero-trust"><li><Check /> مقایسهٔ دوره‌های پرداخت</li><li><Check /> مشخصات شبکهٔ هر پلن</li><li><Check /> موقعیت‌های متنوع</li></ul>
           </div>
           <div className="hero-console" aria-label="نمایی از کنسول مدیریت سرور">
             <div className="console-window-bar"><span><i /><i /><i /></span><b>کنسول مدیریت سرور</b></div>
-            <div className="console-summary"><strong>۳</strong><span>سرویس‌های فعال</span><i /></div>
+            <div className="console-summary"><strong>۳</strong><span>نمایش شماتیک پنل</span><i /></div>
             {providers.map((provider) => <div className="console-server" key={provider.id}><ProviderLogo alt="" provider={provider.id} /><span><b>{provider.name}</b><small>{provider.region}</small></span><i /></div>)}
             <ul className="console-capabilities" aria-label="امکانات سرویس">
               <li><Clock3 aria-hidden="true" /><span><strong>پرداخت ساعتی</strong><small>متناسب با مصرف شما</small></span></li>
@@ -85,7 +85,7 @@ export function LandingPage({ initialTariffs }: { initialTariffs?: string } = {}
         <HomeTariffs initialHtml={initialTariffs} />
 
         <section className="ipv6-banner public-container" id="hourly">
-          <div><h2>سرور هتزنر ساعتی یا ماهانه؟</h2><p>برای آزمایش یا کار کوتاه‌مدت، نرخ هر ساعت را بررسی کنید. برای سرویس همیشه‌روشن، اگر پلن ماهانه عرضه می‌شود، مبلغ همان دوره را با هزینهٔ مورد انتظار مصرف مقایسه کنید.</p><a href="#hetzner-server">مقایسهٔ تعرفه‌های هتزنر <ArrowLeft size={16} /></a></div>
+          <div><h2>سرور هتزنر ساعتی یا ماهانه؟</h2><p>برای آزمایش یا کار کوتاه‌مدت، نرخ هر ساعت را بررسی کنید. برای سرویس همیشه‌روشن، اگر پلن ماهانه عرضه می‌شود، مبلغ همان دوره را با هزینهٔ مورد انتظار مصرف مقایسه کنید.</p><a href="/hetzner#tariffs">راهنمای انتخاب و مقایسهٔ تعرفه‌های هتزنر <ArrowLeft size={16} /></a></div>
           <div className="ipv6-visual"><Globe2 /><strong dir="ltr">2001:db8::/32</strong><small>نسل جدید آدرس‌های اینترنت</small></div>
         </section>
 
@@ -96,7 +96,8 @@ export function LandingPage({ initialTariffs }: { initialTariffs?: string } = {}
 
         <section className="landing-section public-container landing-faq">
           <div className="landing-section-heading"><span>پرسش‌های متداول</span><h2>قبل از شروع، بیشتر بدانید</h2></div>
-          {[['سرور ایران برای چه کاربردی مناسب است؟', 'نزدیکی به کاربران داخل کشور می‌تواند تأخیر را کاهش دهد. پیش از سفارش، وضعیت عرضه، ترافیک ورودی و خروجی و نیاز به IP را بررسی کنید.'], ['چطور یک سرور ارزان هتزنر انتخاب کنم؟', 'برای مقایسهٔ پلن ساعتی یا ماهانه، CPU، RAM، دیسک و سهمیهٔ ترافیک موردنیازتان را مشخص کنید. در جدول بالا می‌توانید نرخ دوره‌های موجود را کنار مشخصات هر پلن ببینید.'], ['آیا خرید سرور به حساب مستقل هتزنر نیاز دارد؟', 'سرور را از پنل پارس سرور سفارش و مدیریت می‌کنید. برای پیگیری خرید حساب مستقل، به وب‌سایت پلاس پریمیوم مراجعه کنید.']].map(([question, answer]) => <details key={question}><summary>{question}<ChevronDown /></summary><p>{answer}</p></details>)}
+          {[['سرور ایران برای چه کاربردی مناسب است؟', 'نزدیکی به کاربران داخل کشور می‌تواند تأخیر را کاهش دهد. پیش از سفارش، وضعیت عرضه، ترافیک ورودی و خروجی و نیاز به IP را بررسی کنید.'], ['چطور یک سرور ارزان هتزنر انتخاب کنم؟', 'منابع موردنیاز و دورهٔ پرداخت را مقایسه کنید؛ ارزان‌بودن فقط نسبت به همین فهرست و زمان بررسی معنا دارد. راهنمای هتزنر، جدول قیمت و محدودیت‌های هر انتخاب را توضیح می‌دهد.'], ['آیا خرید سرور به حساب مستقل هتزنر نیاز دارد؟', 'سرور را از پنل پارس سرور سفارش و مدیریت می‌کنید. برای پیگیری خرید حساب مستقل، به وب‌سایت پلاس پریمیوم مراجعه کنید.']].map(([question, answer]) => <details key={question}><summary>{question}<ChevronDown /></summary><p>{answer}</p></details>)}
+          <p><a href="/hetzner">راهنمای خرید سرور هتزنر و انتخاب پلن کم‌هزینه</a></p>
           <p className="landing-account-link"><a className="button primary" href={HETZNER_ACCOUNT_URL} rel="sponsored">خرید اکانت هتزنر <ArrowLeft size={16} /></a> <span>مشاهده در وب‌سایت پلاس پریمیوم</span></p>
         </section>
       </main>
@@ -109,7 +110,7 @@ export function LandingPage({ initialTariffs }: { initialTariffs?: string } = {}
           </div>
           <nav aria-label={`خدمات ${BRAND_NAME}`}>
             <a href="#iran-server">سرور ایران</a>
-            <a href="#hetzner-server">سرور هتزنر</a>
+            <a href="/hetzner">سرور هتزنر</a>
             <a href="#hourly">سرور ساعتی و ماهانه</a>
             <a href="#tariffs">تعرفه‌ها</a>
             <a href={HETZNER_ACCOUNT_URL} rel="sponsored">خرید اکانت هتزنر</a>

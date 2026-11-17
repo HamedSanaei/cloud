@@ -55,6 +55,6 @@ export function ProtectedRoute() {
   const { user, loading } = useAuth()
   const location = useLocation()
   if (loading) return <div className="route-loader" role="status"><span /><p>در حال بررسی نشست امن…</p></div>
-  if (!user) return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />
+  if (!user) return <Navigate to={`/login?returnTo=${encodeURIComponent(location.pathname + location.search)}`} replace state={{ from: `${location.pathname}${location.search}` }} />
   return <Outlet />
 }
