@@ -2,11 +2,15 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { createServer } from 'node:http'
 import type { Server as HttpServer } from 'node:http'
 import { and, eq } from 'drizzle-orm'
-import { dbAvailable, getTestContext, truncateAll } from '../helpers.js'
+import { DATABASE_URL, dbAvailable, getTestContext, truncateAll } from '../helpers.js'
+import { createDb } from '../../src/db/index.js'
 import type { TestContext } from '../helpers.js'
 import { loadConfig } from '../../src/config.js'
-import { fxRates } from '../../src/db/schema.js'
-import { getActiveFxRate, setFxRate, updatePricingRules, computePriceSnapshot } from '../../src/modules/pricing/service.js'
+import * as configuration from '../../src/config.js'
+import { fxRates, providers } from '../../src/db/schema.js'
+import { getActiveFxRate, refreshEuroRate, euroRefreshIntervalMs, setFxRate, updatePricingRules, computePriceSnapshot } from '../../src/modules/pricing/service.js'
+import { getHomeTariffs } from '../../src/modules/catalog/home-tariffs.js'
+import { renderHomeTariffs } from '../../src/contracts/home-tariffs.js'
 import { getProvider, registerProvider } from '../../src/modules/providers/registry.js'
 import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
 import { registerUser } from '../../src/modules/auth/service.js'
@@ -18,19 +22,23 @@ import { createOrderFromQuote } from '../../src/modules/orders/service.js'
 // exercised separately by outbound-routing/transport and outbound-settings tests.
 vi.mock('../../src/modules/outbound/client.js', () => ({ outboundFetch: (_integration: string, url: string | URL, init?: RequestInit) => fetch(url, init) }))
 
-describe.skipIf(!dbAvailable)('USD = USDT pricing with a local-currency ledger', () => {
+describe.skipIf(!dbAvailable)('AbanTether EUR and USD = USDT pricing with a local-currency ledger', () => {
   let ctx: TestContext
   let ticker: HttpServer
   let baseUrl: string
   let marketPrice = '263881.12345678'
   let marketActive = true
   let httpStatus = 200
+  let requests = 0
+  let symbolOverride: string | null = null
 
   beforeAll(async () => {
     ctx = await getTestContext()
     ticker = createServer((request, response) => {
-      response.writeHead(request.url === '/api/v1/manager/otc/ticker?coin=USDT' ? httpStatus : 404, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ data: { markets: { USDTIRT: { symbol: 'USDT', active: marketActive, buy_price: marketPrice } } } }))
+      requests++
+      const coin = new URL(request.url!, 'http://fixture.local').searchParams.get('coin')
+      response.writeHead(['USDT', 'EUR'].includes(coin!) && request.url?.startsWith('/api/v1/manager/otc/ticker?') ? httpStatus : 404, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ data: { markets: { [`${coin}IRT`]: { symbol: symbolOverride ?? coin, active: marketActive, buy_price: marketPrice } } } }))
     })
     await new Promise<void>((resolve) => ticker.listen(0, '127.0.0.1', resolve))
     const address = ticker.address()
@@ -42,6 +50,7 @@ describe.skipIf(!dbAvailable)('USD = USDT pricing with a local-currency ledger',
     marketPrice = '263881.12345678'
     marketActive = true
     httpStatus = 200
+    requests = 0; symbolOverride = null
     loadConfig({ ...process.env, NODE_ENV: 'test', USDT_RATE_API_BASE_URL: baseUrl, USDT_RATE_MAX_AGE_SECONDS: '60' })
   })
   afterAll(async () => {
@@ -103,5 +112,96 @@ describe.skipIf(!dbAvailable)('USD = USDT pricing with a local-currency ledger',
     marketPrice = price
     marketActive = active
     await expect(getActiveFxRate(ctx.db, 'USD')).rejects.toMatchObject({ code: 'usdt_rate_unavailable' })
+  })
+
+  it('recovers missing EUR with exact toman × 10 conversion and one atomic history/audit entry across API/worker clients', async () => {
+    const other = createDb(DATABASE_URL)
+    try {
+      const results = await Promise.all([refreshEuroRate(ctx.db), refreshEuroRate(other.db), getActiveFxRate(ctx.db, 'EUR')])
+      expect(results.map(r => r.rate)).toEqual(Array(3).fill('2638811.234568'))
+      expect(requests).toBe(1)
+      const history = await ctx.db.query.fxRates.findMany()
+      expect(history).toHaveLength(1)
+      expect(history[0]).toMatchObject({ fromCurrency: 'EUR', toCurrency: 'IRR', note: 'AbanTether EURIRT buy_price (toman × 10)', setBy: null })
+      const audit = await ctx.db.query.auditLogs.findMany()
+      expect(audit).toHaveLength(1)
+      expect(audit[0]).toMatchObject({ action: 'pricing.fx_rate.refreshed', metadata: { from: 'EUR', source: history[0]!.note } })
+    } finally { await other.pool.end() }
+  })
+
+  it('coalesces duplicate observations and preserves old history after a half-hour refresh', async () => {
+    const first = await refreshEuroRate(ctx.db)
+    marketPrice = '300000'
+    expect((await refreshEuroRate(ctx.db)).id).toBe(first.id)
+    expect(requests).toBe(1)
+    // A preceding slow HTTP response must not make the next scheduled refresh skip.
+    const old = new Date(Date.now() - euroRefreshIntervalMs + 1000)
+    await ctx.db.update(fxRates).set({ createdAt: old }).where(eq(fxRates.id, first.id!))
+    const next = await refreshEuroRate(ctx.db)
+    expect(next.rate).toBe('3000000.000000')
+    expect(next.id).not.toBe(first.id)
+    expect(requests).toBe(2)
+    expect((await ctx.db.query.fxRates.findFirst({ where: t => eq(t.id, first.id!) }))!.createdAt).toEqual(old)
+  })
+
+  it('keeps the existing 24h fail-closed boundary during outages and recovers on a real observation', async () => {
+    const [old] = await ctx.db.insert(fxRates).values({ fromCurrency: 'EUR', toCurrency: 'IRR', rate: '620000', createdAt: new Date(Date.now() - 3600000) }).returning()
+    httpStatus = 503
+    await expect(refreshEuroRate(ctx.db)).rejects.toMatchObject({ code: 'eur_rate_unavailable' })
+    expect((await getActiveFxRate(ctx.db, 'EUR')).id).toBe(old!.id) // Existing valid observation; not freshened.
+    const expired = new Date(Date.now() - 86400001)
+    await ctx.db.update(fxRates).set({ createdAt: expired }).where(eq(fxRates.id, old!.id))
+    await expect(getActiveFxRate(ctx.db, 'EUR')).rejects.toMatchObject({ code: 'eur_rate_unavailable', status: 503 })
+    expect(await ctx.db.query.fxRates.findMany()).toHaveLength(1)
+    expect((await ctx.db.query.fxRates.findFirst())!.createdAt).toEqual(expired)
+    httpStatus = 200
+    expect((await getActiveFxRate(ctx.db, 'EUR')).rate).toBe('2638811.234568')
+  })
+
+  it('ignores future EUR rows instead of using them or substituting USDT', async () => {
+    await ctx.db.insert(fxRates).values([
+      { fromCurrency: 'EUR', toCurrency: 'IRR', rate: '1', createdAt: new Date(Date.now() + 3600000) },
+      { fromCurrency: 'USDT', toCurrency: 'IRR', rate: '2' },
+    ])
+    const rate = await getActiveFxRate(ctx.db, 'EUR')
+    expect(rate.rate).toBe('2638811.234568')
+    expect(rate.createdAt.getTime()).toBeLessThanOrEqual(Date.now())
+    expect(requests).toBe(1)
+  })
+
+  it.each([{ price: '0', active: true }, { price: '-1', active: true }, { price: 'NaN', active: true }, { price: '1.123456789', active: true }, { price: '200000', active: false }])('rejects invalid EUR without a history row: $price / $active', async ({ price, active }) => {
+    marketPrice = price; marketActive = active
+    await expect(getActiveFxRate(ctx.db, 'EUR')).rejects.toMatchObject({ code: 'eur_rate_unavailable' })
+    expect(await ctx.db.query.fxRates.findMany()).toHaveLength(0)
+  })
+
+  it('rejects a different market symbol even if it is placed in the EURIRT response slot', async () => {
+    symbolOverride = 'USDT'
+    await expect(getActiveFxRate(ctx.db, 'EUR')).rejects.toMatchObject({ code: 'eur_rate_unavailable' })
+    expect(await ctx.db.query.fxRates.findMany()).toHaveLength(0)
+  })
+
+  it('restores real public Hetzner retail and SSR prices with a valid EUR observation', async () => {
+    await getActiveFxRate(ctx.db, 'EUR')
+    const mock = ctx.mockProvider
+    registerProvider({ ...mock, id: 'hetzner', async syncCatalog() {
+      const catalog = await mock.syncCatalog()
+      return { ...catalog, offers: catalog.offers.map(offer => ({ ...offer, provider: 'hetzner', category: 'cloud' as const, providerCurrency: 'EUR' })) }
+    } })
+    // Only disposable mock catalog/retail rows: no provider order or wallet action.
+    await syncProviderCatalog(ctx.db, getProvider('hetzner'))
+    await enableAllOffersForSale(ctx.db, 'hetzner')
+    await ctx.db.update(providers).set({ enabled: true }).where(eq(providers.id, 'hetzner'))
+    const base = configuration.getConfig()
+    const config = vi.spyOn(configuration, 'getConfig').mockReturnValue({ ...base, DATA_AUTHORITY: 'site',
+      PROVIDERS: { ...base.PROVIDERS, hetzner: { ...base.PROVIDERS.hetzner, enabled: true, orderingEnabled: true } } })
+    try {
+      const tariffs = await getHomeTariffs(ctx.db)
+      expect(tariffs.meta.status).toBe('available')
+      expect(tariffs.hetzner!.length).toBeGreaterThan(0)
+      expect(renderHomeTariffs(tariffs.iran, tariffs.hetzner, tariffs.meta)).toContain('تومان')
+      expect(await ctx.db.query.orders.findMany()).toHaveLength(0)
+      expect(await ctx.db.query.walletTransactions.findMany()).toHaveLength(0)
+    } finally { config.mockRestore() }
   })
 })
