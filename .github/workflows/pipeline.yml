@@ -53,6 +53,34 @@ jobs:
             esac
           fi
 
+  # Audit remains a strict release prerequisite, independent of test execution.
+  # An upstream advisory must not prevent collecting functional regression evidence.
+  dependency-audit:
+    name: Dependency audit (${{ matrix.directory }})
+    runs-on: ubuntu-latest
+    needs: deployment-policy
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: ['.', 'backend']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+      - name: Install dependencies including build and test tools
+        working-directory: ${{ matrix.directory }}
+        run: npm ci
+      - name: Audit all dependencies without exceptions
+        working-directory: ${{ matrix.directory }}
+        run: npm audit --audit-level=low
+
   # ==========================================================================
   # JOB 1 — test-build (frontend)
   # Runs for PRs, pushes to main/staging, and workflow_dispatch. Never deploys.
@@ -94,9 +122,6 @@ jobs:
       - name: Install shared lint toolchain
         working-directory: backend
         run: npm ci
-
-      - name: Audit frontend dependencies (including build tools)
-        run: npm audit --audit-level=low
 
       - name: Lint frontend with the existing backend toolchain
         run: npm run lint
@@ -201,10 +226,6 @@ jobs:
       - name: Install backend dependencies
         working-directory: backend
         run: npm ci
-
-      - name: Audit backend dependencies (including migration and test tools)
-        working-directory: backend
-        run: npm audit --audit-level=low
 
       - name: Typecheck
         working-directory: backend
@@ -322,7 +343,7 @@ jobs:
   # ==========================================================================
   build-push:
     name: Build & push images to GHCR
-    needs: [deployment-policy, test-build, backend-check, runtime-recovery]
+    needs: [deployment-policy, dependency-audit, test-build, backend-check, runtime-recovery]
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
     permissions:

@@ -24,7 +24,20 @@ class ParsServerIngress(unittest.TestCase):
         self.assertIn("/etc/letsencrypt/live/parserver.ir/fullchain.pem;", config)
         self.assertIn("/etc/letsencrypt/live/parserver.ir/privkey.pem;", config)
         self.assertIn("location ^~ /.well-known/acme-challenge/", config)
-        self.assertIn("proxy_set_header X-Forwarded-Proto $scheme;", config)
+        self.assertIn("proxy_set_header X-Forwarded-Proto $parserver_client_scheme;", config)
+
+    def test_client_protocol_trust_and_redirect_do_not_create_a_cdn_loop(self):
+        config = (ROOT / "deploy/ingress/parserver.ir.conf").read_text(encoding="utf-8")
+        self.assertIn("geo $realip_remote_addr $parserver_arvan", config)
+        self.assertIn('map "$parserver_arvan:$http_x_forwarded_proto"', config)
+        self.assertIn("default $scheme;", config)
+        self.assertIn('"1:https" https;', config)
+        self.assertIn('"1:http" http;', config)
+        self.assertNotIn('"0:https" https;', config)
+        self.assertIn('"http:0" 1;', config)
+        self.assertIn("return 308 https://parserver.ir$request_uri;", config)
+        self.assertIn("/5138023.txt 1;", config)
+        self.assertIn("~^/\\.well-known/acme-challenge/ 1;", config)
 
     def test_renewal_hook_checks_domain_and_config_before_reload(self):
         script = (ROOT / "deploy/scripts/renew-parserver-nginx.sh").read_text(encoding="utf-8")

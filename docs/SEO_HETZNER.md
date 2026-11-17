@@ -93,6 +93,12 @@ or a directly comparable build-compression measurement.
 
 **Blocked, not passed:**
 
+- CI dependency audit reports GHSA-fc5q-39xc-vjpf for picomatch ≤4.0.7. On
+  2026-11-17 the official advisory lists no patched release and npm latest is
+  4.0.7. No downgrade, fabricated version, audit exception or security bypass is
+  used. Both full dependency audits run independently so functional checks can
+  still execute, and are required by image publication. Release remains blocked
+  until a verified fix is available. [Official advisory](https://github.com/advisories/GHSA-fc5q-39xc-vjpf).
 - Mobile and desktop PSI requests returned daily API quota-exceeded responses.
   No Lighthouse score, LCP, INP or CLS has been measured for this change.
 - No authenticated Search Console property access. Index status, Google-selected
