@@ -45,6 +45,25 @@ describe('outbound routing and safety', () => {
     expect((await api.request('hetzner', url)).report.route).toBe('direct')
     expect((await worker.request('hetzner', url)).report.route).toBe('direct')
   })
+  it('forces AbanTether direct despite saved proxies, environment proxies or unreadable proxy settings', async () => {
+    state.routes.abantether = { enabled: true, profileId: id, failurePolicy: 'closed' }
+    expect(selectedRoute(state, 'abantether')).toEqual({ route: 'direct', profileId: null })
+    vi.stubEnv('HTTPS_PROXY', 'http://proxy.fixture.test:8080')
+    const read = vi.fn(async () => { throw new Error('unreadable proxy settings') })
+    const c = new OutboundHttp(read); clients.push(c)
+    try {
+      expect((await c.request('abantether', policy.testTargets.abantether.url)).report).toEqual({ route: 'direct', profileId: null })
+      expect(read).not.toHaveBeenCalled()
+      expect(policy.publicAddresses).not.toHaveBeenCalled()
+      const init = vi.mocked(fetch).mock.calls[0]![1] as RequestInit & { dispatcher?: unknown }
+      expect(init.dispatcher).toBeTruthy()
+      expect(init.redirect).toBe('error')
+      await expect(c.request('abantether', policy.testTargets.abantether.url, {}, id)).rejects.toMatchObject({ category: 'policy' })
+      expect(fetch).toHaveBeenCalledOnce()
+      expect(routeInput.safeParse({ revision: state.revision, integration: 'abantether', ...state.routes.abantether, confirm: true }).success).toBe(false)
+      expect(testInput.safeParse({ revision: state.revision, integration: 'abantether', profileId: id, confirm: true }).success).toBe(false)
+    } finally { vi.unstubAllEnvs() }
+  })
   it('blocks a required route whose profile is disabled instead of leaking direct traffic', async () => {
     state.profiles[0]!.enabled = false
     await expect(client().request('hetzner', url)).rejects.toMatchObject({ category: 'configuration', route: { route: 'blocked' } })

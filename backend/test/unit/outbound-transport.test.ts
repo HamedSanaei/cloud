@@ -197,8 +197,8 @@ describe.each(['http', 'https', 'socks5'] as const)('%s actual outbound transpor
     expect(mutations).toBe(0)
   })
   it('verifies the upstream hostname even when the issuing certificate is trusted', async () => {
-    const client = configure(type, 'abantether')
-    await expect(client.request('abantether', policy.testTargets.abantether.url)).rejects.toMatchObject({ category: 'tls' })
+    const client = configure(type, 'tabapay')
+    await expect(client.request('tabapay', policy.testTargets.tabapay.url)).rejects.toMatchObject({ category: 'tls' })
     expect(mutations).toBe(0)
   })
   it('does not follow a redirect to metadata or repeat an ambiguously accepted Hetzner mutation', async () => {

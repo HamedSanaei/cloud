@@ -33,6 +33,14 @@ async function ready() { open(); await screen.findByRole('heading', { name: 'ش�
 function integration(name: string) { return within(screen.getByRole('heading', { name, exact: true }).closest('article')!) }
 
 describe('admin outbound panel', () => {
+  it('offers only direct connection testing for AbanTether, with no proxy controls', async () => {
+    await ready()
+    const card = integration('آبان‌تتر (نرخ ارز)')
+    expect(card.getByText(/همیشه مستقیم/)).toBeTruthy()
+    expect(card.queryByRole('combobox')).toBeNull()
+    expect(card.queryByRole('button', { name: /ذخیره/ })).toBeNull()
+    expect(card.getByRole('button', { name: 'آزمون اتصال آبان‌تتر (نرخ ارز)' })).toBeTruthy()
+  })
   it('uses the existing settings access gate without fetching proxy settings for unauthorized users', async () => {
     allowed = false; open()
     await screen.findByText('دسترسی مدیریت مجاز نیست')

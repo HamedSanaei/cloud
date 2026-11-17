@@ -44,7 +44,7 @@ export async function getHomeTariffs(db: DbClient) {
     const code = hetzner.reason instanceof AppError ? hetzner.reason.code : 'catalog_unavailable'
     // No raw error/provider response/credentials/wholesale data in public HTML or logs.
     createLogger('public-pricing').warn({ code }, 'Public Hetzner pricing unavailable')
-    if (['fx_rate_stale', 'not_found', 'usdt_rate_unavailable'].includes(code)) meta.status = 'pricing_unavailable'
+    if (['fx_rate_stale', 'not_found', 'usdt_rate_unavailable', 'eur_rate_unavailable'].includes(code)) meta.status = 'pricing_unavailable'
   }
   return {
     iran: published ? { rates: published.rates, trafficUnit: published.trafficUnit, tax: published.tax } : null,

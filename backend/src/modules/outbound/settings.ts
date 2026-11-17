@@ -27,8 +27,10 @@ export const routeInput = z.object({ revision, integration: integrationSchema, e
   failurePolicy: z.enum(['closed', 'read-only-direct']), confirm: z.literal(true),
 }).strict().refine(v => !v.enabled || !!v.profileId, 'An enabled route requires a proxy')
   .refine(v => v.integration !== 'hetzner' || v.failurePolicy === 'closed', 'Hetzner routing requires fail-closed behavior')
+  .refine(v => v.integration !== 'abantether' || !v.enabled && v.profileId === null, 'آبان‌تتر فقط با اتصال مستقیم در دسترس است.')
 export const deleteInput = z.object({ revision, id: z.uuid(), confirm: z.literal(true) }).strict()
 export const testInput = z.object({ revision, integration: integrationSchema, profileId: z.uuid().optional(), confirm: z.literal(true) }).strict()
+  .refine(v => v.integration !== 'abantether' || !v.profileId, 'آزمون آبان‌تتر فقط مستقیم انجام می‌شود.')
 export const canManageOutbound = (user: SessionUser) => user.role === 'admin' && user.status === 'active'
 export function requireOutboundAdmin(user: SessionUser) {
   if (!canManageOutbound(user)) throw new ForbiddenError('تنظیمات شبکه فقط برای مدیر فعال پنل در دسترس است.')
@@ -44,6 +46,7 @@ export async function readOutbound(db: DbOrTx): Promise<OutboundState> {
     const value = JSON.parse(unseal(Buffer.from(stored.encrypted, 'base64'), `${outboundKey}:${stored.revision}`, encryptionKey()).toString()) as OutboundState
     if (value.revision !== stored.revision || !Array.isArray(value.profiles) || !value.routes) throw new Error()
     if (value.routes.hetzner) value.routes.hetzner.failurePolicy = 'closed'
+    if (value.routes.abantether) value.routes.abantether = { enabled: false, profileId: null, failurePolicy: 'closed' }
     return value
   } catch { throw new OutboundError('configuration') }
 }

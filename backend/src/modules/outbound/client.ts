@@ -9,6 +9,7 @@ export class OutboundFailure extends OutboundError {
   constructor(error: unknown, readonly route: RouteReport) { super(errorCategory(error)) }
 }
 export function selectedRoute(state: OutboundState, integration: OutboundIntegration): RouteReport {
+  if (integration === 'abantether') return { route: 'direct', profileId: null }
   const route = state.routes[integration]
   if (!route?.enabled) return { route: 'direct', profileId: null }
   if (!route.profileId) return { route: 'blocked', profileId: null }
@@ -27,6 +28,12 @@ export class OutboundHttp {
   async close() { const pools = [...this.pools.values()]; this.pools.clear(); await Promise.all(pools.map(pool => pool.close())) }
 
   private async route(integration: OutboundIntegration, deadline: AbortSignal, testProfile?: string) {
+    // Domestic rate source is direct-only, including legacy routes and diagnostics.
+    // Do not depend on encrypted proxy settings being readable to fetch FX.
+    if (integration === 'abantether') {
+      if (testProfile) throw new OutboundFailure(new OutboundError('policy'), { route: 'blocked', profileId: null })
+      return { state: { ...emptyOutboundState(), revision: this.revision || 'initial' }, report: selectedRoute(emptyOutboundState(), integration), profile: undefined }
+    }
     let state: OutboundState
     try { state = await withinDeadline(this.read(), deadline) } catch (error) {
       const failure = deadline.aborted ? new OutboundError('timeout') : new OutboundError('configuration')

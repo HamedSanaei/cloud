@@ -8,6 +8,7 @@ import type { CloudQueues, JobName } from './queue.js'
 import { JOB_NAMES } from './queue.js'
 import { coordinationPool, sharedWriter } from '../modules/system/writer-gate.js'
 import { installEventSink, recordEvent } from '../modules/system/events.js'
+import { refreshEuroRate } from '../modules/pricing/service.js'
 import {
   handleCatalogSync,
   handleProvision,
@@ -82,8 +83,9 @@ export function createWorkers(opts: { db: DbClient; queues: CloudQueues; logger:
     handleServerAction(ctx, data as Parameters<typeof handleServerAction>[1], finalAttempt),
   )
   makeWorker(JOB_NAMES.RENEWAL_SWEEP, () => handleRenewalSweep(ctx))
+  makeWorker(JOB_NAMES.EUR_FX_REFRESH, () => refreshEuroRate(opts.db))
   // Initial failures reject readiness instead of reconnecting forever. Runtime
-  // reconnects remain enabled once all six worker connections are established.
+  // reconnects remain enabled once all worker connections are established.
   void Promise.allSettled(workers.map((worker) => worker.waitUntilReady())).then((results) => {
     ready = results.every((result) => result.status === 'fulfilled')
   })

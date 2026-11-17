@@ -109,6 +109,11 @@ function IntegrationRoute({ integration, profiles, revision, busy, consoleHealth
   const profile = profiles.find(p => p.id === integration.active.profileId)
   const latest = consoleHealth?.latest
   const failure = consoleHealth?.lastFailure
+  if (integration.id === 'abantether') return <article className="outbound-profile"><h3>{names.abantether}</h3>
+    <p>اتصال آبان‌تتر همیشه مستقیم است و از پراکسی عبور نمی‌کند. تنظیمات قدیمی پراکسی روی این سرویس اعمال نمی‌شوند.</p>
+    <Button variant="secondary" disabled={busy} onClick={test}>آزمون اتصال {names.abantether}</Button>
+    <TestResult result={integration.lastTest} revision={revision} />
+  </article>
   return <article className="outbound-profile"><h3>{names[integration.id]}</h3>
     <p>مسیر فعلی: {routeNames[integration.active.route]}{profile ? ` · ${profile.name}` : ''}</p>
     <form className="form-stack" onSubmit={e => { e.preventDefault(); save(route) }}>

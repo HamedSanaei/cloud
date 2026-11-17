@@ -12,6 +12,7 @@ export const JOB_NAMES = {
   SERVER_SYNC: 'server.sync',
   SERVER_ACTION: 'server.action',
   RENEWAL_SWEEP: 'renewal.sweep',
+  EUR_FX_REFRESH: 'pricing.eur-refresh',
 } as const
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES]
