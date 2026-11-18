@@ -55,6 +55,63 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
   const quoteFor = (userId: string) => createQuote(ctx.db, { userId, offerId: offer.id, locationCode: 'FRA-01', billingOption: { billingCycle: 'hourly' }, billingPeriod: 'hourly', operatingSystem: 'ubuntu-24.04' })
   const body = (walletId: string) => ({ name: 'checkout-server', walletId, offerId: offer.id, os: 'ubuntu-24.04', billingPeriod: 'hourly' })
 
+  it('limits Hetzner margin to the existing superadmin and persists a versioned change across retail periods', async () => {
+    const owner = await account(true), admin = await account(true), customer = await account()
+    const config = configuration.getConfig()
+    const previousAdmins = config.PRIMARY_IPV4_SUPER_ADMIN_IDS
+    config.PRIMARY_IPV4_SUPER_ADMIN_IDS = [owner.user.id]
+    const path = '/api/admin/settings/hetzner-margin'
+    const oldOptions = offer.billingOptions ?? []
+    const monthly = { billingCycle: 'monthly', contractTerm: 1, amountCents: 1000 }
+    try {
+      await ctx.db.update(providerProducts).set({ billingOptions: [...oldOptions as object[], monthly] }).where(eq(providerProducts.id, offer.id))
+      const current = await app.inject({ url: path, headers: owner.headers })
+      expect(current.statusCode, current.body).toBe(200)
+      const before = current.json().data
+      const input = { markupPercent: '20.1250', markupFixedRial: 123, version: before.version }
+      const send = (url: string, payload: object, headers = owner.headers) => app.inject({ method: 'POST', url, headers, payload })
+      const payload = { ...input, confirm: true }
+      const action = { action: 'pricing.hetzner_margin', payload }
+      for (const actor of [admin, customer]) {
+        expect((await app.inject({ url: path, headers: actor.headers })).statusCode).toBe(403)
+        expect((await send(path + '/preview', input, actor.headers)).statusCode).toBe(403)
+        expect((await send('/api/admin/settings/authorize', action, actor.headers)).statusCode).toBe(403)
+      }
+      const legacy = '/api/admin/pricing?provider=hetzner'
+      expect((await app.inject({ url: legacy, headers: admin.headers })).statusCode).toBe(403)
+      expect((await app.inject({ method: 'PUT', url: '/api/admin/pricing', headers: admin.headers, payload: { provider: 'hetzner', markupPercent: 0 } })).statusCode).toBe(403)
+      expect((await send(path + '/preview', { ...input, markupPercent: '1.12345' })).statusCode).toBe(422)
+      const oldQuote = await quoteFor(customer.user.id)
+      const preview = await send(path + '/preview', input)
+      expect(preview.statusCode, preview.body).toBe(200)
+      const grant = await send('/api/admin/settings/authorize', action)
+      expect(grant.statusCode, grant.body).toBe(200)
+      const save = await send(path, { ...payload, proof: grant.json().data.proof })
+      expect(save.statusCode, save.body).toBe(200)
+      expect((await send(path + '/preview', input)).statusCode).toBe(409)
+      const refreshed = (await app.inject({ url: path, headers: owner.headers })).json().data
+      expect(refreshed).toMatchObject({ markupPercent: '20.1250', markupFixedRial: 123, updatedBy: owner.user.id })
+      expect(refreshed.history[0]).toMatchObject({ actorId: owner.user.id,
+        before: { markupPercent: before.markupPercent }, after: { markupPercent: '20.1250', markupFixedRial: 123, updatedAt: refreshed.version } })
+      const hourlyQuote = await quoteFor(customer.user.id)
+      const monthlyQuote = await createQuote(ctx.db, { userId: customer.user.id, offerId: offer.id, locationCode: 'FRA-01',
+        billingOption: monthly, billingPeriod: 'monthly', operatingSystem: 'ubuntu-24.04' })
+      const publicOffer = (await app.inject('/api/public/home-prices')).json().data.hetzner.find((row: { id: string }) => row.id === offer.id)
+      expect(publicOffer).toMatchObject({ hourly: hourlyQuote.totalRial, monthly: monthlyQuote.totalRial })
+      expect(hourlyQuote.totalRial).not.toBe(oldQuote.totalRial)
+      const stored = (await app.inject({ url: '/api/quotes/' + oldQuote.id, headers: customer.headers })).json().data
+      expect(stored.totalRial).toBe(oldQuote.totalRial)
+      expect(stored).not.toHaveProperty('providerAmountCents')
+      const catalog = (await app.inject({ url: '/api/catalog/vps/' + offer.id, headers: admin.headers })).json().data
+      expect(catalog).not.toHaveProperty('billingOptions')
+      expect(catalog).not.toHaveProperty('providerPriceCents')
+    } finally {
+      config.PRIMARY_IPV4_SUPER_ADMIN_IDS = previousAdmins
+      await ctx.db.update(providerProducts).set({ billingOptions: oldOptions }).where(eq(providerProducts.id, offer.id))
+      await updatePricingRules(ctx.db, 'hetzner', { markupPercent: configuration.getConfig().STOREFRONT_PRICING.hetzner?.markupPercent ?? 25, markupFixedRial: 0 })
+    }
+  })
+
   it('publishes only current retail offers and approved independent Iran rates', async () => {
     const admin = await account(true), customer = await account()
     const read = async () => (await app.inject('/api/public/home-prices')).json().data

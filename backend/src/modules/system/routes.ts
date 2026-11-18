@@ -12,7 +12,8 @@ import { ForbiddenError, NotFoundError, UnauthorizedError } from '../../lib/erro
 import { iranTariffsKey, iranTariffSettings, iranTariffsSchema } from '../catalog/home-tariffs.js'
 import { isSiteAuthority } from '../integration/authority.js'
 import { writeAudit } from '../audit/service.js'
-import { issueAuthorization, consumeAuthorization, systemAdmin } from './security.js'
+import { issueAuthorization, consumeAuthorization, isPricingSuperAdmin, systemAdmin } from './security.js'
+import { confirmedMargin, getHetznerMargin, marginAction, marginInput, previewHetznerMargin, requireHetznerPricingAdmin, updateHetznerMargin } from '../pricing/hetzner-margin.js'
 import { authenticateToken } from '../auth/service.js'
 import { safeMetadata } from './events.js'
 import { diagnoseGateway, gatewayStatus, updateGateway } from './gateway.js'
@@ -22,13 +23,12 @@ import { maxPrimaryIpv4FeeRial, primaryIpv4Pricing, setPrimaryIpv4Fee } from '..
 import { confirmPrimaryIpv4Rollback } from '../servers/primary-ip-operation.js'
 import { requireOutboundAdmin, outboundStatus, profileInput, routeInput, deleteInput, testInput, saveProfile, saveRoute, deleteProfile, testConnection } from '../outbound/settings.js'
 
-const canManagePrimaryIpv4Pricing = (user: ReturnType<typeof requireAdmin>) =>
-  user.status === 'active' && getConfig().PRIMARY_IPV4_SUPER_ADMIN_IDS.includes(user.id)
+const canManagePrimaryIpv4Pricing = isPricingSuperAdmin
 
 const idParam = z.object({ id: z.string().uuid() })
 const proofSchema = z.string().uuid()
 const confirm = z.object({ confirm: z.literal(true), proof: proofSchema }).strict()
-const actions = z.enum(['gateway.update', 'gateway.diagnose', 'wallet.adjust', 'wallet.approve', 'logs.export', 'backup.backup', 'backup.rehearsal', 'backup.upload', 'backup.download', 'backup.delete', 'backup.restore', 'backup.approve', 'outbound.profile', 'outbound.route', 'outbound.delete', 'outbound.test'])
+const actions = z.enum(['gateway.update', 'gateway.diagnose', 'wallet.adjust', 'wallet.approve', 'logs.export', 'backup.backup', 'backup.rehearsal', 'backup.upload', 'backup.download', 'backup.delete', 'backup.restore', 'backup.approve', 'outbound.profile', 'outbound.route', 'outbound.delete', 'outbound.test', marginAction])
 const gatewaySchema = z.object({ enabled: z.boolean(), sandbox: z.boolean(), merchant: z.string().uuid().optional(), version: z.string().regex(/^[0-9a-f]{64}$/).optional(), confirm: z.literal(true) }).strict()
 const paging = z.object({ page: z.coerce.number().int().min(1).max(10000).default(1), limit: z.coerce.number().int().min(1).max(100).default(20) })
 const logsQuery = paging.extend({ level: z.enum(['', 'info', 'warn', 'error']).default(''), service: z.string().regex(/^[a-zA-Z0-9_-]{0,40}$/).default(''),
@@ -71,9 +71,24 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     const c = getConfig(), user = requireAdmin(request)
     let allowed = true
     try { systemAdmin(user) } catch { allowed = false }
-    return { data: { allowed, primaryIpv4Pricing: canManagePrimaryIpv4Pricing(user), encryptionReady: /^[a-f0-9]{64}$/i.test(c.STORE_SECRET_KEY), backupsEnabled: c.SYSTEM_BACKUP_ENABLED,
+    return { data: { allowed, primaryIpv4Pricing: canManagePrimaryIpv4Pricing(user), hetznerMargin: isPricingSuperAdmin(user), encryptionReady: /^[a-f0-9]{64}$/i.test(c.STORE_SECRET_KEY), backupsEnabled: c.SYSTEM_BACKUP_ENABLED,
       restoreEnabled: c.SYSTEM_RESTORE_ENABLED, maxUploadBytes: max, dualApprovalRial: c.SYSTEM_DUAL_APPROVAL_RIAL,
       requirements: ['STORE_SECRET_KEY', 'SYSTEM_BACKUP_KEY', 'SYSTEM_INSTANCE_ID', 'SYSTEM_BACKUP_ENABLED'] } }
+  })
+  app.get('/hetzner-margin', async request => {
+    requireHetznerPricingAdmin(requireAdmin(request))
+    return { data: await getHetznerMargin(db) }
+  })
+  app.post('/hetzner-margin/preview', async request => {
+    requireHetznerPricingAdmin(requireAdmin(request))
+    return { data: await previewHetznerMargin(db, parse(marginInput, request.body)) }
+  })
+  app.post('/hetzner-margin', async request => {
+    const admin = requireAdmin(request)
+    requireHetznerPricingAdmin(admin)
+    const { proof, ...input } = parse(confirmedMargin.extend({ proof: proofSchema }), request.body)
+    await updateHetznerMargin(db, admin, input, proof)
+    return { data: { saved: true } }
   })
   const pricingParams = z.object({ provider: z.literal('hetzner') })
   app.get('/primary-ipv4-pricing/:provider', async request => {
@@ -102,7 +117,9 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
   app.post('/authorize', { config: { rateLimit: { max: 5, timeWindow: '10 minutes' } } }, async request => {
     const input = parse(z.object({ action: actions, payload: z.unknown() }).strict(), request.body)
     if (input.action.startsWith('outbound.')) requireOutboundAdmin(requireAdmin(request))
-    const payload = input.action === 'outbound.profile' ? parse(profileInput, input.payload)
+    if (input.action === marginAction) requireHetznerPricingAdmin(requireAdmin(request))
+    const payload = input.action === marginAction ? parse(confirmedMargin, input.payload)
+      : input.action === 'outbound.profile' ? parse(profileInput, input.payload)
       : input.action === 'outbound.route' ? parse(routeInput, input.payload)
       : input.action === 'outbound.delete' ? parse(deleteInput, input.payload)
       : input.action === 'outbound.test' ? parse(testInput, input.payload) : input.payload

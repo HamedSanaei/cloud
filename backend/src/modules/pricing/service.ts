@@ -1,7 +1,7 @@
 import { and, eq, lte, sql } from 'drizzle-orm'
 import type { DbClient, DbOrTx } from '../../db/index.js'
 import { fxRates, pricingRules } from '../../db/schema.js'
-import { AppError, NotFoundError, ValidationError } from '../../lib/errors.js'
+import { AppError, ConflictError, NotFoundError, ValidationError } from '../../lib/errors.js'
 import { outboundFetch } from '../outbound/client.js'
 import { writeAudit } from '../audit/service.js'
 import type { ProviderBillingOption } from '../providers/provider.interface.js'
@@ -137,7 +137,7 @@ export function refreshEuroRate(db: DbClient): Promise<FxRate> {
 // ---------------------------------------------------------------------------
 // Pricing rules (per provider)
 // ---------------------------------------------------------------------------
-export async function getPricingRules(db: DbClient, provider = 'leaseweb') {
+export async function getPricingRules(db: DbOrTx, provider = 'leaseweb') {
   const existing = await db.query.pricingRules.findFirst({ where: (t) => eq(t.provider, provider) })
   if (existing) return existing
   const [created] = await db
@@ -151,30 +151,40 @@ export async function getPricingRules(db: DbClient, provider = 'leaseweb') {
   return concurrent
 }
 
+export type PricingRuleEdit = { markupPercent?: number | string; markupFixedRial?: number; taxPercent?: number; roundingToRial?: number; enabled?: boolean }
+
 export async function updatePricingRules(
   db: DbClient,
   provider: string,
-  input: { markupPercent?: number; markupFixedRial?: number; taxPercent?: number; roundingToRial?: number; enabled?: boolean },
+  input: PricingRuleEdit,
   actorId?: string,
 ) {
-  const rules = await getPricingRules(db, provider)
-  const next: Record<string, unknown> = {}
+  return db.transaction(tx => savePricingRules(tx, provider, input, actorId))
+}
+
+export async function savePricingRules(tx: DbOrTx, provider: string, input: PricingRuleEdit, actorId?: string, version?: string) {
+  const initial = await getPricingRules(tx, provider)
+  const [rules] = await tx.select().from(pricingRules).where(eq(pricingRules.id, initial.id)).for('update')
+  if (!rules) throw new NotFoundError('قاعدهٔ قیمت‌گذاری یافت نشد.')
+  if (version !== undefined && version !== rules.updatedAt.toISOString()) throw new ConflictError('تعرفه تغییر کرده است. تنظیمات را تازه کنید.')
+  const next: Partial<typeof pricingRules.$inferInsert> = {}
   if (input.markupPercent !== undefined) next.markupPercent = String(input.markupPercent)
   if (input.markupFixedRial !== undefined) next.markupFixedRial = input.markupFixedRial
   if (input.taxPercent !== undefined) next.taxPercent = String(input.taxPercent)
   if (input.roundingToRial !== undefined) next.roundingToRial = input.roundingToRial
   if (input.enabled !== undefined) next.enabled = input.enabled
   next.updatedBy = actorId ?? null
-  next.updatedAt = new Date()
-  await db.update(pricingRules).set(next).where(eq(pricingRules.id, rules.id))
-  await writeAudit(db, {
+  next.updatedAt = new Date(Math.max(Date.now(), rules.updatedAt.getTime() + 1))
+  const [saved] = await tx.update(pricingRules).set(next).where(eq(pricingRules.id, rules.id)).returning()
+  if (!saved) throw new NotFoundError('قاعدهٔ قیمت‌گذاری یافت نشد.')
+  await writeAudit(tx, {
     actorId: actorId ?? null,
     action: 'admin.price_rule.changed',
     targetType: 'pricing_rules',
     targetId: rules.id,
-    metadata: { provider, changes: input },
+    metadata: { provider, changes: input, before: rules, after: saved },
   })
-  return getPricingRules(db, provider)
+  return saved
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +203,7 @@ export interface PriceSnapshot {
   fxRateId?: number
   fxAt?: string
   fxSource?: string
+  ruleVersion?: string
 }
 
 export interface PricingRuleValues {
@@ -270,5 +281,5 @@ export async function computePriceSnapshot(
       roundingToRial: rules.roundingToRial,
       enabled: rules.enabled,
     },
-  }), fxAt: 'createdAt' in fx ? (fx.createdAt as Date).toISOString() : new Date().toISOString(), fxRateId: 'id' in fx ? fx.id : undefined, fxSource: 'source' in fx ? fx.source : 'explicit quote FX' }
+  }), ruleVersion: rules.updatedAt.toISOString(), fxAt: 'createdAt' in fx ? (fx.createdAt as Date).toISOString() : new Date().toISOString(), fxRateId: 'id' in fx ? fx.id : undefined, fxSource: 'source' in fx ? fx.source : 'explicit quote FX' }
 }

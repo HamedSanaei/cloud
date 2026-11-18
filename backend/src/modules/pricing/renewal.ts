@@ -1,7 +1,7 @@
-import { and, eq, lte, gte } from 'drizzle-orm'
+import { and, eq, lte, gte, sql } from 'drizzle-orm'
 import type { DbOrTx } from '../../db/index.js'
 import { AppError } from '../../lib/errors.js'
-import { computePriceFromRules, fxMaxAgeMs } from './service.js'
+import { computePriceFromRules, fxMaxAgeMs, type PricingRuleValues } from './service.js'
 
 /** Select historical approved FX, never today's rate for a missed historical hour. */
 export async function renewalPrice(db: DbOrTx, orderId: string, interval: string, periodStart: Date) {
@@ -18,13 +18,26 @@ export async function renewalPrice(db: DbOrTx, orderId: string, interval: string
   if (!order || !quote) throw new AppError(503, 'renewal_price_unavailable', 'مبنای معتبر قیمت تمدید در دسترس نیست')
   const product = quote.productId ? await db.query.providerProducts.findFirst({ where: t => eq(t.id, quote.productId!) }) : null
   const provider = order.provider === 'leaseweb' && (product?.category === 'cloud' || interval === 'HOURLY') ? 'leaseweb.hourly' : order.provider
-  const rules = await db.query.pricingRules.findFirst({ where: t => eq(t.provider, provider) })
+  let rules = await db.query.pricingRules.findFirst({ where: t => eq(t.provider, provider) })
   if (!rules) throw new AppError(503, 'renewal_price_unavailable', 'قواعد قیمت تمدید در دسترس نیست')
   const currency = quote.providerCurrency === 'USD' ? 'USDT' : quote.providerCurrency
   const now = new Date()
   const hourEnd = new Date(Math.floor(periodStart.getTime() / 3600000) * 3600000 + 3600000 - 1)
   const cutoff = interval === 'HOURLY' ? new Date(Math.min(now.getTime(), hourEnd.getTime())) : now
-  if (rules.updatedAt > cutoff) throw new AppError(503, 'renewal_rules_unavailable', 'قواعد قیمت تاریخی این ساعت در دسترس نیست؛ برداشت انجام نشد')
+  if (rules.updatedAt > cutoff) {
+    // Each atomic edit records the rule immediately preceding it. The first
+    // edit after this hour therefore identifies the rule in force at cutoff.
+    const edit = provider === 'hetzner' ? await db.query.auditLogs.findFirst({
+      where: t => and(eq(t.action, 'admin.price_rule.changed'), eq(t.targetId, rules!.id),
+        sql`${t.metadata}->'after'->>'updatedAt' > ${cutoff.toISOString()}`),
+      orderBy: t => [sql`${t.metadata}->'after'->>'updatedAt' asc`],
+    }) : undefined
+    const before = (edit?.metadata as { before?: PricingRuleValues & { updatedAt: string } } | undefined)?.before
+    if (!before || !Number.isFinite(Date.parse(before.updatedAt)) || Date.parse(before.updatedAt) > cutoff.getTime()) {
+      throw new AppError(503, 'renewal_rules_unavailable', 'قواعد قیمت تاریخی این ساعت در دسترس نیست؛ برداشت انجام نشد')
+    }
+    rules = { ...rules, ...before, updatedAt: new Date(before.updatedAt) }
+  }
   const oldest = new Date(cutoff.getTime() - fxMaxAgeMs(currency))
   const fx = currency === 'IRR' ? { id: null, rate: '1', createdAt: cutoff, note: 'IRR identity' } : await db.query.fxRates.findFirst({
     where: t => and(eq(t.fromCurrency, currency), eq(t.toCurrency, 'IRR'), lte(t.createdAt, cutoff), gte(t.createdAt, oldest)),
@@ -32,7 +45,7 @@ export async function renewalPrice(db: DbOrTx, orderId: string, interval: string
   })
   if (!fx) throw new AppError(503, 'renewal_fx_unavailable', 'نرخ معتبر ارز برای ساعت تمدید در دسترس نیست؛ برداشت انجام نشد')
   const price = computePriceFromRules({ providerCurrency: quote.providerCurrency, providerAmountCents: quote.providerAmountCents, fxRate: fx.rate, rules })
-  return { ...price, fxRateId: fx.id, fxAt: fx.createdAt.toISOString(), fxSource: fx.note, ruleId: rules.id, calculatedAt: now.toISOString(), ledgerPrecisionRial: 1 }
+  return { ...price, fxRateId: fx.id, fxAt: fx.createdAt.toISOString(), fxSource: fx.note, ruleId: rules.id, ruleVersion: rules.updatedAt.toISOString(), calculatedAt: now.toISOString(), ledgerPrecisionRial: 1 }
 }
 
 /** Estimates reuse an already-issued unpaid invoice before considering newer FX. */

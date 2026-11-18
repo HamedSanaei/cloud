@@ -9,7 +9,8 @@ import { buildApp } from '../../src/app.js'
 import { testLogger } from '../helpers.js'
 import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
 import { getProvider, registerProvider, registerConfiguredProviders } from '../../src/modules/providers/registry.js'
-import { setFxRate } from '../../src/modules/pricing/service.js'
+import { setFxRate, updatePricingRules } from '../../src/modules/pricing/service.js'
+import { renewalPrice } from '../../src/modules/pricing/renewal.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
 import { createOrderFromQuote } from '../../src/modules/orders/service.js'
 import { ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/service.js'
@@ -157,4 +158,19 @@ describe.skipIf(!dbAvailable)('hourly billing and grandfathered daily boundaries
     expect(await ctx.db.query.invoices.findMany({ where: t => eq(t.subscriptionId, purchase.subscription.id) })).toHaveLength(0)
   })
 
+  it('uses the margin in force for a missed hour and the newer margin for the next renewal', async () => {
+    const hour = Math.floor(Date.now() / 3_600_000) * 3_600_000 + 3_600_000
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(hour + 60_000)
+    await setFxRate(ctx.db, '620000')
+    const original = await updatePricingRules(ctx.db, 'hetzner', { markupPercent: 0, markupFixedRial: 0 })
+    const purchase = await buy('hourly', 'hourly-historical-margin@test.local')
+    vi.setSystemTime(hour + 3_600_000 + 60_000)
+    const changed = await updatePricingRules(ctx.db, 'hetzner', { markupPercent: 25, markupFixedRial: 0 })
+    const missed = await renewalPrice(ctx.db, purchase.order.id, 'HOURLY', new Date(hour + 120_000))
+    const next = await renewalPrice(ctx.db, purchase.order.id, 'HOURLY', new Date())
+    expect(missed).toMatchObject({ totalRial: purchase.quote.totalRial, ruleVersion: original.updatedAt.toISOString() })
+    expect(next.totalRial).toBeGreaterThan(missed.totalRial)
+    expect(next.ruleVersion).toBe(changed.updatedAt.toISOString())
+  })
 })

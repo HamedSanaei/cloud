@@ -52,7 +52,7 @@ try {
   assert.equal(redirect.status, 308); assert.equal(redirect.headers.get('location'), 'https://parserver.ir/hetzner?period=hourly&x=one%20two')
   const http = await fetch(origin + '/hetzner?x=one%20two', { headers: { 'x-forwarded-proto': 'http' }, redirect: 'manual' })
   assert.equal(http.status, 308); assert.equal(http.headers.get('location'), 'https://parserver.ir/hetzner?x=one%20two')
-  for (const uri of ['/dashboard', '/tickets', '/login', '/register', '/servers/create?offer=fixture-plan&period=hourly', '/servers/fixture-id', '/admin/settings/sms', '/auth/callback']) {
+  for (const uri of ['/dashboard', '/tickets', '/login', '/register', '/servers/create?offer=fixture-plan&period=hourly', '/servers/fixture-id', '/admin/settings/sms', '/admin/settings/hetzner-margin', '/auth/callback']) {
     const response = await fetch(origin + uri)
     assert.equal(response.status, 200, uri); assert.ok(response.headers.get('x-robots-tag')?.includes('noindex'), uri)
     assert.ok((await response.text()).includes('content="noindex,follow"'), uri)
