@@ -158,7 +158,7 @@ describe('customer server management UI', () => {
     expect(rebuild.getAttribute('aria-label')).toContain(formatFaDateTime(detail.operations[0].createdAt))
     expect(rescue.getAttribute('aria-label')).toContain(formatFaDateTime(detail.operations[1].createdAt))
     expect(requests.some(request => request.path.includes('/credentials/claim'))).toBe(false)
-    fireEvent.click(screen.getByRole('button', { name: 'کنسول و تنظیمات' }))
+    fireEvent.click(screen.getByRole('button', { name: 'کنسول' }))
     fireEvent.click(await screen.findByRole('button', { name: 'شبکه، حفاظت و Rescue' }))
     expect(await screen.findByRole('button', { name: /دریافت امن رمز Rescue.*rescue-83/ })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /دریافت امن رمز — نصب مجدد/ })).toBeNull()
@@ -272,7 +272,7 @@ describe('customer server management UI', () => {
   })
   it('requires the exact server name and explicit acknowledgment before a destructive request', async () => {
     const user = userEvent.setup(), success = vi.spyOn(toast, 'success')
-    open()
+    open('settings')
     await user.click(await screen.findByRole('button', { name: 'حذف دائمی سرور' }))
     const confirm = screen.getByRole('button', { name: 'تأیید حذف دائمی سرور' }) as HTMLButtonElement
     expect(confirm.disabled).toBe(true)
@@ -285,6 +285,19 @@ describe('customer server management UI', () => {
     await waitFor(() => expect(requests.filter(request => request.method === 'POST')).toHaveLength(1))
     expect(requests.find(request => request.method === 'POST')).toMatchObject({ body: { action: 'delete', hostname: detailServer.name, confirm: true }, key: expect.any(String) })
     expect(success).not.toHaveBeenCalled(); success.mockRestore()
+  })
+  it('offers deletion only in Settings when switching tabs', async () => {
+    open('settings')
+    const button = { name: 'حذف دائمی سرور', exact: true }
+    expect(await screen.findAllByRole('button', button)).toHaveLength(1)
+    const navigation = within(screen.getByRole('navigation', { name: 'مدیریت سرور' }))
+    for (const name of ['نمای کلی', 'مانیتورینگ', 'عملیات', 'تغییر پلن', 'سیستم‌عامل و دسترسی', 'کنسول']) {
+      fireEvent.click(navigation.getByRole('button', { name, exact: true }))
+      expect(screen.queryByRole('button', button)).toBeNull()
+    }
+    fireEvent.click(navigation.getByRole('button', { name: 'تنظیمات' }))
+    expect(screen.getAllByRole('button', button)).toHaveLength(1)
+    expect(requests.every(request => request.method === 'GET')).toBe(true)
   })
   it('renders separate soft and forced power actions and leaves existing password retrieval unavailable', async () => {
     open('operations')
@@ -393,7 +406,7 @@ describe('customer server management UI', () => {
   it('uses actual metric series and keeps unsupported shared-project mutations out of the UI', async () => {
     open('monitoring')
     expect(await screen.findByRole('img', { name: /نمودار CPU/ })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'کنسول و تنظیمات' }))
+    fireEvent.click(screen.getByRole('button', { name: 'کنسول' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Snapshot، Backup و Volume' }))
     expect(await screen.findByText(/ساخت و بازیابی Snapshot.*هنوز/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'ساخت اسنپ‌شات' })).toBeNull()

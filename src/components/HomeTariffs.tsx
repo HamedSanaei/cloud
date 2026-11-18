@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
-import { embeddedPrices, isPublicHomePrices, publicLocation, renderHomeTariffs, type PublicHomePrices, type TariffScope } from '../../backend/src/contracts/home-tariffs'
+import { useEffect, useId, useRef, useState } from 'react'
+import { embeddedPrices, hetznerTariffHeading, isPublicHomePrices, publicLocation, renderHomeTariffs, renderTariffSections, type PublicHomePrices, type TariffScope } from '../../backend/src/contracts/home-tariffs'
 
 export const fallbackTariffs = renderHomeTariffs(null, null)
 export function HomeTariffs({ initialHtml, scope = 'all' }: { initialHtml?: string; scope?: TariffScope }) {
+  const locationFilterId = useId(), sortFilterId = useId()
   const [data, setData] = useState<PublicHomePrices | null>(() => embeddedPrices(initialHtml ?? ''))
   const [loading, setLoading] = useState(!initialHtml)
   const [warning, setWarning] = useState('')
@@ -53,20 +54,41 @@ export function HomeTariffs({ initialHtml, scope = 'all' }: { initialHtml?: stri
   }, [initialHtml, retry])
   const offers = data?.hetzner?.filter(offer => !location || offer.location === location) ?? null
   const snapshotExpired = expired && (!!data?.hetzner?.length || (!data && !!initialHtml))
-  const html = snapshotExpired ? renderHomeTariffs(null, null, undefined, scope)
-    : data ? renderHomeTariffs(data.iran, offers, data.meta, scope, sort) : initialHtml ?? renderHomeTariffs(null, null, undefined, scope)
-  const locations = data?.hetzner ? [...new Map(data.hetzner.map(offer => [offer.location, publicLocation(offer)])).entries()] : []
+  const sections = data && !snapshotExpired ? renderTariffSections(data.iran, offers, data.meta, scope, sort) : null
+  const locations = data?.hetzner ? [...new Map(data.hetzner.map(offer => [offer.location, publicLocation(offer)]))] : []
   return <section id="tariffs" className="landing-section public-container landing-tariffs" aria-labelledby="tariffs-title">
     <h2 id="tariffs-title">{scope === 'hetzner' ? 'مقایسهٔ قیمت سرور هتزنر' : 'تعرفه‌ها'}</h2>
     <p>پرداخت ماهانه برای ماه پرداخت‌شده ثابت است؛ هزینهٔ هر ساعت بعدی با نرخ معتبر همان ساعت محاسبه می‌شود. گردکردن نمایشی مبنای برداشت نیست.</p>
     {loading && <p role="status">در حال دریافت تعرفه‌ها…</p>}
     {warning && <p role="status">{warning}</p>}
     {snapshotExpired && <p role="status">اعتبار این بررسی تمام شده است؛ برای جلوگیری از نمایش مبلغ قدیمی، قیمت‌ها تا بررسی دوباره پنهان‌اند.</p>}
-    {!!data?.hetzner?.length && !snapshotExpired && <div className="tariff-filters">
-      <label>موقعیت دیتاسنتر<select value={location} onChange={event => setLocation(event.target.value)}><option value="">همهٔ موقعیت‌ها</option>{locations.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></label>
-      <label>مقایسه از کم‌هزینه به بیشتر<select value={sort} onChange={event => setSort(event.target.value as 'hourly' | 'monthly')}><option value="hourly">قیمت هر ساعت</option><option value="monthly">قیمت هر ماه</option></select></label>
-    </div>}
-    <div id="home-tariff-content" dangerouslySetInnerHTML={{ __html: html }} />
+    {sections ? <div id="home-tariff-content">
+      {sections.iran && <div dangerouslySetInnerHTML={{ __html: sections.iran }} />}
+      <section id="hetzner-server" aria-labelledby="hetzner-tariff-heading">
+        <div className="tariff-header">
+          <h3 id="hetzner-tariff-heading">{hetznerTariffHeading}</h3>
+          {!!locations.length && <div className="tariff-filters">
+            <div className="tariff-filter">
+              <label htmlFor={locationFilterId}>موقعیت دیتاسنتر</label>
+              <select id={locationFilterId} value={location} onChange={event => setLocation(event.target.value)}>
+                <option value="">همهٔ موقعیت‌ها</option>
+                {locations.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+              </select>
+            </div>
+            <div className="tariff-filter">
+              <label htmlFor={sortFilterId}>مقایسه از کم‌هزینه به بیشتر</label>
+              <select id={sortFilterId} value={sort} onChange={event => setSort(event.target.value === 'monthly' ? 'monthly' : 'hourly')}>
+                <option value="hourly">قیمت هر ساعت</option>
+                <option value="monthly">قیمت هر ماه</option>
+              </select>
+            </div>
+          </div>}
+        </div>
+        <div className="tariff-body" dangerouslySetInnerHTML={{ __html: sections.hetzner }} />
+      </section>
+    </div> : <div id="home-tariff-content" dangerouslySetInnerHTML={{
+      __html: !snapshotExpired && initialHtml ? initialHtml : renderHomeTariffs(null, null, undefined, scope),
+    }} />}
     {(warning || snapshotExpired) && <button className="button primary" disabled={loading} onClick={() => setRetry(v => v + 1)}>بررسی دوبارهٔ قیمت‌ها</button>}
   </section>
 }

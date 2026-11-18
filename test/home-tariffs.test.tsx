@@ -25,11 +25,33 @@ it('renders trusted public prices, scopes table headers and links to the actual 
   expect(footerLink.getAttribute('rel')).toBe('sponsored')
   expect(within(footerNav).getByRole('link', { name: 'سرور هتزنر' }).getAttribute('href')).toBe('/hetzner')
   const hetzner = within(screen.getByRole('table', { name: 'پلن‌های قابل سفارش هتزنر' }))
-  expect(hetzner.getByRole('rowheader', { name: 'CX <test>' })).toBeTruthy()
+  expect(hetzner.getByRole('rowheader').textContent).toContain('CX <test>')
   expect(hetzner.getByText('۱۲٬۳۴۵ تومان')).toBeTruthy()
   expect(hetzner.getByRole('link', { name: /خرید CX/ }).getAttribute('href')).toBe('/servers/create?offer=fixture&period=hourly&location=hel1')
   expect(hetzner.getByText('قیمت ماهانهٔ معتبر در دسترس نیست')).toBeTruthy()
   expect(screen.getByText('۰ تومان')).toBeTruthy()
+})
+
+it.each(['all', 'hetzner'] as const)('shows the same rounded money and exact allowance in SSR and the %s browser table', scope => {
+  const current = snapshot([{ ...plan, hourly: 1_234_567, monthly: 50_000_004, includedTrafficBytes: 2 ** 39,
+    trafficOverage: { perTbRial: 3_334_555, includedBytes: 2 ** 39, source: 'hetzner-server-type-location',
+      observedAt: '2026-11-18T00:00:00Z', fxAt: '2026-11-18T00:00:00Z', ruleVersion: '2026-11-18T00:00:00Z' } }])
+  const iran = { rates: { outbound: 1234567, inbound: 0, cpu: null, ram: null }, trafficUnit: 'TB', tax: 'excluded' } as const
+  const initial = renderHomeTariffs(iran, current.hetzner, current.meta, scope)
+  const ssr = new DOMParser().parseFromString(initial, 'text/html')
+  render(<HomeTariffs initialHtml={initial} scope={scope} />)
+  const table = screen.getByRole('table', { name: 'پلن‌های قابل سفارش هتزنر' })
+  expect(table.outerHTML).toBe(ssr.querySelector('#hetzner-server table')?.outerHTML)
+  expect(within(table).getAllByRole('cell').map(cell => cell.textContent)).toEqual([
+    'hel1', '۲', '۴', '۴۰', '۰٫۵ TB', '۱۲۳٬۴۵۷ تومان', '۵٬۰۰۰٬۰۰۰ تومان', '۳۳۳٬۴۵۶ تومان',
+  ])
+  expect(within(table).getAllByRole('link')).toHaveLength(1)
+  expect(within(table).getByRole('columnheader', { name: 'RAM (گیگابایت)' })).toBeTruthy()
+  expect(within(table).getByRole('columnheader', { name: 'فضای دیسک (گیگابایت)' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'تعرفه سرور هتزنر', level: 3 })).toBeTruthy()
+  expect(screen.getByText(/هزینهٔ مازاد فعلاً به‌صورت خودکار/)).toBeTruthy()
+  expect(screen.getByText(/کم‌هزینه‌ترین گزینهٔ همین فهرست/).textContent).toContain('۱۲۳٬۴۵۷ تومان')
+  if (scope === 'all') expect(within(screen.getByRole('table', { name: 'نرخ واحد منابع سرور ایران' })).getByText('۱۲۳٬۴۵۷ تومان')).toBeTruthy()
 })
 
 it('retains a healthy snapshot on reconnect failure, but hides prices at their original expiry', async () => {
@@ -71,11 +93,17 @@ it('preserves a valid SSR snapshot on null/malformed responses and immediately r
 it('sorts by independent retail monthly prices and filters real catalog locations', async () => {
   const data = snapshot([{ ...plan, name: 'CX monthly', monthly: 900000 }, { ...plan, id: 'de', name: 'CX Germany', location: 'nbg1', country: 'DE', monthly: 800000, hourly: 200000 }])
   render(<HomeTariffs initialHtml={renderHomeTariffs(null, data.hetzner, data.meta)} scope="hetzner" />)
-  const firstPlan = () => screen.getAllByRole('rowheader')[0].textContent
-  expect(firstPlan()).toBe('CX monthly')
+  const firstRow = () => screen.getAllByRole('rowheader')[0]
+  const firstPlan = () => within(firstRow()).getByRole('link')
+  const bar = screen.getByRole('heading', { name: 'تعرفه سرور هتزنر' }).parentElement!
+  expect(within(bar).getAllByRole('combobox')).toHaveLength(2)
+  expect(firstPlan().textContent).toBe('CX monthly')
+  expect(firstPlan().getAttribute('href')).toContain('period=hourly')
   fireEvent.change(screen.getByLabelText('مقایسه از کم‌هزینه به بیشتر'), { target: { value: 'monthly' } })
-  expect(firstPlan()).toBe('CX Germany')
+  expect(firstPlan().textContent).toBe('CX Germany')
+  expect(firstPlan().getAttribute('href')).toBe('/servers/create?offer=de&period=monthly&location=nbg1')
   fireEvent.change(screen.getByLabelText('موقعیت دیتاسنتر'), { target: { value: 'hel1' } })
   expect(screen.getAllByRole('rowheader')).toHaveLength(1)
-  expect(firstPlan()).toBe('CX monthly')
+  expect(firstPlan().textContent).toBe('CX monthly')
+  expect(firstPlan().getAttribute('href')).toBe('/servers/create?offer=fixture&period=monthly&location=hel1')
 })

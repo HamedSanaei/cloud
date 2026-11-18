@@ -27,7 +27,7 @@ const missing = 'در دسترس نیست'
 const byteValue = (value: number | null | undefined) => value === null || value === undefined ? missing : `${new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 2 }).format(value / 1e9)} GB`
 const amount = (value: number | null) => value === null ? missing : formatToman(value / 10)
 const periodLabels: Record<string, string> = { HOURLY: 'ساعتی', DAILY: 'روزانه', MONTHLY: 'ماهانه' }
-const tabs = [['overview', 'نمای کلی'], ['monitoring', 'مانیتورینگ'], ['operations', 'عملیات'], ['resize', 'تغییر پلن'], ['access', 'سیستم‌عامل و دسترسی'], ['console', 'کنسول و تنظیمات']] as const
+const tabs = [['overview', 'نمای کلی'], ['monitoring', 'مانیتورینگ'], ['operations', 'عملیات'], ['resize', 'تغییر پلن'], ['access', 'سیستم‌عامل و دسترسی'], ['console', 'کنسول'], ['settings', 'تنظیمات']] as const
 type ActionRequest = { action: ManagementAction; input: Record<string, unknown>; resizePreview?: ResizePreview; protectionChange?: ProtectionChange } | { action: 'replace_primary_ipv4'; quote: PrimaryIpv4Quote }
 export function ServerDetailsPage() {
   const { id = '' } = useParams(), [search, setSearch] = useSearchParams(), tab = search.get('tab') || 'overview'
@@ -48,6 +48,9 @@ export function ServerDetailsPage() {
   const pending = !!blockingOperation
   const latestIpChange = server?.operations.find(op => op.action === 'replace_primary_ipv4')
   const lastIpCompletion = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    setRequest(current => current?.action === 'delete' ? null : current)
+  }, [id, tab])
   useEffect(() => {
     if (latestIpChange?.status !== 'confirmed' || latestIpChange.id === lastIpCompletion.current) return
     lastIpCompletion.current = latestIpChange.id
@@ -171,24 +174,24 @@ export function ServerDetailsPage() {
       </> : <p>تعویض IPv4 اصلی برای این سرور در دسترس نیست.</p>}
       {latestIpChange && <ServerOperationStatus operation={latestIpChange} />}
       {blockingOperation?.action === 'replace_primary_ipv4' && operationRecovery}</Card></>}
-    {!['overview', 'monitoring', 'operations', 'resize', 'access', 'console', 'storage', 'network'].includes(tab) && <Card><p>این بخش یافت نشد.</p><Button onClick={() => setSearch({ tab: 'overview' })}>نمای کلی</Button></Card>}
+    {!tabs.some(([value]) => value === tab) && !['storage', 'network'].includes(tab) && <Card><p>این بخش یافت نشد.</p><Button onClick={() => setSearch({ tab: 'overview' })}>نمای کلی</Button></Card>}
     <ServerBillingTerminationState server={server} />
-    <Card className="server-danger-zone">
-      <div><h3>حذف دائمی سرور</h3><p>داده‌ها از بین می‌روند. حذف باید در ارائه‌دهنده تأیید شود.</p></div>
+    {tab === 'settings' && <Card className="server-danger-zone">
+      <div><h2>ناحیهٔ خطر</h2><p>داده‌ها از بین می‌روند. حذف باید در ارائه‌دهنده تأیید شود.</p></div>
       <Button variant="danger" disabled={disabled} aria-describedby={blockingOperation ? deleteBlockId : undefined} onClick={() => ask('delete')}>حذف دائمی سرور</Button>
       {blockingOperation && <div className="server-notice server-operation-recovery server-delete-block" id={deleteBlockId}>
         <p>حذف تا مشخص‌شدن نتیجهٔ «{actionLabels[blockingOperation.action] ?? 'عملیات سرور'}» در دسترس نیست.</p>
         <p>زمان درخواست <time dateTime={blockingOperation.createdAt}>{formatFaDateTime(blockingOperation.createdAt)}</time> · وضعیت برق {server.providerState === 'active' ? 'روشن' : server.providerState === 'suspended' ? 'خاموش' : 'نامشخص'}</p>
         <p>شناسهٔ عملیات <bdi>{blockingOperation.id}</bdi></p>
         {blockingOperation.needsOperator && <p>رسید این درخواست ثبت نشده است. برای بررسی سابقهٔ ارائه‌دهنده، شناسهٔ عملیات را در تیکت پشتیبانی وارد کنید.</p>}
-        {feedback && tab !== 'operations' && tab !== 'resize' && <p role="status">{feedback}</p>}
+        {feedback && <p role="status">{feedback}</p>}
         <div className="server-inline-actions">
           <Button variant="secondary" size="sm" disabled={checkingState} onClick={() => void checkOperation(blockingOperation)}>بررسی دوبارهٔ عملیات</Button>
           <LinkButton variant="secondary" size="sm" to="/tickets">تماس با پشتیبانی</LinkButton>
         </div>
       </div>}
-    </Card>
-    {request && <DestructiveConfirmation key={key.current} server={server} action={request.action} protectionChange={request.action === 'change_protection' ? request.protectionChange : undefined} busy={busy} error={error} onClose={() => setRequest(null)} onConfirm={() => { void confirm() }}>
+    </Card>}
+    {request && (request.action !== 'delete' || tab === 'settings') && <DestructiveConfirmation key={key.current} server={server} action={request.action} protectionChange={request.action === 'change_protection' ? request.protectionChange : undefined} busy={busy} error={error} onClose={() => setRequest(null)} onConfirm={() => { void confirm() }}>
       {request.action === 'replace_primary_ipv4' && <><PrimaryIpv4Summary quote={request.quote} unavailableReason={addressUnavailable} /><PrimaryIpv4Warning /></>}
       {request.action === 'resize' && request.resizePreview && <ResizeEffects preview={request.resizePreview} />}
     </DestructiveConfirmation>}

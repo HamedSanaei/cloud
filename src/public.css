@@ -122,7 +122,9 @@
 .landing-tariffs { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; }
 #home-tariff-content { min-width: 0; }
 .landing-tariffs section { min-width: 0; margin-block-start: 20px; scroll-margin-top: 20px; }
-.landing-tariffs section > p { margin-block: 8px 14px; color: #475569; line-height: 1.8; }
+.landing-tariffs section > p, .tariff-body > p { margin-block: 8px 14px; color: #475569; line-height: 1.8; }
+.tariff-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; }
+.tariff-header h3 { margin: 0; }
 .tariff-scroll { max-width: 100%; overflow-x: auto; border: 1px solid #d4dfeb; border-radius: 12px; background: #fff; }
 .tariff-scroll:focus-visible { outline: 2px solid #2869e8; outline-offset: 3px; }
 .tariff-scroll table { width: 100%; border-collapse: collapse; font-size: 14px; color: #172842; }
@@ -131,6 +133,7 @@
 .tariff-scroll th { background: #f5f8fc; }
 .tariff-scroll td { font-variant-numeric: tabular-nums; }
 .tariff-scroll a { color: #1751a0; text-decoration: underline; white-space: nowrap; }
+.tariff-disk-type { display: block; color: #475569; font-weight: 400; }
 #hetzner-server table { min-width: 960px; }
 .tariff-scroll-hint { display: none; }
 @media (max-width: 1020px) { .tariff-scroll-hint { display: block; } }
@@ -138,9 +141,17 @@
 
 /* Public comparison remains readable without JavaScript or accordion expansion. */
 .tariff-filters,.hetzner-nav{display:flex;flex-wrap:wrap;gap:1rem;align-items:center}
-.tariff-filters{margin:1rem 0}.tariff-filters label{display:grid;gap:.5rem;font-size:1rem}
+.tariff-filters{max-width:100%}.tariff-filter{display:grid;min-width:0;gap:.5rem;font-size:1rem}
 .tariff-filters select{font:inherit;padding:.65rem;border:1px solid var(--border-strong);border-radius:.5rem;background:#fff;color:#111827;max-width:100%}
 .tariff-freshness{font-size:.95rem}.public-breadcrumb{padding-top:1.5rem}.hetzner-intro h1{font-size:clamp(1.7rem,4vw,2.7rem);line-height:1.65}
 .hetzner-page p{font-size:1.05rem;line-height:2}.hetzner-page article{padding:1.2rem;border:1px solid #d4dfeb;border-radius:1rem;background:#fff;color:#111827}
 .hetzner-page h2{margin-block:1.5rem}.hetzner-faq{display:grid;gap:1rem}.landing-tariffs th,.landing-tariffs td{font-size:.95rem}
-@media(max-width:600px){.hetzner-page .landing-nav{flex-wrap:wrap}.hetzner-nav{order:3;width:100%;font-size:.95rem}.tariff-filters{align-items:stretch}.tariff-filters label{width:100%}}
+@media (max-width: 720px) {
+  .hetzner-page .landing-header { height: auto; }
+  .hetzner-page .landing-nav { grid-template-columns: minmax(0, 1fr) auto; height: auto; min-height: 64px; gap: 8px 12px; padding-block: 8px; }
+  .hetzner-nav { grid-column: 1 / -1; grid-row: 2; gap: 6px 12px; font-size: .95rem; }
+}
+@media (max-width: 600px) {
+  .tariff-filters { width: 100%; align-items: stretch; }
+  .tariff-filter { width: 100%; }
+}
