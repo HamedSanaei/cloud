@@ -82,7 +82,11 @@ export function createWorkers(opts: { db: DbClient; queues: CloudQueues; logger:
   makeWorker(JOB_NAMES.SERVER_ACTION, (data, finalAttempt) =>
     handleServerAction(ctx, data as Parameters<typeof handleServerAction>[1], finalAttempt),
   )
-  makeWorker(JOB_NAMES.RENEWAL_SWEEP, () => handleRenewalSweep(ctx))
+  makeWorker(JOB_NAMES.RENEWAL_SWEEP, async () => {
+    const result = await handleRenewalSweep(ctx)
+    if (result.pricingBlocked) opts.logger.warn({ queue: JOB_NAMES.RENEWAL_SWEEP, ...result }, 'renewals blocked on pricing evidence')
+    return result
+  })
   makeWorker(JOB_NAMES.EUR_FX_REFRESH, () => refreshEuroRate(opts.db))
   // Initial failures reject readiness instead of reconnecting forever. Runtime
   // reconnects remain enabled once all worker connections are established.
