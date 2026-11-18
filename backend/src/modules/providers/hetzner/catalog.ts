@@ -1,6 +1,7 @@
 import type { ProviderBillingOption, ProviderOffer } from '../provider.interface.js'
 import { ProviderRetryableError } from '../../../lib/errors.js'
 import { HetznerClient, object } from './client.js'
+import { hetznerPrepaidMonth } from '../../pricing/periods.js'
 
 /** Decimal strings stay decimal until an exactly representable cents projection. */
 export function decimal(value: unknown): string | undefined {
@@ -16,10 +17,24 @@ export function addDecimals(left: string, right: string): string {
   const total = (BigInt(a + af.padEnd(digits, '0')) + BigInt(b + bf.padEnd(digits, '0'))).toString().padStart(digits + 1, '0')
   return decimal(digits ? `${total.slice(0, -digits)}.${total.slice(-digits)}` : total)!
 }
-function billing(amount: string): ProviderBillingOption {
+function billing(amount: string, cycle: 'hourly' | typeof hetznerPrepaidMonth): ProviderBillingOption {
   const [whole = '0', fraction = ''] = amount.split('.')
   const cents = fraction.length <= 2 ? Number(BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'))) : undefined
-  return { billingCycle: 'hourly', label: 'Hourly (monthly cap)', amount, ...(cents !== undefined && Number.isSafeInteger(cents) ? { amountCents: cents } : {}) }
+  return { billingCycle: cycle, label: cycle === 'hourly' ? 'Hourly (monthly cap)' : 'Prepaid retail month', amount,
+    ...(cents !== undefined && Number.isSafeInteger(cents) ? { amountCents: cents } : {}) }
+}
+
+function gross(value: unknown): string | undefined {
+  const amount = decimal(object(value).gross)
+  // Match the provider-amount precision and safe scaling of the retail engine.
+  return amount && /^\d{1,7}(?:\.\d{1,8})?$/.test(amount) ? amount : undefined
+}
+
+function regionalTraffic(price: Record<string, unknown> | undefined) {
+  const included = price?.included_traffic
+  const rate = gross(price?.price_per_tb_traffic)
+  return rate && rate !== '0' && typeof included === 'number' && Number.isSafeInteger(included) && included >= 0
+    ? { grossPerTb: rate, includedTrafficBytes: included } : undefined
 }
 
 export interface HetznerCatalog {
@@ -40,15 +55,18 @@ export async function readCatalog(client: HetznerClient, clean: (value: string) 
   const ipTypes = Array.isArray(pricing.primary_ips) ? pricing.primary_ips.map(object) : []
   const ipv4 = ipTypes.find((row) => row.type === 'ipv4')
   const ipPrices = Array.isArray(ipv4?.prices) ? ipv4.prices.map(object) : []
+  const pricedTypes = Array.isArray(pricing.server_types) ? pricing.server_types.map(object) : []
+  const atLocation = (row: Record<string, unknown>, code: string) =>
+    (row.currency === undefined || row.currency === currency) && (row.location === code || object(row.location).name === code)
   const offers: ProviderOffer[] = []
   const mappedLocations: HetznerCatalog['locations'] = []
   for (const location of locations) {
     if (typeof location.name !== 'string' || !/^[a-z0-9-]+$/.test(location.name)) continue
     const code = location.name
     mappedLocations.push({ code, ...(typeof location.country === 'string' ? { country: clean(location.country) } : {}), ...(typeof location.city === 'string' ? { city: clean(location.city) } : {}) })
-    const ipv4Price = ipPrices.find((row) => row.location === code || object(row.location).name === code)
-    const ipHourly = decimal(object(ipv4Price?.price_hourly).gross)
-    const ipMonthly = decimal(object(ipv4Price?.price_monthly).gross)
+    const ipv4Price = ipPrices.find(row => atLocation(row, code))
+    const ipHourly = gross(ipv4Price?.price_hourly)
+    const ipMonthly = gross(ipv4Price?.price_monthly)
     // Missing separately billed IPv4 evidence must never produce an underpriced offer.
     if (ipHourly === undefined) continue
     for (const type of types) {
@@ -61,29 +79,40 @@ export async function readCatalog(client: HetznerClient, clean: (value: string) 
       // /datacenters was retired and must not be used as availability evidence.
       if (declared?.available !== true) continue
       const typePrices = Array.isArray(type.prices) ? type.prices.map(object) : []
-      const price = typePrices.find((row) => row.location === code || object(row.location).name === code)
-      const hourly = decimal(object(price?.price_hourly).gross)
-      const monthly = decimal(object(price?.price_monthly).gross)
+      const price = typePrices.find(row => atLocation(row, code))
+      const hourly = gross(price?.price_hourly)
+      const monthly = gross(price?.price_monthly)
       if (hourly === undefined || hourly === '0') continue
       const operatingSystems = images.filter((image) => image.type === 'system' && image.status === 'available' && !image.deprecated && !image.deprecation && image.architecture === type.architecture && typeof image.id === 'number' && Number.isSafeInteger(image.id))
         .map((image) => ({ id: String(image.id), label: clean(typeof image.description === 'string' ? image.description : String(image.name ?? image.id)), ...(typeof image.os_flavor === 'string' ? { family: clean(image.os_flavor) } : {}) }))
       if (!operatingSystems.length) continue
       if (typeof type.cores !== 'number' || !Number.isSafeInteger(type.cores) || type.cores <= 0 || typeof type.memory !== 'number' || !Number.isFinite(type.memory) || type.memory <= 0 || typeof type.disk !== 'number' || !Number.isSafeInteger(type.disk) || type.disk <= 0) continue
-      const native = billing(addDecimals(hourly, ipHourly))
-      const traffic = price?.included_traffic ?? type.included_traffic
+      const native = billing(addDecimals(hourly, ipHourly), 'hourly')
+      const monthlyCap = monthly && monthly !== '0' && ipMonthly !== undefined ? addDecimals(monthly, ipMonthly) : undefined
+      // Use complete paired allowance/rate evidence from the exact type and
+      // location. Never carry a root-server or another region's rate across.
+      const pricedType = pricedTypes.find(row => row.id === type.id && row.name === type.name)
+      const regionalPrice = Array.isArray(pricedType?.prices) ? pricedType.prices.map(object)
+        .find(row => atLocation(row, code)) : undefined
+      const trafficTariff = regionalTraffic(price) ?? regionalTraffic(regionalPrice)
+      const traffic = trafficTariff?.includedTrafficBytes ?? price?.included_traffic ?? regionalPrice?.included_traffic
+      const includedTrafficBytes = typeof traffic === 'number' && Number.isSafeInteger(traffic) && traffic >= 0 ? traffic : null
       offers.push({
         provider: 'hetzner', providerProductId: `${type.name}:${currency}`, location: code, name: clean(type.name), category: 'cloud',
         vcpu: type.cores, memoryMb: Math.round(type.memory * 1024), diskGb: type.disk,
-        trafficGb: typeof traffic === 'number' && Number.isFinite(traffic) && traffic >= 0 ? Math.floor(traffic / 1_000_000_000) : null,
+        trafficGb: includedTrafficBytes === null ? null : Math.floor(includedTrafficBytes / 1_000_000_000),
         ipv4Count: 1, ipv6Available: true, providerCurrency: currency,
-        providerPriceCents: native.amountCents ?? null, billingOptions: [native], operatingSystems, serviceLevels: [],
+        providerPriceCents: native.amountCents ?? null, billingOptions: monthlyCap ? [native, billing(monthlyCap, hetznerPrepaidMonth)] : [native], operatingSystems, serviceLevels: [],
         raw: {
           storageType: type.storage_type,
           architecture: type.architecture, ipv4Included: true,
           serverHourlyGross: hourly, ipv4HourlyGross: ipHourly,
           ...(monthly !== undefined ? { serverMonthlyCapGross: monthly } : {}),
           ...(ipMonthly !== undefined ? { ipv4MonthlyCapGross: ipMonthly } : {}),
-          ...(monthly !== undefined && ipMonthly !== undefined ? { monthlyCapGross: addDecimals(monthly, ipMonthly) } : {}),
+          ...(monthlyCap ? { monthlyCapGross: monthlyCap } : {}),
+          ...(trafficTariff ? {
+            trafficTariff: { source: 'hetzner-server-type-location', location: code, currency, ...trafficTariff },
+          } : {}),
         },
       })
     }

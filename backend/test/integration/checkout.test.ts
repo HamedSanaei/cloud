@@ -12,6 +12,7 @@ import { handleProvision } from '../../src/modules/provisioning/handlers.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
 import { getProvider, registerProvider, registerConfiguredProviders } from '../../src/modules/providers/registry.js'
 import { setFxRate, updatePricingRules } from '../../src/modules/pricing/service.js'
+import { hetznerPrepaidMonth } from '../../src/modules/pricing/periods.js'
 import { creditWallet, ensureDefaultWallet } from '../../src/modules/wallets/service.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 
@@ -62,7 +63,7 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
     config.PRIMARY_IPV4_SUPER_ADMIN_IDS = [owner.user.id]
     const path = '/api/admin/settings/hetzner-margin'
     const oldOptions = offer.billingOptions ?? []
-    const monthly = { billingCycle: 'monthly', contractTerm: 1, amountCents: 1000 }
+    const monthly = { billingCycle: hetznerPrepaidMonth, amount: '10', amountCents: 1000 }
     try {
       await ctx.db.update(providerProducts).set({ billingOptions: [...oldOptions as object[], monthly] }).where(eq(providerProducts.id, offer.id))
       const current = await app.inject({ url: path, headers: owner.headers })
@@ -98,6 +99,12 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
         billingOption: monthly, billingPeriod: 'monthly', operatingSystem: 'ubuntu-24.04' })
       const publicOffer = (await app.inject('/api/public/home-prices')).json().data.hetzner.find((row: { id: string }) => row.id === offer.id)
       expect(publicOffer).toMatchObject({ hourly: hourlyQuote.totalRial, monthly: monthlyQuote.totalRial })
+      const orderInput = { userId: customer.user.id, quoteId: monthlyQuote.id, hostname: 'prepaid-month', idempotencyKey: 'prepaid-month-review' }
+      await expect(createOrderFromQuote(ctx.db, { ...orderInput, expectedTotalRial: monthlyQuote.totalRial - 1 })).rejects.toMatchObject({ code: 'server_price_changed' })
+      const accepted = await createOrderFromQuote(ctx.db, { ...orderInput, expectedTotalRial: monthlyQuote.totalRial })
+      expect(accepted.order).toMatchObject({ billingInterval: 'MONTHLY', totalRial: publicOffer.monthly, status: 'awaiting_payment' })
+      const replay = await createOrderFromQuote(ctx.db, { ...orderInput, expectedTotalRial: monthlyQuote.totalRial + 1 })
+      expect(replay.order.id).toBe(accepted.order.id)
       expect(hourlyQuote.totalRial).not.toBe(oldQuote.totalRial)
       const stored = (await app.inject({ url: '/api/quotes/' + oldQuote.id, headers: customer.headers })).json().data
       expect(stored.totalRial).toBe(oldQuote.totalRial)

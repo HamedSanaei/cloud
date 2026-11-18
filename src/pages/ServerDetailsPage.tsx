@@ -18,6 +18,7 @@ import { MetricChart } from '../components/servers/MetricChart'
 import { useAuth } from '../auth/AuthContext'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { formatFaDateTime, formatFaNumber, formatToman } from '../lib/format'
+import { indicativeOverageNotice } from '../../backend/src/contracts/home-tariffs'
 import { actionLabels, getResizeOptions, getServerDetail, getServerMetrics, previewResize, recheckServerOperation, submitPrimaryIpv4, submitServerAction,
   type ManagementAction, type PrimaryIpv4Quote, type ResizePreview, type ServerDetail, type ServerOperation } from '../lib/serverManagement'
 
@@ -215,6 +216,7 @@ function ServerOverview({ server }: { server: ServerDetail }) {
     <div className="server-detail-columns"><Card><h2>اطلاعات فنی</h2><dl className="server-facts">{entries.map(([label, value]) => <div key={label}><dt>{label}</dt><dd><bdi>{value || missing}</bdi></dd></div>)}</dl></Card>
       <Card><h2>صورت‌حساب و کیف پول</h2><div className="storefront-dual-prices">{['hourly', 'monthly'].map(period => <p key={period}>قیمت {period === 'hourly' ? 'ساعتی' : 'ماهانه'} فعلی (مقایسه): {amount(b.comparisonPrices?.find(p => p.period === period)?.totalRial ?? null)} / {period === 'hourly' ? 'ساعت' : 'ماه'}</p>)}</div><p>قیمت دورهٔ پرداخت‌شده تا پایان همان دوره ثابت است؛ تعرفهٔ مقایسه مبلغ برداشت قبلی را تغییر نمی‌دهد.</p><dl className="server-facts"><div><dt>قیمت مشتری</dt><dd>{amount(b.customerPriceRial)} / {periodLabels[b.period ?? ''] ?? missing}</dd></div><div><dt>اشتراک</dt><dd>{b.state === 'active' ? 'فعال' : b.state === 'suspended' ? 'تعلیق' : b.state === 'cancelled' || b.state === 'expired' ? 'پایان‌یافته' : missing}</dd></div><div><dt>تمدید بعدی</dt><dd>{renewalEnded ? 'تمدید نمی‌شود' : b.nextInvoiceAt ? formatFaDateTime(b.nextInvoiceAt) : missing}</dd></div></dl>
         {b.providerQuotedRate && <p className="server-muted">نرخ خرید ثبت‌شدهٔ ارائه‌دهنده، جدا از قیمت مشتری: {new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 8 }).format(b.providerQuotedRate.amountCents / 100)} {b.providerQuotedRate.currency} / {periodLabels[b.providerQuotedRate.period] ?? b.providerQuotedRate.period}</p>}
+        {b.trafficOverage !== undefined && <p className="server-muted">نرخ استعلامی ترافیک مازاد برای هر TB: {b.trafficOverage ? amount(b.trafficOverage.perTbRial) : 'در دسترس نیست'}. {indicativeOverageNotice}</p>}
         <p className="server-notice">خاموش‌کردن VM هزینهٔ Hetzner را متوقف نمی‌کند؛ حذف کامل و تأیید آن لازم است.</p></Card></div></>
 }
 function ServerMonitoring({ server }: { server: ServerDetail }) {

@@ -131,7 +131,9 @@
 .tariff-scroll th { background: #f5f8fc; }
 .tariff-scroll td { font-variant-numeric: tabular-nums; }
 .tariff-scroll a { color: #1751a0; text-decoration: underline; white-space: nowrap; }
-#hetzner-server table { min-width: 790px; }
+#hetzner-server table { min-width: 960px; }
+.tariff-scroll-hint { display: none; }
+@media (max-width: 1020px) { .tariff-scroll-hint { display: block; } }
 .landing-account-link { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-block: 20px; }
 
 /* Public comparison remains readable without JavaScript or accordion expansion. */

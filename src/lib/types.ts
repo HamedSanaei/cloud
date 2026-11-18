@@ -45,6 +45,7 @@ export interface Server {
 }
 
 export interface CreateServerPayload {
+  expectedTotalRial?: number
   name: string
   offerId: string
   os: string
@@ -74,6 +75,7 @@ export interface StorefrontOffer {
   memoryMb: number
   diskGb: number
   trafficGb: number | null
+  trafficOverage?: import('../../backend/src/contracts/home-tariffs').IndicativeTrafficTariff | null
   operatingSystems: Array<{ id: string; label?: string; family?: string }>
   prices: Array<{ period: BillingPeriod; totalRial: number; billingCycle: string; contractTerm?: string | number }>
   canonicalPricing?: { expectedMinor: number; expectedCurrency: string }

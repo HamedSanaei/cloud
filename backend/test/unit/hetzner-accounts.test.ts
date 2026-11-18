@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { hetznerPrepaidMonth, offeredPeriods, retailBilling } from '../../src/modules/pricing/periods.js'
 import type { HetznerConfig } from '../../src/config.js'
 import type { ProviderOrderRequest } from '../../src/modules/providers/provider.interface.js'
 import { ProviderPermanentError, ProviderUnknownError } from '../../src/lib/errors.js'
@@ -34,7 +35,8 @@ function mockApi(handler?: (call: Call) => Response | Json | Promise<Response | 
       payload = { server_types: [{
         id: 1, name: 'cx-test', architecture: 'x86', cores: 2, memory: 4, disk: 40,
         locations: [{ name: 'fsn1', available: true }],
-        prices: [{ location: 'fsn1', price_hourly: { gross: '0.0044000000' }, price_monthly: { gross: '3.790000' }, included_traffic: 20_000_000_000_000 }],
+        prices: [{ location: 'fsn1', price_hourly: { gross: '0.0044000000' }, price_monthly: { gross: '3.790000' }, included_traffic: 20_000_000_000_000,
+          price_per_tb_traffic: { gross: '1.125' } }],
         credential_echo: 'fake-hetzner-first-token',
       }] }
     } else if (call.method === 'GET' && call.path === '/locations') payload = { locations: [{ name: 'fsn1', country: 'DE', city: 'Falkenstein' }] }
@@ -79,11 +81,48 @@ describe('Hetzner account routing and live catalog', () => {
     const result = await provider.syncCatalog()
     expect(result.offers).toHaveLength(1)
     expect(result.offers[0]).toMatchObject({ category: 'cloud', providerProductId: 'cx-test:EUR', ipv4Count: 1, providerCurrency: 'EUR', providerPriceCents: null })
-    expect(result.offers[0]?.billingOptions).toEqual([{ billingCycle: 'hourly', label: 'Hourly (monthly cap)', amount: '0.0052' }])
+    expect(result.offers[0]?.billingOptions).toEqual([
+      { billingCycle: 'hourly', label: 'Hourly (monthly cap)', amount: '0.0052' },
+      { billingCycle: hetznerPrepaidMonth, label: 'Prepaid retail month', amount: '4.39', amountCents: 439 },
+    ])
     expect(result.offers[0]?.operatingSystems.map((image) => image.id)).toEqual(['11'])
     expect(result.offers[0]?.raw).toMatchObject({ monthlyCapGross: '4.39', ipv4Included: true })
     expect(JSON.stringify(result)).not.toContain('fake-hetzner-first-token')
     expect(api.calls.some((call) => call.account === 'old')).toBe(false)
+  })
+
+  it('uses location-specific traffic and requires both caps for a prepaid month', async () => {
+    const prices = [
+      { location: 'fsn1', price_hourly: { gross: '0.0044' }, price_monthly: { gross: '3.79' }, included_traffic: 20e12, price_per_tb_traffic: { gross: '1.125' } },
+      { location: 'ash', price_hourly: { gross: '0.0054' }, price_monthly: { gross: '4.79' }, included_traffic: 1e12, price_per_tb_traffic: { gross: '2.125' } },
+      { location: 'sin', price_hourly: { gross: '0.0074' }, price_monthly: { gross: '6.79' }, included_traffic: 0.5e12 },
+    ]
+    const locations = prices.map(({ location: name }) => ({ name, available: true }))
+    const api = mockApi(undefined, {
+      '/locations': { locations },
+      '/server_types': { server_types: [{ id: 1, name: 'cx-test', architecture: 'x86', cores: 2, memory: 4, disk: 40, locations, prices }] },
+      '/pricing': { pricing: { currency: 'EUR', primary_ips: [{ type: 'ipv4', prices: prices.map(({ location }) => ({
+        location, price_hourly: { gross: '0.0008' }, ...(location !== 'sin' && { price_monthly: { gross: '0.6' } }),
+      })) }] } },
+    })
+    const { offers } = await createHetznerProvider(config, { fetch: api.fetcher }).syncCatalog()
+    const [eu, us, asia] = offers
+    expect(eu!.raw).toMatchObject({ trafficTariff: { location: 'fsn1', grossPerTb: '1.125', includedTrafficBytes: 20e12 } })
+    expect(us!.raw).toMatchObject({ trafficTariff: { location: 'ash', grossPerTb: '2.125', includedTrafficBytes: 1e12 } })
+    expect(retailBilling(us!.billingOptions, 'monthly').pricing.amountCents).toBe(539)
+    expect(asia!.trafficGb).toBe(500)
+    expect(asia!.raw).not.toHaveProperty('trafficTariff')
+    expect(offeredPeriods(asia!.billingOptions)).toEqual(['hourly'])
+  })
+
+  it('provisions a prepaid month using its exact cap and rejects a mismatched quote without dispatch', async () => {
+    const api = mockApi()
+    const provider = createHetznerProvider(config, { fetch: api.fetcher })
+    const billingOption = { billingCycle: hetznerPrepaidMonth, amount: '4.39' }
+    await expect(provider.createServer({ ...order, billingOption: { ...billingOption, amount: '4.38' } })).rejects.toThrow(/exact price/)
+    expect(api.calls.filter(call => call.method === 'POST')).toHaveLength(0)
+    await expect(provider.createServer({ ...order, billingOption })).resolves.toMatchObject({ state: 'active' })
+    expect(api.calls.filter(call => call.method === 'POST')).toHaveLength(1)
   })
 
   it('fails closed for unavailable locations, missing IPv4 pricing and empty compatible images', async () => {

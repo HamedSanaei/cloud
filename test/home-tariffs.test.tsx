@@ -25,7 +25,7 @@ it('renders trusted public prices, scopes table headers and links to the actual 
   expect(hetzner.getByRole('rowheader', { name: 'CX <test>' })).toBeTruthy()
   expect(hetzner.getByText('۱۲٬۳۴۵ تومان')).toBeTruthy()
   expect(hetzner.getByRole('link', { name: /خرید CX/ }).getAttribute('href')).toBe('/servers/create?offer=fixture&period=hourly&location=hel1')
-  expect(hetzner.getByText('عرضه نمی‌شود')).toBeTruthy()
+  expect(hetzner.getByText('قیمت ماهانهٔ معتبر در دسترس نیست')).toBeTruthy()
   expect(screen.getByText('۰ تومان')).toBeTruthy()
 })
 

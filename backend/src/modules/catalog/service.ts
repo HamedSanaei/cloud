@@ -7,6 +7,7 @@ import { getConfig } from '../../config.js'
 import { writeAudit } from '../audit/service.js'
 import type { CloudProvider, ProviderBillingOption } from '../providers/provider.interface.js'
 import { classifyBillingOptions, isMonthlyInvoicing } from '../providers/billing.js'
+import { offeredPeriods } from '../pricing/periods.js'
 
 /**
  * Sync a provider's catalog into the normalized tables.
@@ -86,7 +87,8 @@ export async function syncProviderCatalog(
         // mock-only `monthly` flag).
         const source = mode === 'live' ? `${provider.id}-api` : 'mock-fixture'
         const billingOptions = classifyBillingOptions(source, (offer.billingOptions ?? []) as ProviderBillingOption[])
-        const monthly = billingOptions.some((b) => isMonthlyInvoicing(b.classification))
+        const monthly = provider.id === 'hetzner' ? offeredPeriods(billingOptions).includes('monthly') :
+          billingOptions.some((b) => isMonthlyInvoicing(b.classification))
         const hasPrice = offer.providerPriceCents !== null && offer.providerPriceCents !== undefined
         const hasBilling = billingOptions.length > 0
         if (monthly) monthlyEligibleCount.value++
@@ -215,7 +217,7 @@ export async function listOffers(
   if (opts.monthlyOnly) {
     out = rows.filter((r) => {
       const opts2 = r.billingOptions as Array<{ classification?: CommercialType }> | null
-      return Array.isArray(opts2) && opts2.some((b) => isMonthlyInvoicing(b.classification))
+      return r.provider === 'hetzner' ? r.monthlyEligible : Array.isArray(opts2) && opts2.some((b) => isMonthlyInvoicing(b.classification))
     })
   }
   return out

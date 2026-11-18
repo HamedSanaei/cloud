@@ -25,7 +25,7 @@ export function publicHetznerOffers(catalog: Awaited<ReturnType<typeof getStoref
     const monthly = offer.prices.find(price => price.period === 'monthly')?.totalRial ?? null
     if (hourly === null && monthly === null) return []
     return [{ id: offer.id, name: offer.name, location: offer.location, country: offer.country, city: offer.city, vcpu: offer.vcpu, memoryMb: offer.memoryMb,
-      diskGb: offer.diskGb, diskType: offer.diskType, trafficGb: offer.trafficGb, hourly, monthly }]
+      diskGb: offer.diskGb, diskType: offer.diskType, trafficGb: offer.trafficGb, trafficOverage: offer.trafficOverage ?? null, hourly, monthly }]
   })
 }
 

@@ -74,8 +74,8 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
     ])
     const resizeQuoteId = (history.find(op => op.action === 'resize' && op.status === 'succeeded')?.requestMetadata as { input?: { quoteId?: string } } | undefined)?.input?.quoteId
     const currentQuote = resizeQuoteId ? await db.query.quotes.findFirst({ where: t => and(eq(t.id, resizeQuoteId), eq(t.userId, user.id)) }) : quote
-    let comparisonPrices: Array<{ period: string; totalRial: number }> = []
-    try { comparisonPrices = (await getStorefront(db, false, server.provider)).offers.find(offer => offer.id === currentQuote?.productId)?.prices ?? [] } catch { /* No fabricated price if a current quote is unavailable. */ }
+    let retailOffer: Awaited<ReturnType<typeof getStorefront>>['offers'][number] | undefined
+    try { retailOffer = (await getStorefront(db, false, server.provider)).offers.find(offer => offer.id === currentQuote?.productId) } catch { /* Current pricing is optional for existing servers. */ }
     const operations = blockingOperation && !history.some(op => op.id === blockingOperation.id) ? [...history, blockingOperation] : history
     const commonBlock = managementBlock(server, !!blockingOperation) ?? providerBlock
     const protection = meta.protection as { rebuild?: boolean } | undefined
@@ -93,7 +93,8 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
         trafficPeriod: null, protection: meta.protection ?? null, rescueEnabled: meta.rescueEnabled ?? null, isoId: meta.isoId ?? null,
         backupWindow: meta.backupWindow ?? null, volumes: meta.volumes ?? [], privateNetworks: meta.privateNetworks ?? [], firewalls: meta.firewalls ?? [], floatingIps: meta.floatingIps ?? [] } : null,
       billing: { subscriptionId: subscription?.id ?? null, state: subscription?.status ?? null, period: subscription?.billingInterval ?? order?.billingInterval ?? null,
-        comparisonPrices, customerPriceRial: subscription?.priceRial ?? order?.totalRial ?? null, nextInvoiceAt: subscription?.nextInvoiceAt.toISOString() ?? null,
+        comparisonPrices: retailOffer?.prices ?? [], ...(server.provider === 'hetzner' ? { trafficOverage: retailOffer?.trafficOverage ?? null } : {}),
+        customerPriceRial: subscription?.priceRial ?? order?.totalRial ?? null, nextInvoiceAt: subscription?.nextInvoiceAt.toISOString() ?? null,
         currentPeriodEnd: subscription?.currentPeriodEnd.toISOString() ?? null, autoRenew: subscription?.autoRenew ?? false,
         futureDebits: server.terminatedAt ? 'stopped' : server.terminationState && server.terminationState !== 'delete_failed' ? 'held_pending_confirmation' : 'normal',
         refundPolicy: 'no_automatic_proration', providerQuotedRate: quote && server.provider !== 'hetzner' ? { currency: quote.providerCurrency, amountCents: quote.providerAmountCents, period: quote.billingInterval, observedAt: quote.createdAt.toISOString() } : null },

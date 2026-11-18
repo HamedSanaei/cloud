@@ -4,8 +4,11 @@ import { classifyBillingOption } from '../providers/billing.js'
 
 export type RetailPeriod = 'hourly' | 'daily' | 'monthly'
 export type RetailInterval = 'HOURLY' | 'DAILY' | 'MONTHLY'
+// Retail identifier. Hetzner provisions its ordinary capped-hourly resource.
+export const hetznerPrepaidMonth = 'hetzner-prepaid-month'
 
 export function nativePeriod(option: ProviderBillingOption): RetailPeriod | null {
+  if (option.billingCycle === hetznerPrepaidMonth) return 'monthly'
   const cycle = option.billingCycle.trim().toLowerCase()
   if (['hourly', 'hour', '1h', '1_hour'].includes(cycle)) return 'hourly'
   if (['daily', 'day', '1d', '1_day'].includes(cycle)) return 'daily'

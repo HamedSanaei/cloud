@@ -32,6 +32,7 @@ export function minimumCreationBalance(totalRial: number, period: BillingPeriod)
 export interface FundingShortfall { balanceRial: number; requiredBalanceRial: number; shortfallRial: number; orderTotalRial: number }
 export function checkoutFailure(error: unknown): { message: string; funding?: FundingShortfall } {
   const body = error instanceof ApiError ? error.body as { error?: string; details?: FundingShortfall } | null : null
+  if (body?.error === 'server_price_changed') return { message: 'قیمت سرور تغییر کرد. مبلغ به‌روز را بررسی و دوباره تأیید کنید.' }
   if (body?.error === 'insufficient_funds') {
     const funding = body.details
     const valid = funding && [funding.balanceRial, funding.requiredBalanceRial, funding.shortfallRial, funding.orderTotalRial].every(n => Number.isSafeInteger(n) && n >= 0)

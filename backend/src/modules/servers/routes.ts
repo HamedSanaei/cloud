@@ -23,6 +23,7 @@ const wizardSchema = z.object({
   os: z.string().min(1),
   walletId: z.string().uuid().optional(),
   billingPeriod: z.enum(['hourly', 'monthly']),
+  expectedTotalRial: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
 }).strict()
 
 export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
@@ -86,6 +87,7 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
       payFromWallet: true,
       hostname: input.name ?? '',
       idempotencyKey,
+      expectedTotalRial: input.expectedTotalRial,
     })
 
     if (result.order.status === 'paid') {

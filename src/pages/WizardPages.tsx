@@ -17,7 +17,8 @@ import { Input, Select } from '../components/ui/FormControls'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Stepper } from '../components/ui/Stepper'
 import { useToast } from '../components/ui/Toast'
-import { isApiConfigured } from '../lib/apiClient'
+import { ApiError, isApiConfigured } from '../lib/apiClient'
+import { indicativeOverageNotice } from '../../backend/src/contracts/home-tariffs'
 import { checkDomainAvailability, createServer, getOfferImages, getStorefrontCatalog, listWallets, registerDomain } from '../lib/endpoints'
 import { claimLifecycleNotice, rememberAcceptedServer } from '../lib/serverLifecycle'
 import { formatFaNumber } from '../lib/format'
@@ -115,12 +116,13 @@ export function CreateServerPage() {
   const next = async () => {
     if (submitLock.current || submitting || !canContinue) return
     if (step < serverSteps.length - 1) { setStep((value) => value + 1); return }
-    if (!allValid || !billingPeriod || !offer || !selectedOs || !wallet) return
+    if (!allValid || !billingPeriod || !offer || !selectedOs || !wallet || !price) return
     setSubmitting(true)
     submitLock.current = true
     setSubmitError(null)
     try {
-      const result = await createServer({ name: name.trim(), offerId: offer.id, os: selectedOs.id, billingPeriod, pricing: offer.canonicalPricing, idempotencyKey: purchaseKey.current })
+      const result = await createServer({ name: name.trim(), offerId: offer.id, os: selectedOs.id, billingPeriod, pricing: offer.canonicalPricing,
+        ...(!shared && offer.provider === 'hetzner' ? { expectedTotalRial: price.totalRial } : {}), idempotencyKey: purchaseKey.current })
       const accepted = { ...result, name: result.name || name.trim(), datacenter: result.datacenter || location, os: result.os || selectedOs.label || selectedOs.id, serverType: result.serverType || offer.name }
       rememberAcceptedServer(user?.id ?? '', accepted)
       if (accepted.tracking?.source === 'platform') {
@@ -131,6 +133,7 @@ export function CreateServerPage() {
       navigate('/servers')
     } catch (error) {
       setSubmitError(checkoutFailure(error))
+      if (error instanceof ApiError && (error.body as { error?: string } | null)?.error === 'server_price_changed') catalog.refetch()
     } finally {
       setSubmitting(false)
       submitLock.current = false
@@ -213,6 +216,7 @@ export function CreateServerPage() {
             {step === 5 ? <div className="review-grid">
               {billingPeriod && <p className="info-box billing-period-explanation">{periodExplanation[billingPeriod]}</p>}
               {offer && <DualPrices prices={offer.prices} selected={billingPeriod} />}
+              {!shared && offer?.provider === 'hetzner' && <p className="info-box">نرخ استعلامی ترافیک مازاد برای هر TB: {offer.trafficOverage ? priceLabel(offer.trafficOverage.perTbRial) : 'در دسترس نیست'}. {indicativeOverageNotice}</p>}
               {shared ? <p className="info-box">نام اولیه سرور توسط سرویس مرجع تعیین می‌شود. مبلغ تومانی برآورد نرخ جاری است؛ تسویه با تعرفه و نرخ معتبر هنگام ثبت سفارش انجام می‌شود.</p> : <Input label="نام سرور" value={name} disabled={submitting} maxLength={63} dir="ltr" placeholder="my-server" onChange={(event) => { setName(event.target.value); setSubmitError(null) }}
                 hint="۳ تا ۶۳ نویسه انگلیسی، عدد یا خط تیره؛ ابتدا و انتها حرف یا عدد باشد." error={name && !nameValid ? 'نام سرور معتبر نیست.' : undefined} />
               }
