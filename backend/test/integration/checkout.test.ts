@@ -11,6 +11,7 @@ import { createOrderFromQuote, payOrder } from '../../src/modules/orders/service
 import { handleProvision } from '../../src/modules/provisioning/handlers.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
 import { getProvider, registerProvider, registerConfiguredProviders } from '../../src/modules/providers/registry.js'
+import { createHetznerProvider } from '../../src/modules/providers/hetzner/live.js'
 import { setFxRate, updatePricingRules } from '../../src/modules/pricing/service.js'
 import { hetznerPrepaidMonth } from '../../src/modules/pricing/periods.js'
 import { creditWallet, ensureDefaultWallet } from '../../src/modules/wallets/service.js'
@@ -55,6 +56,53 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
   }
   const quoteFor = (userId: string) => createQuote(ctx.db, { userId, offerId: offer.id, locationCode: 'FRA-01', billingOption: { billingCycle: 'hourly' }, billingPeriod: 'hourly', operatingSystem: 'ubuntu-24.04' })
   const body = (walletId: string) => ({ name: 'checkout-server', walletId, offerId: offer.id, os: 'ubuntu-24.04', billingPeriod: 'hourly' })
+
+  it('syncs real-shaped fallback evidence through storage, public HTML and monthly quotes', async () => {
+    const included = 2 ** 39
+    const location = { name: 'sin', available: true }
+    const responses: Record<string, unknown> = {
+      server_types: { server_types: [{ id: 2, name: 'cpx02', architecture: 'x86', cores: 2, memory: 4, disk: 40, locations: [location],
+        prices: [{ location: 'sin', price_hourly: { gross: '0.008000' }, included_traffic: included }] }] },
+      locations: { locations: [location] },
+      images: { images: [{ id: 11, name: 'ubuntu-24.04', type: 'system', status: 'available', architecture: 'x86' }] },
+      pricing: { pricing: { currency: 'EUR', server_types: [{ id: 2, name: 'cpx02', prices: [{ location: 'sin',
+        price_monthly: { gross: '4.99000000' }, price_per_tb_traffic: { gross: '7.4000000000000000' } }] }],
+        primary_ips: [{ type: 'ipv4', prices: [{ location: 'sin', price_hourly: { gross: '0.0008' }, price_monthly: { gross: '0.60' } }] }] } },
+    }
+    const fetcher: typeof fetch = async (url, init) => {
+      expect(init?.method).toBe('GET')
+      const path = new URL(String(url)).pathname.split('/').at(-1)!
+      expect(responses[path]).toBeDefined()
+      return Response.json(responses[path])
+    }
+    const live = createHetznerProvider({ enabled: true, orderingEnabled: true, displayName: 'Hetzner', baseUrl: 'https://fixture.test/v1',
+      accounts: [{ id: 'test', label: 'Fixture', priority: 1, enabled: true, state: 'active', apiToken: 'fixture' }] }, { fetch: fetcher })
+    try {
+      await syncProviderCatalog(ctx.db, live)
+      const stored = (await findOfferByProductAndLocation(ctx.db, 'hetzner', 'cpx02:EUR', 'sin'))!
+      expect(stored.monthlyEligible).toBe(true)
+      expect(stored.billingOptions).toEqual(expect.arrayContaining([expect.objectContaining({ billingCycle: hetznerPrepaidMonth, amount: '5.59' })]))
+      await enableAllOffersForSale(ctx.db, 'hetzner')
+      const customer = await account()
+      const publicOffer = (await app.inject('/api/public/home-prices')).json().data.hetzner.find((row: { id: string }) => row.id === stored.id)
+      expect(publicOffer).toMatchObject({ hourly: expect.any(Number), monthly: expect.any(Number), includedTrafficBytes: included,
+        trafficOverage: { perTbRial: expect.any(Number), includedBytes: included } })
+      expect(JSON.stringify(publicOffer)).not.toMatch(/grossPerTb|monthlyCapGross|fixture/)
+      const storefront = (await app.inject('/api/catalog/storefront')).json().data.offers.find((row: { id: string }) => row.id === stored.id)
+      expect(storefront.prices).toEqual(expect.arrayContaining([expect.objectContaining({ period: 'monthly', totalRial: publicOffer.monthly })]))
+      const quote = await createQuote(ctx.db, { userId: customer.user.id, offerId: stored.id, locationCode: 'sin',
+        billingOption: { billingCycle: hetznerPrepaidMonth }, billingPeriod: 'monthly', operatingSystem: '11' })
+      expect(quote.totalRial).toBe(publicOffer.monthly)
+      for (const scope of ['all', 'hetzner']) {
+        const response = await app.inject('/api/public/home-tariffs?scope=' + scope)
+        expect(response.body).toContain(`offer=${stored.id}&amp;period=monthly&amp;location=sin`)
+        expect(response.body).toContain('۰٫۵ TB')
+        expect(response.body).not.toContain('قیمت ماهانهٔ معتبر در دسترس نیست')
+      }
+      expect(await ctx.db.query.invoices.findMany({ where: t => eq(t.userId, customer.user.id) })).toEqual([])
+      expect(await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.walletId, customer.wallet.id) })).toEqual([])
+    } finally { await syncProviderCatalog(ctx.db, getProvider('hetzner'), { mode: 'live' }) }
+  })
 
   it('limits Hetzner margin to the existing superadmin and persists a versioned change across retail periods', async () => {
     const owner = await account(true), admin = await account(true), customer = await account()

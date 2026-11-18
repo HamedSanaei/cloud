@@ -5,7 +5,7 @@ import { safeReturnPath } from '../../src/contracts/return-path.js'
 const plan = { id: 'fixture', name: '</script><img src=x onerror=alert(1)>', location: 'hel1', country: 'FI', city: 'Helsinki', vcpu: 2, memoryMb: 4096, diskGb: 40, diskType: 'Local', trafficGb: null, hourly: 123450, monthly: null }
 const meta = { checkedAt: '2026-11-17T10:00:00Z', validUntil: '2026-11-17T10:01:00Z', catalogUpdatedAt: null, fxUpdatedAt: null, status: 'available' as const }
 it('includes all prices in SSR and keeps the extra TB rate indicative', () => {
-  const priced = { ...plan, monthly: 6789000, trafficOverage: { perTbRial: 333450, includedBytes: 500_000_000_000,
+  const priced = { ...plan, monthly: 6789000, trafficOverage: { perTbRial: 333450, includedBytes: 2 ** 39,
     source: 'hetzner-server-type-location' as const, observedAt: meta.checkedAt, fxAt: meta.checkedAt, ruleVersion: meta.checkedAt } }
   const html = renderHomeTariffs(null, [priced], meta, 'hetzner', 'monthly')
   expect(html).toContain('۱۲٬۳۴۵ تومان')
@@ -13,9 +13,17 @@ it('includes all prices in SSR and keeps the extra TB rate indicative', () => {
   expect(html).toContain('۳۳٬۳۴۵ تومان')
   expect(html).toContain('۰٫۵ TB')
   expect(html).toContain('period=monthly&amp;location=hel1')
-  expect(html).toContain('نرخ مازاد استعلامی است')
+  expect(html).toContain('نرخ استعلامی ترافیک مازاد')
   expect(embeddedPrices(html)?.hetzner).toEqual([priced])
   expect(isPublicHomePrices({ iran: null, hetzner: [{ ...priced, trafficOverage: { ...priced.trafficOverage, perTbRial: 0 } }], meta })).toBe(false)
+})
+it('shows a verified 20 TB quota independently of a missing overage price', () => {
+  const offer = { ...plan, trafficGb: 21_990, includedTrafficBytes: 20 * 2 ** 40, trafficOverage: null }
+  const html = renderHomeTariffs(null, [offer], meta)
+  expect(html).toContain('۲۰ TB')
+  expect(html).not.toContain('۲۱٬۹۹۰')
+  expect(html).toContain('نرخ معتبر در دسترس نیست')
+  expect(embeddedPrices(html)?.hetzner).toEqual([offer])
 })
 it('escapes provider text and safely roundtrips the SSR snapshot without executing markup', () => {
   const html = renderHomeTariffs(null, [plan], meta, 'hetzner')
