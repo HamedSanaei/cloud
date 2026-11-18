@@ -1,7 +1,13 @@
 import { and, eq, lte, gte, sql } from 'drizzle-orm'
 import type { DbOrTx } from '../../db/index.js'
-import { AppError } from '../../lib/errors.js'
+import { AppError, ValidationError } from '../../lib/errors.js'
 import { computePriceFromRules, fxMaxAgeMs, type PricingRuleValues } from './service.js'
+
+const renewalPriceBlockCodes = new Set(['renewal_price_unavailable', 'renewal_rules_unavailable', 'renewal_fx_unavailable'])
+
+export function isRenewalPriceBlocked(error: unknown): error is AppError {
+  return error instanceof AppError && renewalPriceBlockCodes.has(error.code)
+}
 
 /** Select historical approved FX, never today's rate for a missed historical hour. */
 export async function renewalPrice(db: DbOrTx, orderId: string, interval: string, periodStart: Date) {
@@ -44,7 +50,13 @@ export async function renewalPrice(db: DbOrTx, orderId: string, interval: string
     orderBy: (t, { desc }) => [desc(t.createdAt), desc(t.id)],
   })
   if (!fx) throw new AppError(503, 'renewal_fx_unavailable', 'نرخ معتبر ارز برای ساعت تمدید در دسترس نیست؛ برداشت انجام نشد')
-  const price = computePriceFromRules({ providerCurrency: quote.providerCurrency, providerAmountCents: quote.providerAmountCents, fxRate: fx.rate, rules })
+  let price: ReturnType<typeof computePriceFromRules>
+  try {
+    price = computePriceFromRules({ providerCurrency: quote.providerCurrency, providerAmountCents: quote.providerAmountCents, fxRate: fx.rate, rules })
+  } catch (error) {
+    if (!(error instanceof ValidationError)) throw error
+    throw new AppError(503, 'renewal_price_unavailable', 'مبلغ معتبر تمدید قابل محاسبه نیست؛ برداشت انجام نشد')
+  }
   return { ...price, fxRateId: fx.id, fxAt: fx.createdAt.toISOString(), fxSource: fx.note, ruleId: rules.id, ruleVersion: rules.updatedAt.toISOString(), calculatedAt: now.toISOString(), ledgerPrecisionRial: 1 }
 }
 

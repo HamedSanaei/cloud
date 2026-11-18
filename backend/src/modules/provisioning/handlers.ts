@@ -1,6 +1,6 @@
 import { enqueueSms, dispatchSms } from '../notifications/sms.js'
 import { sweepSmsEvents, smsToman, smsDate } from '../notifications/sms-events.js'
-import { renewalPrice } from '../pricing/renewal.js'
+import { isRenewalPriceBlocked, renewalPrice } from '../pricing/renewal.js'
 import { getActiveFxRate } from '../pricing/service.js'
 /**
  * Job handlers. These are plain functions (no BullMQ dependency) so they can
@@ -687,15 +687,21 @@ async function syncLegacyPowerState(db: DbClient, server: typeof servers.$inferS
 // ---------------------------------------------------------------------------
 // Billing: renew only at the purchased hourly/daily/monthly boundary.
 // ---------------------------------------------------------------------------
-export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed: number; failed: number; suspended: number; shutdownRequested: number }> {
+export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed: number; failed: number; pricingBlocked: number; suspended: number; shutdownRequested: number }> {
   const { db, queues } = ctx
   // Refresh before transactions; historical invoice creation still selects only FX valid in its hour.
   const needsUsdt = await db.query.quotes.findFirst({ where: t => inArray(t.providerCurrency, ['USD', 'USDT']), columns: { id: true } })
-  if (needsUsdt) await getActiveFxRate(db, 'USDT')
+  if (needsUsdt) {
+    try { await getActiveFxRate(db, 'USDT') } catch (error) {
+      if (!(error instanceof AppError) || error.code !== 'usdt_rate_unavailable') throw error
+      recordEvent('billing.fx_refresh_failed', 'warn', 'billing', { code: error.code })
+    }
+  }
   const shutdowns = await protectHourlyServers(ctx)
   const subs = await findSubscriptionsDueForRenewal(db, 0)
   let renewed = 0
   let failed = 0
+  let pricingBlocked = 0
 
   for (const sub of subs) {
     const outcome = await db.transaction(async (tx) => {
@@ -718,9 +724,25 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
         orderBy: (t, { asc }) => [asc(t.createdAt)],
       })
       if (!invoice) {
-        const pricingSnapshot = current.billingInterval === 'HOURLY' || current.billingInterval === 'MONTHLY'
-          ? await renewalPrice(tx, current.orderId!, current.billingInterval, current.currentPeriodEnd)
-          : { totalRial: current.priceRial, grandfathered: true }
+        let pricingSnapshot: Awaited<ReturnType<typeof renewalPrice>> | { totalRial: number; grandfathered: true }
+        try {
+          pricingSnapshot = current.billingInterval === 'HOURLY' || current.billingInterval === 'MONTHLY'
+            ? await renewalPrice(tx, current.orderId!, current.billingInterval, current.currentPeriodEnd)
+            : { totalRial: current.priceRial, grandfathered: true }
+        } catch (error) {
+          if (!isRenewalPriceBlocked(error)) throw error
+          // Keep this period at its original boundary for reconciliation. The
+          // subscription lock deduplicates the audit across retries/workers.
+          const dueAt = current.currentPeriodEnd.toISOString()
+          const existing = await tx.query.auditLogs.findFirst({
+            where: t => and(eq(t.action, 'subscription.renewal_blocked'), eq(t.targetId, current.id),
+              sql`${t.metadata}->>'dueAt' = ${dueAt}`, sql`${t.metadata}->>'code' = ${error.code}`),
+            columns: { id: true },
+          })
+          if (!existing) await writeAudit(tx, { action: 'subscription.renewal_blocked', targetType: 'subscription', targetId: current.id,
+            metadata: { subscriptionId: current.id, dueAt, code: error.code } })
+          return 'pricing_blocked'
+        }
         const renewalAmount = pricingSnapshot.totalRial
         const invoiceNumber = await generateNumber(tx, 'INV', invoices, invoices.invoiceNumber)
         const [created] = await tx.insert(invoices).values({
@@ -804,6 +826,7 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
     })
     if (outcome === 'renewed') renewed++
     if (outcome === 'failed') failed++
+    if (outcome === 'pricing_blocked') pricingBlocked++
   }
   for (const id of await protectHourlyServers(ctx)) shutdowns.add(id)
 
@@ -826,7 +849,7 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
     suspended++
   }
 
-  return { renewed, failed, suspended, shutdownRequested: shutdowns.size }
+  return { renewed, failed, pricingBlocked, suspended, shutdownRequested: shutdowns.size }
 }
 
 /** Lock order: user -> wallets -> server. Provider calls and queue writes stay outside transactions. */
@@ -875,6 +898,11 @@ async function protectHourlyServers(ctx: HandlerContext): Promise<Set<string>> {
       }
       await warnLowBalance(tx, owner.userId, fleet, now)
       return pending
+    }).catch(error => {
+      if (!isRenewalPriceBlocked(error)) throw error
+      // A partial wallet forecast cannot safely drive shutdown decisions.
+      recordEvent('billing.funding_check_blocked', 'warn', 'billing', { userId: owner.userId, code: error.code })
+      return []
     })
     for (const request of requests) {
       await queues.addServerAction(request)

@@ -146,18 +146,6 @@ describe.skipIf(!dbAvailable)('hourly billing and grandfathered daily boundaries
     expect(next.status).toBe('paid')
     expect((await ctx.db.query.invoices.findFirst({ where: t => eq(t.id, original!.id) }))!.snapshot).toEqual(original!.snapshot)
   })
-  it('refuses an hour with unavailable FX without creating an invoice or changing the wallet', async () => {
-    await setFxRate(ctx.db, '620000')
-    const purchase = await buy('hourly', 'missing-hour-fx@test.local')
-    const before = (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, purchase.wallet.id) }))!.balanceRial
-    const due = new Date(Date.now() - 1000)
-    await ctx.db.update(subscriptions).set({ currentPeriodEnd: due, nextInvoiceAt: due, nextDueAt: due }).where(eq(subscriptions.id, purchase.subscription.id))
-    await ctx.db.delete(fxRates)
-    await expect(handleRenewalSweep(ctx)).rejects.toMatchObject({ code: 'renewal_fx_unavailable' })
-    expect((await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, purchase.wallet.id) }))!.balanceRial).toBe(before)
-    expect(await ctx.db.query.invoices.findMany({ where: t => eq(t.subscriptionId, purchase.subscription.id) })).toHaveLength(0)
-  })
-
   it('uses the margin in force for a missed hour and the newer margin for the next renewal', async () => {
     const hour = Math.floor(Date.now() / 3_600_000) * 3_600_000 + 3_600_000
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -172,5 +160,40 @@ describe.skipIf(!dbAvailable)('hourly billing and grandfathered daily boundaries
     expect(missed).toMatchObject({ totalRial: purchase.quote.totalRial, ruleVersion: original.updatedAt.toISOString() })
     expect(next.totalRial).toBeGreaterThan(missed.totalRial)
     expect(next.ruleVersion).toBe(changed.updatedAt.toISOString())
+  })
+
+  it('records an unpriceable hour once and renews a different subscription on concurrent retries', async () => {
+    const hour = Math.floor(Date.now() / 3_600_000) * 3_600_000 + 7_200_000
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(hour + 60_000)
+    await setFxRate(ctx.db, '620000')
+    const blocked = await buy('hourly', 'missing-hour-fx@test.local')
+    const healthy = await buy('hourly', 'eligible-hour-fx@test.local')
+    const balance = async (id: string) => (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, id) }))!.balanceRial
+    const blockedBalance = await balance(blocked.wallet.id)
+    const healthyBalance = await balance(healthy.wallet.id)
+    const blockedDue = blocked.subscription.currentPeriodEnd
+    // Simulate a pricing gap followed by a valid current observation.
+    await ctx.db.delete(fxRates)
+    vi.setSystemTime(hour + 7_320_000)
+    await setFxRate(ctx.db, '1240000')
+    const healthyDue = new Date(Date.now() - 1_000)
+    await ctx.db.update(subscriptions).set({ currentPeriodEnd: healthyDue, nextInvoiceAt: healthyDue, nextDueAt: healthyDue }).where(eq(subscriptions.id, healthy.subscription.id))
+    await Promise.all([handleRenewalSweep(ctx), handleRenewalSweep(ctx)])
+
+    expect(await balance(blocked.wallet.id)).toBe(blockedBalance)
+    expect(await ctx.db.query.invoices.findMany({ where: t => eq(t.subscriptionId, blocked.subscription.id) })).toHaveLength(0)
+    const unchanged = await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.id, blocked.subscription.id) })
+    expect(unchanged?.currentPeriodEnd).toEqual(blockedDue)
+    const events = await ctx.db.query.auditLogs.findMany({ where: (t, { and }) => and(eq(t.targetId, blocked.subscription.id), eq(t.action, 'subscription.renewal_blocked')) })
+    expect(events).toHaveLength(1)
+    expect(events[0]!.metadata).toMatchObject({ dueAt: blockedDue.toISOString(), code: 'renewal_fx_unavailable' })
+    const receipts = await ctx.db.query.invoices.findMany({ where: t => eq(t.subscriptionId, healthy.subscription.id) })
+    expect(receipts).toHaveLength(1)
+    expect(receipts[0]).toMatchObject({ status: 'paid', totalRial: 8525 })
+    expect(healthyBalance - await balance(healthy.wallet.id)).toBe(8525)
+    const debits = await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.referenceId, healthy.subscription.id) })
+    expect(debits).toHaveLength(1)
+    expect(debits[0]).toMatchObject({ type: 'renewal', walletId: healthy.wallet.id, amountRial: -8525 })
   })
 })
