@@ -12,7 +12,10 @@ it('renders trusted public prices, scopes table headers and links to the actual 
   const initial = renderHomeTariffs({ rates: { outbound: 150000, inbound: 0, cpu: 250000, ram: null }, trafficUnit: 'TB', tax: 'excluded' }, [plan])
   vi.stubGlobal('fetch', vi.fn(async () => Response.json({}, { status: 401 })))
   render(<MemoryRouter><AuthProvider><LandingPage initialTariffs={initial} /></AuthProvider></MemoryRouter>)
-  expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+  const headings = screen.getAllByRole('heading', { level: 1 })
+  expect(headings).toHaveLength(1)
+  expect(headings[0]?.firstChild?.textContent).toBe('سرور ابری ایران و هتزنر')
+  expect(headings[0]?.querySelector('em')?.textContent).toBe('با پرداخت ریالی و امکان خرید به صورت ساعتی')
   const name = 'خرید اکانت هتزنر'
   const faqLink = within(screen.getByRole('main')).getByRole('link', { name })
   const footerNav = within(screen.getByRole('contentinfo')).getByRole('navigation')

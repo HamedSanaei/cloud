@@ -93,7 +93,10 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
         trafficPeriod: null, protection: meta.protection ?? null, rescueEnabled: meta.rescueEnabled ?? null, isoId: meta.isoId ?? null,
         backupWindow: meta.backupWindow ?? null, volumes: meta.volumes ?? [], privateNetworks: meta.privateNetworks ?? [], firewalls: meta.firewalls ?? [], floatingIps: meta.floatingIps ?? [] } : null,
       billing: { subscriptionId: subscription?.id ?? null, state: subscription?.status ?? null, period: subscription?.billingInterval ?? order?.billingInterval ?? null,
-        comparisonPrices: retailOffer?.prices ?? [], ...(server.provider === 'hetzner' ? { trafficOverage: retailOffer?.trafficOverage ?? null } : {}),
+        comparisonPrices: retailOffer?.prices ?? [], ...(server.provider === 'hetzner' ? {
+          includedTrafficBytes: meta.includedTrafficBytes ?? retailOffer?.includedTrafficBytes ?? null,
+          trafficOverage: retailOffer?.trafficOverage ?? null,
+        } : {}),
         customerPriceRial: subscription?.priceRial ?? order?.totalRial ?? null, nextInvoiceAt: subscription?.nextInvoiceAt.toISOString() ?? null,
         currentPeriodEnd: subscription?.currentPeriodEnd.toISOString() ?? null, autoRenew: subscription?.autoRenew ?? false,
         futureDebits: server.terminatedAt ? 'stopped' : server.terminationState && server.terminationState !== 'delete_failed' ? 'held_pending_confirmation' : 'normal',

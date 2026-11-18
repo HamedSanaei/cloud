@@ -15,7 +15,12 @@ renewal and uses the existing calendar-month addition rule, clamped at month
 end. This is a retail commitment from Pars Server. The provider still receives
 its ordinary server-create request and bills on its own calendar.
 
-The catalog records the monthly basis as `hetzner-prepaid-month`. Provisioning
+The catalog prefers the gross monthly amount in `/server_types` and uses
+`/pricing.server_types` when the matching type and location supply the missing
+amount in the same project currency. The Primary IPv4 cap comes from that
+project's `/pricing.primary_ips`. The catalog records the combined monthly
+basis as `hetzner-prepaid-month`. The catalog sync audit records eligibility
+counts and reason codes for missing coverage. Provisioning
 revalidates the exact cap against the candidate account before dispatch. Where
 either monthly component is absent, the table shows that a verified monthly
 price is unavailable and offers hourly checkout if its own price is valid.
@@ -30,11 +35,13 @@ retail option is offered.
 
 ## Traffic indication
 
-The catalog reads `included_traffic` and `price_per_tb_traffic.gross` together
-from Hetzner Cloud's exact server type and location. When needed it looks at the
-same combination in `/pricing.server_types`. The quote records the catalog
-observation time, FX time and pricing rule version. Public data contains the
-retail indication and allowance without provider cost or credentials.
+The catalog reads `included_traffic` and `price_per_tb_traffic.gross` separately
+from the exact server type, location and project currency. Either field can
+come from the matched row in `/pricing.server_types` when the primary source
+lacks it. The catalog stores the original allowance in bytes. The storefront
+displays it in the Hetzner Console convention of 2^40 bytes per displayed TB.
+Public traffic prices carry the catalog observation time, FX time and pricing
+rule version. The public API exposes the retail indication and allowance.
 
 The indicative total per decimal TB (1,000 GB) uses the same approved FX,
 percentage markup, tax and integer-rial pricing engine as the server. The fixed
@@ -47,11 +54,11 @@ provider overage in 100 MB blocks. The public per-TB price is an indication,
 and Pars Server does not issue an overage invoice or debit the wallet for it.
 Future consent and settlement are tracked in [#106](https://github.com/HamedSanaei/cloud/issues/106).
 
-After publication, allow the scheduled catalog sync to complete or run the
-existing Hetzner catalog sync from the admin panel. Check genuine hourly and
-monthly values, location-specific traffic and the monthly link on both public
-pages and at checkout. Existing catalog records show only verified prices until
-they are refreshed.
+After the deployment is approved, allow the scheduled catalog sync to complete
+or run the existing Hetzner catalog sync from the admin panel. Check the latest
+catalog timestamp and coverage in `/api/public/home-prices` by location. Confirm
+the monthly link and the included quota and overage rate on both public pages
+and at checkout.
 
 References: [Cloud billing FAQ](https://docs.hetzner.com/cloud/billing/faq/),
 [traffic accounting](https://docs.hetzner.com/robot/general/traffic/),

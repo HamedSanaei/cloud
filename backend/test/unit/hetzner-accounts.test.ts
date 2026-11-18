@@ -115,6 +115,48 @@ describe('Hetzner account routing and live catalog', () => {
     expect(offeredPeriods(asia!.billingOptions)).toEqual(['hourly'])
   })
 
+  it('uses exact fallback prices and preserves allowances across all six live locations', async () => {
+    const codes = ['fsn1', 'nbg1', 'hel1', 'ash', 'hil', 'sin']
+    const locations = codes.map(name => ({ name, available: true }))
+    const types = ['cpx02', 'cpx12', 'cpx22'].map((name, index) => {
+      const prices = codes.map(location => ({ location, price_hourly: { gross: '0.008' },
+        included_traffic: (location === 'sin' ? [0.5, 1, 2][index]! : 20) * 2 ** 40 }))
+      return { id: index + 1, name, architecture: 'x86', cores: 2, memory: 4, disk: 40, locations, prices }
+    })
+    const serverTypes = types.map(({ id, name }) => ({ id, name, prices: codes.map(location => ({
+      location: { name: location }, price_monthly: { gross: ['4.990000000000', '9.49123456', '16.4900'][id - 1] },
+      price_per_tb_traffic: { gross: location === 'sin' ? '7.4000000000000000' : '1.0000000000000000' },
+    })) }))
+    const api = mockApi(undefined, {
+      '/locations': { locations },
+      '/server_types': { server_types: types },
+      '/pricing': { pricing: { currency: 'EUR', server_types: serverTypes, primary_ips: [{ type: 'ipv4',
+        prices: codes.map(location => ({ location, price_hourly: { gross: '0.0008' }, price_monthly: { gross: '0.600000000' } })) }] } },
+    })
+    const { offers } = await createHetznerProvider(config, { fetch: api.fetcher }).syncCatalog()
+    expect(offers).toHaveLength(18)
+    for (const offer of offers) {
+      const index = types.findIndex(type => type.name === offer.name)
+      expect(offeredPeriods(offer.billingOptions)).toEqual(['hourly', 'monthly'])
+      expect(retailBilling(offer.billingOptions, 'monthly').native.amount).toBe(['5.59', '10.09123456', '17.09'][index])
+      expect(offer.raw).toMatchObject({ trafficTariff: {
+        grossPerTb: offer.location === 'sin' ? '7.4' : '1',
+        includedTrafficBytes: (offer.location === 'sin' ? [0.5, 1, 2][index]! : 20) * 2 ** 40,
+      } })
+    }
+    // A price from another currency, region, or server type cannot back this offer.
+    serverTypes[0]!.prices[0] = { ...serverTypes[0]!.prices[0]!, location: { name: 'other' } }
+    Object.assign(serverTypes[1]!.prices[0]!, { currency: 'USD' })
+    serverTypes[2]!.name = 'other-type'
+    const mismatched = (await createHetznerProvider(config, { fetch: api.fetcher }).syncCatalog()).offers.filter(offer => offer.location === 'fsn1')
+    for (const offer of mismatched) {
+      expect(offeredPeriods(offer.billingOptions)).toEqual(['hourly'])
+      const expectedReason = { cpx02: 'server_location_mismatch', cpx12: 'server_currency_mismatch', cpx22: 'server_monthly_missing' }
+      expect(offer.raw).toMatchObject({ includedTrafficBytes: 20 * 2 ** 40, monthlyUnavailableReasons: [expectedReason[offer.name as keyof typeof expectedReason]] })
+      expect(offer.raw).not.toHaveProperty('trafficTariff')
+    }
+  })
+
   it('provisions a prepaid month using its exact cap and rejects a mismatched quote without dispatch', async () => {
     const api = mockApi()
     const provider = createHetznerProvider(config, { fetch: api.fetcher })

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { IndicativeTrafficTariff } from '../../contracts/home-tariffs.js'
+import { isTrafficByteCount, type IndicativeTrafficTariff } from '../../contracts/home-tariffs.js'
 import { ValidationError } from '../../lib/errors.js'
 import { exactProviderCents } from './periods.js'
 import { computePriceFromRules, type PricingRuleValues } from './service.js'
@@ -9,17 +9,27 @@ const evidence = z.object({
   location: z.string(),
   currency: z.string().regex(/^[A-Z]{3}$/),
   grossPerTb: z.string().regex(/^\d{1,7}(?:\.\d{1,8})?$/),
-  includedTrafficBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
 })
+type TrafficProduct = { provider: string; providerCurrency: string; raw: unknown }
+type TrafficData = { includedTrafficBytes?: unknown; trafficTariff?: { source?: unknown; location?: unknown; currency?: unknown; includedTrafficBytes?: unknown } }
+
+export function hetznerIncludedTraffic(product: TrafficProduct, location: string): number | null {
+  if (product.provider !== 'hetzner') return null
+  const raw = product.raw as TrafficData | null
+  if (isTrafficByteCount(raw?.includedTrafficBytes)) return raw.includedTrafficBytes
+  const legacy = raw?.trafficTariff
+  return legacy?.source === 'hetzner-server-type-location' && legacy.location === location &&
+    legacy.currency === product.providerCurrency && isTrafficByteCount(legacy.includedTrafficBytes) ? legacy.includedTrafficBytes : null
+}
 
 export function indicativeHetznerTraffic(
-  product: { provider: string; providerCurrency: string; raw: unknown; lastSyncedAt: Date },
+  product: TrafficProduct & { lastSyncedAt: Date },
   location: string,
   rules: PricingRuleValues & { updatedAt: Date },
   fx: { rate: string; createdAt: Date },
 ): IndicativeTrafficTariff | null {
   if (product.provider !== 'hetzner') return null
-  const result = evidence.safeParse((product.raw as { trafficTariff?: unknown } | null)?.trafficTariff)
+  const result = evidence.safeParse((product.raw as TrafficData | null)?.trafficTariff)
   if (!result.success || result.data.location !== location || result.data.currency !== product.providerCurrency) return null
   const data = result.data
   try {
@@ -31,7 +41,7 @@ export function indicativeHetznerTraffic(
       // indication uses the configured percentages and the same IRR boundary.
       rules: { ...rules, markupFixedRial: 0 },
     })
-    return { perTbRial: price.totalRial, includedBytes: data.includedTrafficBytes, source: data.source,
+    return { perTbRial: price.totalRial, includedBytes: hetznerIncludedTraffic(product, location), source: data.source,
       observedAt: product.lastSyncedAt.toISOString(), fxAt: fx.createdAt.toISOString(), ruleVersion: rules.updatedAt.toISOString() }
   } catch (error) {
     if (error instanceof ValidationError) return null

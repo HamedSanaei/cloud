@@ -7,7 +7,7 @@ import { getConfig } from '../../config.js'
 import { writeAudit } from '../audit/service.js'
 import type { CloudProvider, ProviderBillingOption } from '../providers/provider.interface.js'
 import { classifyBillingOptions, isMonthlyInvoicing } from '../providers/billing.js'
-import { offeredPeriods } from '../pricing/periods.js'
+import { hetznerPrepaidMonth, offeredPeriods } from '../pricing/periods.js'
 
 /**
  * Sync a provider's catalog into the normalized tables.
@@ -33,6 +33,7 @@ export async function syncProviderCatalog(
     const monthlyEligibleCount = { value: 0 }
     const missingPriceCount = { value: 0 }
     const missingBillingCount = { value: 0 }
+    const monthlyUnavailable = new Map<string, number>()
 
     await db.transaction(async (tx) => {
       // Upsert provider row.
@@ -92,6 +93,12 @@ export async function syncProviderCatalog(
         const hasPrice = offer.providerPriceCents !== null && offer.providerPriceCents !== undefined
         const hasBilling = billingOptions.length > 0
         if (monthly) monthlyEligibleCount.value++
+        if (provider.id === 'hetzner' && !monthly) {
+          const reasons = (offer.raw as { monthlyUnavailableReasons?: string[] } | undefined)?.monthlyUnavailableReasons ?? []
+          const codes = billingOptions.some(option => option.billingCycle === hetznerPrepaidMonth)
+            ? ['classification_dropped'] : reasons.length ? reasons : ['monthly_evidence_missing']
+          for (const code of codes) monthlyUnavailable.set(code, (monthlyUnavailable.get(code) ?? 0) + 1)
+        }
         if (!hasPrice) missingPriceCount.value++
         if (!hasBilling) missingBillingCount.value++
 
@@ -170,7 +177,8 @@ export async function syncProviderCatalog(
       action: 'provider.catalog_synced',
       targetType: 'provider',
       targetId: run.id,
-      metadata: { provider: provider.id, offers: result.offers.length, locations: result.locations.length },
+      metadata: { provider: provider.id, offers: result.offers.length, locations: result.locations.length,
+        ...(provider.id === 'hetzner' ? { monthlyEligible: monthlyEligibleCount.value, monthlyUnavailable: Object.fromEntries(monthlyUnavailable) } : {}) },
     })
     return { runId: run.id, products: result.offers.length, locations: result.locations.length }
   } catch (err) {

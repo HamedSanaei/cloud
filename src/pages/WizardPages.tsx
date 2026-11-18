@@ -18,7 +18,8 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { Stepper } from '../components/ui/Stepper'
 import { useToast } from '../components/ui/Toast'
 import { ApiError, isApiConfigured } from '../lib/apiClient'
-import { indicativeOverageNotice } from '../../backend/src/contracts/home-tariffs'
+import { hetznerTrafficQuota } from '../../backend/src/contracts/home-tariffs'
+import { HetznerTraffic } from '../components/servers/HetznerTraffic'
 import { checkDomainAvailability, createServer, getOfferImages, getStorefrontCatalog, listWallets, registerDomain } from '../lib/endpoints'
 import { claimLifecycleNotice, rememberAcceptedServer } from '../lib/serverLifecycle'
 import { formatFaNumber } from '../lib/format'
@@ -192,7 +193,8 @@ export function CreateServerPage() {
                   <Cpu size={26} /><strong dir="auto">{item.name}</strong><span>{item.category === 'cloud' ? 'سرور ابری' : item.category === 'vps' ? 'سرور مجازی' : item.category}</span>
                   <span>{formatFaNumber(item.vcpu)} هسته · {formatFaNumber(item.memoryMb / 1024)} گیگابایت حافظه</span>
                   <span><Database size={14} />{formatFaNumber(item.diskGb)} گیگابایت دیسک</span>
-                  {item.trafficGb !== null ? <span>{formatFaNumber(item.trafficGb)} گیگابایت ترافیک</span> : null}
+                  {item.provider === 'hetzner' ? <span>ترافیک ماهانهٔ مشمول: <bdi>{hetznerTrafficQuota(item.includedTrafficBytes ?? item.trafficOverage?.includedBytes)}</bdi></span>
+                    : item.trafficGb !== null ? <span>{formatFaNumber(item.trafficGb)} گیگابایت ترافیک</span> : null}
                   <DualPrices prices={item.prices} selected={billingPeriod} />
                 </button>
               })}</div>
@@ -216,7 +218,7 @@ export function CreateServerPage() {
             {step === 5 ? <div className="review-grid">
               {billingPeriod && <p className="info-box billing-period-explanation">{periodExplanation[billingPeriod]}</p>}
               {offer && <DualPrices prices={offer.prices} selected={billingPeriod} />}
-              {!shared && offer?.provider === 'hetzner' && <p className="info-box">نرخ استعلامی ترافیک مازاد برای هر TB: {offer.trafficOverage ? priceLabel(offer.trafficOverage.perTbRial) : 'در دسترس نیست'}. {indicativeOverageNotice}</p>}
+              {!shared && offer?.provider === 'hetzner' && <HetznerTraffic className="info-box" includedBytes={offer.includedTrafficBytes} overage={offer.trafficOverage} />}
               {shared ? <p className="info-box">نام اولیه سرور توسط سرویس مرجع تعیین می‌شود. مبلغ تومانی برآورد نرخ جاری است؛ تسویه با تعرفه و نرخ معتبر هنگام ثبت سفارش انجام می‌شود.</p> : <Input label="نام سرور" value={name} disabled={submitting} maxLength={63} dir="ltr" placeholder="my-server" onChange={(event) => { setName(event.target.value); setSubmitError(null) }}
                 hint="۳ تا ۶۳ نویسه انگلیسی، عدد یا خط تیره؛ ابتدا و انتها حرف یا عدد باشد." error={name && !nameValid ? 'نام سرور معتبر نیست.' : undefined} />
               }

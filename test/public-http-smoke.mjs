@@ -17,7 +17,10 @@ function docker(args, allowFailure = false) {
 }
 const label = ['--label', `parserver.seo-test=${id}`]
 const meta = { status: 'available', checkedAt: new Date().toISOString(), validUntil: new Date(Date.now() + 60000).toISOString(), catalogUpdatedAt: new Date().toISOString(), fxUpdatedAt: new Date().toISOString() }
-const offers = [{ id: 'fixture-plan', name: 'CX-HTTP-fixture', location: 'hel1', country: 'FI', city: 'Helsinki', vcpu: 2, memoryMb: 4096, diskGb: 40, diskType: 'Local', trafficGb: 20000, hourly: 123450, monthly: 6789000 }]
+const offers = [{ id: 'fixture-plan', name: 'CX-HTTP-fixture', location: 'hel1', country: 'FI', city: 'Helsinki', vcpu: 2, memoryMb: 4096, diskGb: 40, diskType: 'Local',
+  trafficGb: 21990, includedTrafficBytes: 20 * 2 ** 40, hourly: 123450, monthly: 6789000,
+  trafficOverage: { perTbRial: 333450, includedBytes: 20 * 2 ** 40, source: 'hetzner-server-type-location',
+    observedAt: meta.catalogUpdatedAt, fxAt: meta.fxUpdatedAt, ruleVersion: meta.checkedAt } }]
 try {
   const all = renderHomeTariffs(null, offers, meta), hetzner = renderHomeTariffs(null, offers, meta, 'hetzner')
   await writeFile(path.join(tmp, 'api.mjs'), `import {createServer} from 'node:http'; createServer((req,res)=>{if(req.headers.cookie||req.headers.authorization){res.writeHead(500);res.end('Private headers forwarded');return}res.setHeader('Content-Type','text/html; charset=utf-8');res.end(req.url.includes('scope=hetzner')?${JSON.stringify(hetzner)}:${JSON.stringify(all)})}).listen(8000,'0.0.0.0');`)
@@ -38,10 +41,13 @@ try {
     const html = await normal.text(), bot = await (await fetch(origin + uri, { headers: { 'user-agent': 'Googlebot' } })).text()
     assert.equal(bot, html, 'Same complete content without JavaScript for ordinary and bot user agents')
     assert.equal((html.match(/<h1\b/g) || []).length, 1)
+    if (uri === '/') assert.ok(html.includes('<em>با پرداخت ریالی و امکان خرید به صورت ساعتی</em>'))
     assert.ok(html.includes(`rel="canonical" href="https://parserver.ir${uri}"`))
     assert.ok(!/<meta name="robots" content="noindex/.test(html))
     assert.ok(html.includes('CX-HTTP-fixture') && html.includes('۱۲٬۳۴۵ تومان'))
     assert.ok(html.includes('offer=fixture-plan&amp;period=hourly&amp;location=hel1'))
+    assert.ok(html.includes('offer=fixture-plan&amp;period=monthly&amp;location=hel1'))
+    assert.ok(html.includes('۲۰ TB') && html.includes('۳۳٬۳۴۵ تومان'))
     assert.ok(html.includes('og:image') && html.includes('/parserver-share.png'))
     assert.ok(!html.includes('<!--#'), 'SSI directives must be resolved, not exposed')
     assert.ok(html.includes('application/ld+json'))
