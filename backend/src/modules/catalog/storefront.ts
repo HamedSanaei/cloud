@@ -31,7 +31,11 @@ interface StorefrontOffer {
   operatingSystems: ProviderOsOption[]
   prices: StorefrontPrice[]
 }
-export async function getStorefront(db: DbClient, admin = false, providerFilter?: string) {
+type RetailCost = Parameters<typeof computePriceFromRules>[0] & { rules: Awaited<ReturnType<typeof getPricingRules>> }
+type ObserveRetailCost = (offer: { id: string; name: string; location: string }, period: RetailPeriod, cost: RetailCost, fxAt: Date) => void
+
+// The observer is server-only. The returned storefront always contains retail prices.
+export async function getStorefront(db: DbClient, admin = false, providerFilter?: string, observeCost?: ObserveRetailCost) {
   const config = getConfig()
   const registered = new Set(listProviders().map((provider) => provider.id))
   const configured = [
@@ -46,15 +50,15 @@ export async function getStorefront(db: DbClient, admin = false, providerFilter?
     db.query.providerLocations.findMany({ where: (t) => eq(t.available, true) }),
   ])
   const locationById = new Map(locations.map((location) => [location.id, location]))
-  const pricingKeys = [...new Set(products.filter((product) => activeIds.has(product.provider)).map((product) => product.provider === 'leaseweb' && product.category === 'cloud' ? 'leaseweb.hourly' : product.provider))]
-  const rulesByProvider = new Map(await Promise.all(pricingKeys.map(async (key) => [key, await getPricingRules(db, key)] as const)))
-  const currencies = [...new Set(products.filter((product) => activeIds.has(product.provider)).map((product) => product.providerCurrency))]
-  const fxByCurrency = new Map(await Promise.all(currencies.map(async (currency) => [currency, await getActiveFxRate(db, currency)] as const)))
   const maxAgeMs = config.CATALOG_MAX_AGE_MINUTES * 60_000
+  const eligible = products.filter(product => activeIds.has(product.provider) && locationById.has(product.locationId ?? '') &&
+    (maxAgeMs <= 0 || Date.now() - product.lastSyncedAt.getTime() <= maxAgeMs) && (product.operatingSystems as ProviderOsOption[] | null)?.length)
+  const pricingKeys = [...new Set(eligible.map((product) => product.provider === 'leaseweb' && product.category === 'cloud' ? 'leaseweb.hourly' : product.provider))]
+  const rulesByProvider = new Map(await Promise.all(pricingKeys.map(async (key) => [key, await getPricingRules(db, key)] as const)))
+  const currencies = [...new Set(eligible.map((product) => product.providerCurrency))]
+  const fxByCurrency = new Map(await Promise.all(currencies.map(async (currency) => [currency, await getActiveFxRate(db, currency)] as const)))
   const offers: StorefrontOffer[] = []
-  for (const product of products) {
-    if (!activeIds.has(product.provider)) continue
-    if (maxAgeMs > 0 && Date.now() - product.lastSyncedAt.getTime() > maxAgeMs) continue
+  for (const product of eligible) {
     const location = locationById.get(product.locationId ?? '')
     const rules = rulesByProvider.get(product.provider === 'leaseweb' && product.category === 'cloud' ? 'leaseweb.hourly' : product.provider)
     const fx = fxByCurrency.get(product.providerCurrency)
@@ -64,14 +68,15 @@ export async function getStorefront(db: DbClient, admin = false, providerFilter?
     if (operatingSystems.length === 0) continue
     const prices: StorefrontPrice[] = []
     for (const period of offeredPeriods(options)) {
+      let billing: ReturnType<typeof retailBilling>
+      try { billing = retailBilling(options, period) } catch (error) {
+        if (error instanceof ValidationError) continue
+        throw error
+      }
+      const cost = { providerCurrency: product.providerCurrency, providerAmountCents: billing.pricing.amountCents, fxRate: fx.rate, rules }
+      observeCost?.({ id: product.id, name: product.name, location: location.code }, period, cost, fx.createdAt)
       try {
-        const billing = retailBilling(options, period)
-        const price = computePriceFromRules({
-          providerCurrency: product.providerCurrency,
-          providerAmountCents: billing.pricing.amountCents,
-          fxRate: fx.rate,
-          rules,
-        })
+        const price = computePriceFromRules(cost)
         prices.push({ period, totalRial: price.totalRial, billingCycle: billing.native.billingCycle, contractTerm: billing.native.contractTerm })
       } catch (error) {
         if (!(error instanceof ValidationError)) throw error

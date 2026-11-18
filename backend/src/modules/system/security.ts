@@ -19,6 +19,9 @@ export function systemAdmin(user: SessionUser) {
     throw new ForbiddenError('این عملیات فقط برای مدیران فعال فروشگاه مجاز است.')
   }
 }
+export function isPricingSuperAdmin(user: SessionUser) {
+  return user.role === 'admin' && user.status === 'active' && getConfig().PRIMARY_IPV4_SUPER_ADMIN_IDS.includes(user.id)
+}
 export function secretKey(value = getConfig().STORE_SECRET_KEY) {
   if (!/^[a-f0-9]{64}$/i.test(value)) throw new ValidationError('کلید مستقل رمزگذاری سیستم پیکربندی نشده است.')
   return Buffer.from(value, 'hex')

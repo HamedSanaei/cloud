@@ -11,7 +11,9 @@ import { listFxRateHistory, setFxRate, getPricingRules, updatePricingRules } fro
 import { listOffers, listSyncRuns, setLocationAvailability, setOfferEnabled, syncProviderCatalog } from '../catalog/service.js'
 import { getProvider } from '../providers/registry.js'
 import { orders, providerProducts, providerOperations } from '../../db/schema.js'
-import { ConflictError, NotFoundError } from '../../lib/errors.js'
+import { ConflictError, ForbiddenError, NotFoundError } from '../../lib/errors.js'
+import { requireHetznerPricingAdmin } from '../pricing/hetzner-margin.js'
+import { isPricingSuperAdmin } from '../system/security.js'
 import { rialToToman } from '../../lib/money.js'
 import { resolveOperationByAdmin } from '../provisioning/handlers.js'
 
@@ -59,9 +61,11 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
     return { data: { id: row.id, currency: row.fromCurrency, rate: row.rate, createdAt: row.createdAt } }
   })
 
-  app.get('/admin/pricing', async (request) => {
-    requireAdmin(request)
+  app.get('/admin/pricing', async (request, reply) => {
+    const admin = requireAdmin(request)
     const query = parse(z.object({ provider: z.string().default('leaseweb') }), request.query)
+    if (query.provider === 'hetzner') requireHetznerPricingAdmin(admin)
+    reply.header('Cache-Control', 'private, no-store')
     const rules = await getPricingRules(db, query.provider)
     return { data: { ...rules, markupPercent: Number(rules.markupPercent), taxPercent: Number(rules.taxPercent) } }
   })
@@ -79,7 +83,9 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
       }),
       request.body,
     )
-    const rules = await updatePricingRules(db, input.provider, input, admin.id)
+    if (input.provider === 'hetzner') throw new ForbiddenError('برای تغییر سود هتزنر از تنظیمات سوپرادمین استفاده کنید.')
+    const { provider, ...changes } = input
+    const rules = await updatePricingRules(db, provider, changes, admin.id)
     return { data: { ...rules, markupPercent: Number(rules.markupPercent), taxPercent: Number(rules.taxPercent) } }
   })
 
@@ -255,8 +261,10 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
   })
 
   app.get('/admin/audit', async (request) => {
-    requireAdmin(request)
+    const admin = requireAdmin(request)
     const query = parse(z.object({ action: z.string().optional(), limit: z.coerce.number().int().positive().max(200).optional() }), request.query)
-    return { data: await listAudit(db, { action: query.action, limit: query.limit ?? 50 }) }
+    const rows = await listAudit(db, { action: query.action, limit: query.limit ?? 50 })
+    return { data: isPricingSuperAdmin(admin) ? rows : rows.map(row => row.action === 'admin.price_rule.changed' &&
+      (row.metadata as { provider?: string } | null)?.provider === 'hetzner' ? { ...row, metadata: null } : row) }
   })
 }

@@ -96,7 +96,7 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
         comparisonPrices, customerPriceRial: subscription?.priceRial ?? order?.totalRial ?? null, nextInvoiceAt: subscription?.nextInvoiceAt.toISOString() ?? null,
         currentPeriodEnd: subscription?.currentPeriodEnd.toISOString() ?? null, autoRenew: subscription?.autoRenew ?? false,
         futureDebits: server.terminatedAt ? 'stopped' : server.terminationState && server.terminationState !== 'delete_failed' ? 'held_pending_confirmation' : 'normal',
-        refundPolicy: 'no_automatic_proration', providerQuotedRate: quote ? { currency: quote.providerCurrency, amountCents: quote.providerAmountCents, period: quote.billingInterval, observedAt: quote.createdAt.toISOString() } : null },
+        refundPolicy: 'no_automatic_proration', providerQuotedRate: quote && server.provider !== 'hetzner' ? { currency: quote.providerCurrency, amountCents: quote.providerAmountCents, period: quote.billingInterval, observedAt: quote.createdAt.toISOString() } : null },
       capabilities: { power: !!manager, resize: !!manager, rebuild: !!manager, resetPassword: !!manager, console: !!manager?.console, rescue: !!manager, protection: !!manager,
         iso: false, snapshots: false, backups: false, volumes: false, networkMutations: false,
         unavailableReason: 'مالکیت و تعرفهٔ مستقل منابع جانبی باید پیش از فعال‌سازی عملیات در فروشگاه ثبت شود؛ فهرست منابع متصل صرفاً جهت اطلاع است.' },

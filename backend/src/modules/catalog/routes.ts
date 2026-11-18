@@ -76,6 +76,10 @@ export const registerCatalogRoutes: FastifyPluginAsync<{ ctx: AppContext }> = as
       monthlyOnly: query.monthlyOnly ?? (query.billingInterval === 'monthly'),
       enabledOnly: query.enabledOnly,
     })
+    if (query.provider === 'hetzner') {
+      const ids = new Set(rows.map(row => row.id))
+      return { data: (await getStorefront(db, false, 'hetzner')).offers.filter(offer => ids.has(offer.id)) }
+    }
     const locations = await listLocations(db, query.provider ?? 'leaseweb')
     const codeById = new Map(locations.map((l) => [l.id, l.code]))
     return { data: rows.map((r) => offerToDto(r, codeById.get(r.locationId ?? '') ?? undefined)) }
@@ -86,6 +90,11 @@ export const registerCatalogRoutes: FastifyPluginAsync<{ ctx: AppContext }> = as
     const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
     const offer = await getOffer(db, id)
     if (!offer.available) throw new NotFoundError('محصول یافت نشد')
+    if (offer.provider === 'hetzner') {
+      const retail = (await getStorefront(db, false, 'hetzner')).offers.find(row => row.id === id)
+      if (!retail) throw new NotFoundError('محصول یافت نشد')
+      return { data: retail }
+    }
     const loc = offer.locationId ? await db.query.providerLocations.findFirst({ where: (t) => eq(t.id, offer.locationId ?? '') }) : null
     return { data: offerToDto(offer, loc?.code) }
   })
