@@ -95,7 +95,8 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
       expect(quote.totalRial).toBe(publicOffer.monthly)
       for (const scope of ['all', 'hetzner']) {
         const response = await app.inject('/api/public/home-tariffs?scope=' + scope)
-        expect(response.body).toContain(`offer=${stored.id}&amp;period=monthly&amp;location=sin`)
+        expect(response.body).toContain(`offer=${stored.id}&amp;period=hourly&amp;location=sin`)
+        expect(response.body).toContain(new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(publicOffer.monthly / 10) + ' تومان')
         expect(response.body).toContain('۰٫۵ TB')
         expect(response.body).not.toContain('قیمت ماهانهٔ معتبر در دسترس نیست')
       }
