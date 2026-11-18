@@ -6,6 +6,7 @@ import {
   type ProviderServerView, type RecoveryResult,
 } from '../provider.interface.js'
 import { decimal, readCatalog, type HetznerCatalog } from './catalog.js'
+import { hetznerPrepaidMonth } from '../../pricing/periods.js'
 import { HetznerApiError, HetznerClient, object, type ApiObject } from './client.js'
 import { createCustomerProvider } from './customer.js'
 import { integrationFetcher } from '../../outbound/client.js'
@@ -140,13 +141,17 @@ export function createHetznerProvider(config: HetznerConfig, options: HetznerPro
       const label = operationLabel(req.clientReference)
       const hostname = req.hostname ?? `server-${label.slice(0, 12)}`
       if (!/^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,61}[a-zA-Z0-9])?$/.test(hostname)) throw new ProviderPermanentError('Hetzner hostname is invalid')
-      if (req.billingOption.billingCycle !== 'hourly' || req.billingOption.amount === undefined) throw new ProviderPermanentError('Hetzner requires its exact hourly billing option')
+      const cycle = req.billingOption.billingCycle
+      if ((cycle !== 'hourly' && cycle !== hetznerPrepaidMonth) || req.billingOption.amount === undefined) {
+        throw new ProviderPermanentError('Hetzner requires a verified hourly or prepaid monthly price')
+      }
       let capacity: HetznerApiError | undefined
       for (const account of active) {
         const client = clientFor(account)
         const catalog = await readCatalog(client, clean)
         const offer = catalog.offers.find((candidate) => candidate.providerProductId === req.productId && candidate.location === req.location)
-        if (!offer || !offer.operatingSystems.some((os) => os.id === req.operatingSystem) || decimal(req.billingOption.amount) !== offer.billingOptions[0]?.amount) continue
+        const liveOption = offer?.billingOptions.find(option => option.billingCycle === cycle)
+        if (!liveOption || !offer?.operatingSystems.some((os) => os.id === req.operatingSystem) || decimal(req.billingOption.amount) !== liveOption.amount) continue
         let data: ApiObject
         try {
           // Exactly one dispatch on this account. Only proven capacity refusal

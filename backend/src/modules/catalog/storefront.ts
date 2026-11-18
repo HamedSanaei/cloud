@@ -6,6 +6,8 @@ import { computePriceFromRules, fxMaxAgeMs, getActiveFxRate, getPricingRules } f
 import { offeredPeriods, retailBilling, type RetailPeriod } from '../pricing/periods.js'
 import type { ProviderBillingOption, ProviderOsOption } from '../providers/provider.interface.js'
 import { listProviders } from '../providers/registry.js'
+import { indicativeHetznerTraffic } from '../pricing/hetzner-traffic.js'
+import type { IndicativeTrafficTariff } from '../../contracts/home-tariffs.js'
 
 interface StorefrontPrice {
   period: RetailPeriod
@@ -28,6 +30,7 @@ interface StorefrontOffer {
   diskGb: number
   diskType?: string
   trafficGb: number | null
+  trafficOverage?: IndicativeTrafficTariff | null
   operatingSystems: ProviderOsOption[]
   prices: StorefrontPrice[]
 }
@@ -97,6 +100,7 @@ export async function getStorefront(db: DbClient, admin = false, providerFilter?
       diskType: (product.raw as { storageType?: unknown } | null)?.storageType === 'local' ? 'Local' :
         (product.raw as { storageType?: unknown } | null)?.storageType === 'network' ? 'Network' : undefined,
       trafficGb: product.trafficGb,
+      ...(product.provider === 'hetzner' ? { trafficOverage: indicativeHetznerTraffic(product, location.code, rules, fx) } : {}),
       operatingSystems,
       prices,
     })
