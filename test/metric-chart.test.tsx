@@ -32,10 +32,12 @@ describe('interpretable server monitoring charts', () => {
     expect(chart.querySelector('[data-series="network.0.bandwidth.in"]')?.querySelectorAll('path')).toHaveLength(2)
     expect(chart.querySelector('[data-series="network.0.bandwidth.out"]')?.querySelectorAll('path')).toHaveLength(2)
     const table = screen.getByRole('table', { hidden: true })
-    expect(within(table).getByText('داده موجود نیست')).toBeTruthy()
-    expect(within(table).getByText('۰', { exact: true })).toBeTruthy()
-    expect(table.querySelector('time')?.dateTime).toBe(metrics.start)
-    expect(within(table).getAllByText(formatFaDateTime(metrics.start, 'UTC'))).toHaveLength(2)
+    const timestamps = [...table.querySelectorAll('time')]
+    expect(timestamps.map(sample => sample.dateTime)).toEqual([0, 60, 120, 180].map(offset => new Date((time + offset) * 1000).toISOString()))
+    expect(timestamps[0].textContent).toBe(formatFaDateTime(metrics.start, 'UTC'))
+    const valuesAt = (sample: HTMLTimeElement) => [...sample.closest('tr')!.querySelectorAll('td')].map(cell => cell.textContent)
+    expect(valuesAt(timestamps[0])).toEqual(['۰', '۲۰۰'])
+    expect(valuesAt(timestamps[2])).toEqual(['داده موجود نیست', 'داده موجود نیست'])
   })
 
   it('uses the account timezone instead of stale saved preferences and labels disk read/write', () => {
