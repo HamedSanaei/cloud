@@ -1,21 +1,28 @@
-import { and, eq, lte, gte, sql } from 'drizzle-orm'
+import { and, eq, lt, lte, gte, gt, isNotNull, or, sql } from 'drizzle-orm'
 import type { DbOrTx } from '../../db/index.js'
 import { AppError, ValidationError } from '../../lib/errors.js'
-import { computePriceFromRules, fxMaxAgeMs, type PricingRuleValues } from './service.js'
+import { computePriceFromRules, euroMarketSource, fxMaxAgeMs, type PricingRuleValues } from './service.js'
 
 const renewalPriceBlockCodes = new Set(['renewal_price_unavailable', 'renewal_rules_unavailable', 'renewal_fx_unavailable'])
+export const latestApprovedEuro = (db: DbOrTx, asOf: Date) => db.query.fxRates.findFirst({
+  where: t => and(eq(t.fromCurrency, 'EUR'), eq(t.toCurrency, 'IRR'), lte(t.createdAt, asOf), gt(t.rate, '0'), lt(t.rate, '100000000000000'),
+    or(isNotNull(t.setBy), eq(t.note, euroMarketSource))),
+  orderBy: (t, { desc }) => [desc(t.createdAt), desc(t.id)],
+})
+export type RenewalFx = { asOf: Date; latest: Awaited<ReturnType<typeof latestApprovedEuro>> }
 
 export function isRenewalPriceBlocked(error: unknown): error is AppError {
   return error instanceof AppError && renewalPriceBlockCodes.has(error.code)
 }
 
-/** Select historical approved FX, never today's rate for a missed historical hour. */
-export async function renewalPrice(db: DbOrTx, orderId: string, interval: string, periodStart: Date) {
+/** Historical pricing takes priority over the approved observation frozen for the sweep. */
+export async function renewalPrice(db: DbOrTx, orderId: string, interval: string, periodStart: Date, fallback?: RenewalFx) {
   const order = await db.query.orders.findFirst({ where: t => eq(t.id, orderId) })
   // A confirmed resize changes the next period's cost basis, never a paid invoice.
   const server = await db.query.servers.findFirst({ where: t => eq(t.orderId, orderId) })
   const resize = server ? await db.query.providerOperations.findFirst({
-    where: t => and(eq(t.referenceId, server.id), eq(t.referenceType, 'server'), eq(t.action, 'resize'), eq(t.status, 'succeeded')),
+    where: t => and(eq(t.referenceId, server.id), eq(t.referenceType, 'server'), eq(t.action, 'resize'), eq(t.status, 'succeeded'),
+      interval === 'HOURLY' ? lte(t.completedAt, periodStart) : undefined),
     orderBy: (t, { desc }) => [desc(t.completedAt)],
   }) : null
   const resizeQuote = (resize?.requestMetadata as { input?: { quoteId?: string } } | null)?.input?.quoteId
@@ -27,7 +34,7 @@ export async function renewalPrice(db: DbOrTx, orderId: string, interval: string
   let rules = await db.query.pricingRules.findFirst({ where: t => eq(t.provider, provider) })
   if (!rules) throw new AppError(503, 'renewal_price_unavailable', 'قواعد قیمت تمدید در دسترس نیست')
   const currency = quote.providerCurrency === 'USD' ? 'USDT' : quote.providerCurrency
-  const now = new Date()
+  const now = fallback?.asOf ?? new Date()
   const hourEnd = new Date(Math.floor(periodStart.getTime() / 3600000) * 3600000 + 3600000 - 1)
   const cutoff = interval === 'HOURLY' ? new Date(Math.min(now.getTime(), hourEnd.getTime())) : now
   if (rules.updatedAt > cutoff) {
@@ -45,10 +52,13 @@ export async function renewalPrice(db: DbOrTx, orderId: string, interval: string
     rules = { ...rules, ...before, updatedAt: new Date(before.updatedAt) }
   }
   const oldest = new Date(cutoff.getTime() - fxMaxAgeMs(currency))
-  const fx = currency === 'IRR' ? { id: null, rate: '1', createdAt: cutoff, note: 'IRR identity' } : await db.query.fxRates.findFirst({
-    where: t => and(eq(t.fromCurrency, currency), eq(t.toCurrency, 'IRR'), lte(t.createdAt, cutoff), gte(t.createdAt, oldest)),
+  const historical = currency === 'IRR' ? { id: null, rate: '1', createdAt: cutoff, note: 'IRR identity' } : await db.query.fxRates.findFirst({
+    where: t => and(eq(t.fromCurrency, currency), eq(t.toCurrency, 'IRR'), lte(t.createdAt, cutoff), gte(t.createdAt, oldest),
+      gt(t.rate, '0'), lt(t.rate, '100000000000000')),
     orderBy: (t, { desc }) => [desc(t.createdAt), desc(t.id)],
   })
+  const alternate = !historical && interval === 'HOURLY' && order.provider === 'hetzner' && currency === 'EUR' ? fallback?.latest : undefined
+  const fx = historical ?? alternate
   if (!fx) throw new AppError(503, 'renewal_fx_unavailable', 'نرخ معتبر ارز برای ساعت تمدید در دسترس نیست؛ برداشت انجام نشد')
   let price: ReturnType<typeof computePriceFromRules>
   try {
@@ -57,7 +67,10 @@ export async function renewalPrice(db: DbOrTx, orderId: string, interval: string
     if (!(error instanceof ValidationError)) throw error
     throw new AppError(503, 'renewal_price_unavailable', 'مبلغ معتبر تمدید قابل محاسبه نیست؛ برداشت انجام نشد')
   }
-  return { ...price, fxRateId: fx.id, fxAt: fx.createdAt.toISOString(), fxSource: fx.note, ruleId: rules.id, ruleVersion: rules.updatedAt.toISOString(), calculatedAt: now.toISOString(), ledgerPrecisionRial: 1 }
+  return { ...price, fxRateId: fx.id, fxRate: fx.rate, fxAt: fx.createdAt.toISOString(), fxSource: alternate ? (alternate.setBy ? 'operator-approved' : euroMarketSource) : fx.note,
+    ...(alternate ? { fxFallback: true as const, fxSelectionPolicy: 'latest_available_approved_observation', fxSelectedAt: now.toISOString(),
+      fxAgeMs: now.getTime() - alternate.createdAt.getTime(), fxFallbackReason: 'renewal_fx_unavailable' } : {}),
+    ruleId: rules.id, ruleVersion: rules.updatedAt.toISOString(), calculatedAt: now.toISOString(), ledgerPrecisionRial: 1 }
 }
 
 /** Estimates reuse an already-issued unpaid invoice before considering newer FX. */

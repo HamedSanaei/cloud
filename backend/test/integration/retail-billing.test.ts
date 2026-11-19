@@ -1,4 +1,5 @@
 import { nativePeriod } from '../../src/modules/pricing/periods.js'
+import { getConfig } from '../../src/config.js'
 import type { ProviderBillingOption } from '../../src/modules/providers/provider.interface.js'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
@@ -9,7 +10,7 @@ import { buildApp } from '../../src/app.js'
 import { testLogger } from '../helpers.js'
 import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
 import { getProvider, registerProvider, registerConfiguredProviders } from '../../src/modules/providers/registry.js'
-import { setFxRate, updatePricingRules } from '../../src/modules/pricing/service.js'
+import { euroMarketSource, setFxRate, updatePricingRules } from '../../src/modules/pricing/service.js'
 import { renewalPrice } from '../../src/modules/pricing/renewal.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
 import { createOrderFromQuote } from '../../src/modules/orders/service.js'
@@ -195,5 +196,60 @@ describe.skipIf(!dbAvailable)('hourly billing and grandfathered daily boundaries
     const debits = await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.referenceId, healthy.subscription.id) })
     expect(debits).toHaveLength(1)
     expect(debits[0]).toMatchObject({ type: 'renewal', walletId: healthy.wallet.id, amountRial: -8525 })
+  })
+
+  it('automatically settles missing historical hours with the latest approved EUR and records one critical alert', async () => {
+    const hour = Math.ceil(Date.now() / 3_600_000) * 3_600_000 + 3_600_000
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(hour + 60_000)
+    await setFxRate(ctx.db, '620000')
+    const purchase = await buy('hourly', 'hourly-approved-fallback@test.local')
+    const id = purchase.subscription.id
+    const due = purchase.subscription.currentPeriodEnd
+    const initial = await ctx.db.query.invoices.findFirst({ where: t => eq(t.orderId, purchase.order.id) })
+    await ctx.db.delete(fxRates)
+    vi.setSystemTime(due.getTime() - 25 * 3_600_000)
+    const old = await setFxRate(ctx.db, '640000', { source: 'market', note: euroMarketSource })
+    vi.setSystemTime(due.getTime() + 3 * 3_600_000 + 1000)
+    await handleRenewalSweep(ctx)
+    await setFxRate(ctx.db, '840000', { source: 'market', note: euroMarketSource })
+    const latest = await setFxRate(ctx.db, '1240000', { source: 'market', note: euroMarketSource })
+    await setFxRate(ctx.db, '9900000')
+    await Promise.all([handleRenewalSweep(ctx), handleRenewalSweep(ctx)])
+    const receipts = await ctx.db.query.invoices.findMany({ where: t => eq(t.subscriptionId, id), orderBy: (t, { asc }) => [asc(t.dueAt)] })
+    expect(receipts).toHaveLength(3)
+    for (const [index, invoice] of receipts.entries()) {
+      expect(invoice.status).toBe('paid')
+      expect(invoice.dueAt).toEqual(new Date(due.getTime() + index * 3_600_000))
+      expect(invoice.snapshot).toMatchObject({ fxRateId: index === 0 ? old.id : latest.id, fxFallback: true,
+        fxSelectionPolicy: 'latest_available_approved_observation', periodStart: invoice.dueAt!.toISOString() })
+      const debit = await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.idempotencyKey, `renewal:${invoice.id}`) })
+      expect(debit).toHaveLength(1)
+      expect(debit[0]).toMatchObject({ amountRial: -invoice.totalRial, metadata: { fxRateId: index === 0 ? old.id : latest.id } })
+    }
+    expect(receipts[0]!.snapshot).toMatchObject({ fxAgeMs: expect.any(Number) })
+    expect((receipts[0]!.snapshot as { fxAgeMs: number }).fxAgeMs).toBeGreaterThan(24 * 3_600_000)
+    expect((await ctx.db.query.invoices.findFirst({ where: t => eq(t.id, initial!.id) }))!.snapshot).toEqual(initial!.snapshot)
+    const alerts = await ctx.db.query.auditLogs.findMany({ where: t => eq(t.targetId, id) })
+    expect(alerts.filter(row => (row.metadata as { code?: string } | null)?.code === 'renewal_fx_fallback')).toHaveLength(1)
+    expect(await ctx.db.query.systemEvents.findFirst({ where: (t, { and, sql }) => and(eq(t.level, 'critical'), sql`${t.metadata}->>'subscriptionId' = ${id}`) })).toBeTruthy()
+    const operator = await registerUser(ctx.db, { email: 'critical-op@test.local', password: 'Retail-boundary-123!' })
+    await ctx.db.update(users).set({ role: 'admin' }).where(eq(users.id, operator.id))
+    const session = await createSession(ctx.db, operator.id, {})
+    const headers = { authorization: `Bearer ${session.token}` }
+    const config = getConfig(), previous = config.PRIMARY_IPV4_SUPER_ADMIN_IDS
+    const app = await buildApp({ db: ctx.db, queues: ctx.queues, logger: testLogger })
+    try {
+      config.PRIMARY_IPV4_SUPER_ADMIN_IDS = []
+      expect((await app.inject({ url: '/api/admin/settings/renewal-alerts', headers })).statusCode).toBe(403)
+      config.PRIMARY_IPV4_SUPER_ADMIN_IDS = [operator.id]
+      const result = await app.inject({ url: '/api/admin/settings/logs?level=critical', headers })
+      expect(result.statusCode, result.body).toBe(200)
+      expect(result.json().data.items.filter((item: { metadata: { subscriptionId?: string } }) => item.metadata.subscriptionId === id))
+        .toEqual(expect.arrayContaining([expect.objectContaining({ service: 'audit' }), expect.objectContaining({ service: 'billing' })]))
+    } finally {
+      config.PRIMARY_IPV4_SUPER_ADMIN_IDS = previous
+      await app.close()
+    }
   })
 })

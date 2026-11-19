@@ -16,6 +16,7 @@ import { issueAuthorization, consumeAuthorization, isPricingSuperAdmin, systemAd
 import { confirmedMargin, getHetznerMargin, marginAction, marginInput, previewHetznerMargin, requireHetznerPricingAdmin, updateHetznerMargin } from '../pricing/hetzner-margin.js'
 import { authenticateToken } from '../auth/service.js'
 import { safeMetadata } from './events.js'
+import { acknowledgeRenewalAlert, listRenewalAlerts } from '../billing/renewal-alerts.js'
 import { diagnoseGateway, gatewayStatus, updateGateway } from './gateway.js'
 import { adjustmentSchema, approveAdjustment, findFinancialUser, requestAdjustment } from './finance.js'
 import { approveRestore, backupFile, getBackupJob, importBackup, listBackupJobs, removeBackup, requestBackupJob, requestRestore, waitBackupJobs, initializeBackupJobs } from './backups.js'
@@ -31,18 +32,19 @@ const confirm = z.object({ confirm: z.literal(true), proof: proofSchema }).stric
 const actions = z.enum(['gateway.update', 'gateway.diagnose', 'wallet.adjust', 'wallet.approve', 'logs.export', 'backup.backup', 'backup.rehearsal', 'backup.upload', 'backup.download', 'backup.delete', 'backup.restore', 'backup.approve', 'outbound.profile', 'outbound.route', 'outbound.delete', 'outbound.test', marginAction])
 const gatewaySchema = z.object({ enabled: z.boolean(), sandbox: z.boolean(), merchant: z.string().uuid().optional(), version: z.string().regex(/^[0-9a-f]{64}$/).optional(), confirm: z.literal(true) }).strict()
 const paging = z.object({ page: z.coerce.number().int().min(1).max(10000).default(1), limit: z.coerce.number().int().min(1).max(100).default(20) })
-const logsQuery = paging.extend({ level: z.enum(['', 'info', 'warn', 'error']).default(''), service: z.string().regex(/^[a-zA-Z0-9_-]{0,40}$/).default(''),
+const logsQuery = paging.extend({ level: z.enum(['', 'info', 'warn', 'error', 'critical']).default(''), service: z.string().regex(/^[a-zA-Z0-9_-]{0,40}$/).default(''),
   actorId: z.union([z.literal(''), z.string().uuid()]).default(''), event: z.string().max(100).default(''), search: z.string().max(100).default(''), from: z.iso.datetime().optional(), to: z.iso.datetime().optional() })
 const publicJob = (job: Awaited<ReturnType<typeof getBackupJob>>) => {
   const summary = (snapshot: typeof job.snapshot) => snapshot ? { pgMajor: snapshot.pgMajor, schemaHead: snapshot.schemaHead, counts: snapshot.counts } : undefined
   return { ...job, snapshot: summary(job.snapshot), restored: summary(job.restored) }
 }
-async function logs(db: AppContext['db'], input: z.infer<typeof logsQuery>, limit = input.limit) {
+async function logs(db: AppContext['db'], input: z.infer<typeof logsQuery>, includeRenewalAlerts: boolean, limit = input.limit) {
   const where = and(input.level ? sql`e.level=${input.level}` : undefined, input.service ? sql`e.service=${input.service}` : undefined,
+    includeRenewalAlerts ? undefined : sql`e.metadata->>'alertId' is null`,
     input.actorId ? sql`e.actor_id::text=${input.actorId}` : undefined, input.event ? sql`e.event=${input.event}` : undefined,
     input.search ? sql`(e.event ilike ${'%' + input.search + '%'} or e.request_id ilike ${'%' + input.search + '%'})` : undefined,
     input.from ? sql`e.created_at>=${input.from}::timestamptz` : undefined, input.to ? sql`e.created_at<=${input.to}::timestamptz` : undefined) ?? sql`true`
-  const source = sql`(select 'audit:'||id as id, created_at, case when action like '%failed%' or action like '%denied%' then 'error' else 'info' end as level, 'audit' as service, action as event, actor_id, null::text as request_id, metadata from audit_logs
+  const source = sql`(select 'audit:'||id as id, created_at, case when metadata->>'alertId' is not null then metadata->>'level' when action like '%failed%' or action like '%denied%' then 'error' else 'info' end as level, 'audit' as service, action as event, actor_id, null::text as request_id, metadata from audit_logs
     union all select 'event:'||id::text, created_at, level, service, event, null::uuid, request_id, metadata from system_events) e`
   const result = await db.execute(sql`select * from ${source} where ${where} order by e.created_at desc, e.id desc limit ${limit} offset ${(input.page - 1) * input.limit}`)
   const count = await db.execute(sql`select count(*)::int as n from ${source} where ${where}`)
@@ -170,14 +172,26 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     return { data: result }
   })
   app.get('/logs', async request => {
+    const admin = requireAdmin(request)
     const input = parse(logsQuery, request.query)
-    await writeAudit(db, { actorId: requireAdmin(request).id, action: 'system.logs_viewed', metadata: { operation: 'logs.view' } })
-    return { data: await logs(db, input) }
+    await writeAudit(db, { actorId: admin.id, action: 'system.logs_viewed', metadata: { operation: 'logs.view' } })
+    return { data: await logs(db, input, isPricingSuperAdmin(admin)) }
+  })
+  app.get('/renewal-alerts', async request => {
+    const admin = requireAdmin(request)
+    if (!isPricingSuperAdmin(admin)) throw new ForbiddenError()
+    return { data: await listRenewalAlerts(db, admin.id) }
+  })
+  app.post('/renewal-alerts/:id/acknowledge', async request => {
+    const admin = requireAdmin(request)
+    if (!isPricingSuperAdmin(admin)) throw new ForbiddenError()
+    const { id } = parse(z.object({ id: z.string().regex(/^[a-z0-9_-]{1,40}\.[a-z0-9_]{1,80}$/) }), request.params)
+    return { data: await acknowledgeRenewalAlert(db, id, admin.id) }
   })
   app.post('/logs/export', async (request, reply) => {
     const { proof, ...input } = parse(logsQuery.extend({ proof: proofSchema }), request.body), admin = requireAdmin(request)
     await db.transaction(tx => consumeAuthorization(tx, admin, proof, 'logs.export', input))
-    const data = await logs(db, input, 1000)
+    const data = await logs(db, input, isPricingSuperAdmin(admin), 1000)
     await writeAudit(db, { actorId: admin.id, action: 'system.logs_exported', metadata: { result: 'success' } })
     return reply.header('Content-Disposition', 'attachment; filename="system-events.json"').send(data)
   })

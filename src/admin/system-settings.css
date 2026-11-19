@@ -20,6 +20,7 @@
 .system-user.is-selected { outline: 2px solid var(--brand-600); }
 .system-log { grid-template-columns: minmax(180px,1fr) minmax(0,2fr) auto; align-items: center; }
 .system-log small { grid-column: 1/-1; }
+.system-critical { border-inline-start: 4px solid #dc2626; }
 .system-actions, .system-pagination { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-block: 16px; }
 .system-pagination { justify-content: center; }
 .system-review { padding: 16px; border-inline-start: 4px solid var(--warning); background: var(--warning-soft); border-radius: 8px; overflow-wrap: anywhere; }
