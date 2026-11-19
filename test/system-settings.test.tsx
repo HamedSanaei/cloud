@@ -40,6 +40,13 @@ describe('store administration routes and explicit confirmations', () => {
     expect(await screen.findByText(/STORE_SECRET_KEY/)).toBeTruthy()
     expect(requests.some(r => r.path.startsWith('/admin/settings/logs'))).toBe(true)
   })
+  it('filters system logs by critical severity', async () => {
+    open('/admin/settings/logs')
+    const user = userEvent.setup()
+    await user.selectOptions(await screen.findByLabelText('شدت'), 'critical')
+    await user.click(screen.getByRole('button', { name: 'اعمال فیلتر' }))
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('/logs?level=critical'))).toBe(true)
+  })
   it('updates the selected wallet without a second password or OTP', async () => {
     open('/admin/settings/finance'); const user = userEvent.setup()
     await user.type(await screen.findByRole('textbox', { name: 'شمارهٔ موبایل یا ایمیل کامل' }), 'customer@example.test')

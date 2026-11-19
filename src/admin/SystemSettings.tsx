@@ -142,19 +142,46 @@ export function SystemGateway() {
 }
 interface LogEvent { id: string; createdAt: string; level: string; service: string; event: string; actorId: string | null; requestId: string | null; metadata: Record<string, unknown> }
 interface Page<T> { items: T[]; total: number; page: number; pages: number }
+interface RenewalAlert {
+  id: string; level: 'warn' | 'critical'; status: 'active' | 'acknowledged' | 'resolved'; code: string
+  subscriptionId?: string; serverId?: string; dueAt?: string; lastPaidAt?: string; lastSeenAt: string; overduePeriods: number; fxAgeMs?: number
+}
+function RenewalAlerts() {
+  const alerts = useApiQuery(() => get<RenewalAlert[]>('/renewal-alerts'))
+  const [notice, setNotice] = useState('')
+  const count = alerts.data?.filter(item => item.level === 'critical' && item.status !== 'resolved').length ?? 0
+  return <Card><h2>هشدارهای تمدید ساعتی · <span>{count.toLocaleString('fa-IR')} خطرناک</span></h2>
+    <Button variant="secondary" onClick={alerts.refetch}>به‌روزرسانی هشدارها</Button>
+    {alerts.error && <p role="alert">{alerts.error}</p>}
+    {alerts.loading && <p role="status">در حال دریافت…</p>}
+    {alerts.data?.map(item => <details key={item.id} className={`system-record ${item.level === 'critical' && item.status !== 'resolved' ? 'system-critical' : ''}`}>
+      <summary>{item.level === 'critical' ? 'خطرناک' : 'هشدار'} · {item.status === 'resolved' ? 'رفع‌شده' : item.status === 'acknowledged' ? 'مشاهده‌شده' : 'فعال'} · <bdi>{item.code}</bdi></summary>
+      <p>آخرین مشاهده {date(item.lastSeenAt)}{item.fxAgeMs === undefined ? '' : ` · سن نرخ ${Math.floor(item.fxAgeMs / 60000).toLocaleString('fa-IR')} دقیقه`}</p>
+      {item.subscriptionId && <p>اشتراک <bdi>{item.subscriptionId}</bdi> · سرور <bdi>{item.serverId || '—'}</bdi></p>}
+      {item.dueAt && <p>اولین سررسید {date(item.dueAt)} · دوره‌های معوق {item.overduePeriods.toLocaleString('fa-IR')}</p>}
+      {item.lastPaidAt && <p>آخرین برداشت {date(item.lastPaidAt)}</p>}
+      {item.status === 'active' && <Button variant="secondary" onClick={async () => {
+        try { await post('/renewal-alerts/' + encodeURIComponent(item.id) + '/acknowledge', {}); alerts.refetch(); setNotice('مشاهده ثبت شد.') }
+        catch (err) { setNotice(errorText(err)) }
+      }}>ثبت مشاهده</Button>}
+    </details>)}
+    <p role="status">{notice}</p>
+  </Card>
+}
 export function SystemLogs() {
+  const capabilities = useOutletContext<Capabilities>()
   const [page, setPage] = useState(1), [level, setLevel] = useState(''), [service, setService] = useState(''), [event, setEvent] = useState(''), [actorId, setActorId] = useState(''), [search, setSearch] = useState(''), [from, setFrom] = useState(''), [to, setTo] = useState('')
   const [detail, setDetail] = useState<LogEvent | null>(null), [notice, setNotice] = useState('')
   const sensitive = useSensitive(), [filters, setFilters] = useState<Record<string, string | number>>({ level: '', service: '', event: '', actorId: '', search: '' })
   const query = useApiQuery(() => get<Page<LogEvent>>('/logs?' + new URLSearchParams(Object.entries({ ...filters, page, limit: 20 }).map(([k, v]) => [k, String(v)]))), [page, filters])
-  return <div className="page-stack"><Card><h2>رویدادهای سیستم و Audit</h2><p>زمان‌ها با منطقهٔ Asia/Tehran نمایش داده می‌شوند. اطلاعات محرمانه و متن خام خطاها حذف شده‌اند؛ جست‌وجو بر اساس نام رخداد یا شناسهٔ درخواست است.</p>
+  return <div className="page-stack">{capabilities?.primaryIpv4Pricing && <RenewalAlerts />}<Card><h2>رویدادهای سیستم و Audit</h2><p>زمان‌ها با منطقهٔ Asia/Tehran نمایش داده می‌شوند. اطلاعات محرمانه و متن خام خطاها حذف شده‌اند؛ جست‌وجو بر اساس نام رخداد یا شناسهٔ درخواست است.</p>
     <form className="system-filter" onSubmit={e => { e.preventDefault(); setPage(1); setFilters({ level, service, event, actorId, search, ...(from ? { from: new Date(from).toISOString() } : {}), ...(to ? { to: new Date(to).toISOString() } : {}) }) }}>
       <Input label="جست‌وجو" value={search} onChange={e => setSearch(e.target.value)} /><Input label="نوع رخداد" value={event} onChange={e => setEvent(e.target.value)} /><Input label="شناسهٔ کاربر / مدیر" value={actorId} onChange={e => setActorId(e.target.value)} />
-      <Select label="شدت" value={level} onChange={e => setLevel(e.target.value)}><option value="">همه</option><option value="info">اطلاعات</option><option value="warn">هشدار</option><option value="error">خطا</option></Select><Select label="سرویس" value={service} onChange={e => setService(e.target.value)}><option value="">همه</option>{['audit', 'api', 'worker', 'cloud-api', 'cloud-server', 'cloud-worker', 'cloud-migrate'].map(s => <option key={s}>{s}</option>)}</Select>
+      <Select label="شدت" value={level} onChange={e => setLevel(e.target.value)}><option value="">همه</option><option value="info">اطلاعات</option><option value="warn">هشدار</option><option value="error">خطا</option><option value="critical">خطرناک</option></Select><Select label="سرویس" value={service} onChange={e => setService(e.target.value)}><option value="">همه</option>{['audit', 'billing', 'api', 'worker', 'cloud-api', 'cloud-server', 'cloud-worker', 'cloud-migrate'].map(s => <option key={s}>{s}</option>)}</Select>
       <Input label="از زمان" type="datetime-local" value={from} onChange={e => setFrom(e.target.value)} /><Input label="تا زمان" type="datetime-local" value={to} onChange={e => setTo(e.target.value)} /><Button type="submit">اعمال فیلتر</Button>
     </form>
     <Button variant="secondary" onClick={() => { const payload = { ...filters, page, limit: 20 }; sensitive('logs.export', payload, 'دریافت حداکثر ۱۰۰۰ رخداد پاک‌سازی‌شده با ثبت Audit.', async proof => { const data = await apiPost(base + '/logs/export', { ...payload, proof }); download(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), 'system-events.json'); setNotice('خروجی آماده شد.') }) }}>دریافت خروجی امن</Button>
-    {query.error ? <p role="alert">{query.error}</p> : null}{query.loading ? <p role="status">در حال دریافت…</p> : query.data?.items.map(item => <button className="system-log" key={item.id} onClick={() => setDetail(item)}><time>{date(item.createdAt)}</time><strong dir="ltr">{item.event}</strong><span>{item.level} · {item.service}</span><small dir="ltr">{item.requestId || item.actorId}</small></button>)}
+    {query.error ? <p role="alert">{query.error}</p> : null}{query.loading ? <p role="status">در حال دریافت…</p> : query.data?.items.map(item => <button className={`system-log ${item.level === 'critical' ? 'system-critical' : ''}`} key={item.id} onClick={() => setDetail(item)}><time>{date(item.createdAt)}</time><strong dir="ltr">{item.event}</strong><span>{item.level === 'critical' ? 'خطرناک' : item.level} · {item.service}</span><small dir="ltr">{item.requestId || item.actorId}</small></button>)}
     {!query.loading && !query.data?.items.length ? <p>رویدادی با این فیلترها یافت نشد.</p> : null}<Pagination page={page} pages={query.data?.pages ?? 0} setPage={setPage} /><p role="status">{notice}</p>
   </Card><Modal trapFocus open={!!detail} onClose={() => setDetail(null)} title="جزئیات رویداد"><pre className="system-json" dir="ltr">{JSON.stringify(detail, null, 2)}</pre></Modal></div>
 }

@@ -42,3 +42,20 @@ a debt or debit the wallet for a blocked period. An operator should reconcile
 provider usage, FX evidence and the ledger for the window before approving any
 settlement or a new billing boundary. No customer balance, rate, server state
 or production configuration was changed during this investigation.
+
+## Follow-up policy in #154
+
+An eligible running Hetzner hourly subscription takes the historical EUR/IRR
+rate first. For an hour without valid historical evidence, the worker uses the
+latest positive operator-approved or AbanTether EUR observation available when
+the sweep began. This can be an observation beyond the normal freshness limit.
+Invoices and debits record the selected observation and the original boundary.
+An open invoice keeps its recorded rate on retry.
+
+Each sweep processes at most one due period per subscription. Subsequent sweeps
+catch up in order using the same wallet checks and atomic settlement, with no
+approval step. Missing observations or contradictory receipts leave that period
+blocked. The Super Admin Logs page shows persistent warnings and critical
+alerts. Acknowledging a notice only records that it was seen. Subscription
+alerts resolve after fresh EUR evidence and a regular successful payment leave
+the subscription current.

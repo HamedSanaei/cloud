@@ -264,7 +264,7 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
     const admin = requireAdmin(request)
     const query = parse(z.object({ action: z.string().optional(), limit: z.coerce.number().int().positive().max(200).optional() }), request.query)
     const rows = await listAudit(db, { action: query.action, limit: query.limit ?? 50 })
-    return { data: isPricingSuperAdmin(admin) ? rows : rows.map(row => row.action === 'admin.price_rule.changed' &&
+    return { data: isPricingSuperAdmin(admin) ? rows : rows.filter(row => !(row.metadata as { alertId?: string } | null)?.alertId).map(row => row.action === 'admin.price_rule.changed' &&
       (row.metadata as { provider?: string } | null)?.provider === 'hetzner' ? { ...row, metadata: null } : row) }
   })
 }

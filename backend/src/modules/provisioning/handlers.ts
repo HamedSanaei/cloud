@@ -1,7 +1,9 @@
 import { enqueueSms, dispatchSms } from '../notifications/sms.js'
 import { sweepSmsEvents, smsToman, smsDate } from '../notifications/sms-events.js'
-import { isRenewalPriceBlocked, renewalPrice } from '../pricing/renewal.js'
-import { getActiveFxRate } from '../pricing/service.js'
+import { isRenewalPriceBlocked, latestApprovedEuro, renewalPrice } from '../pricing/renewal.js'
+import { fxMaxAgeMs, getActiveFxRate } from '../pricing/service.js'
+import { monitorEuroRenewals, observeRenewalAlert, resolveRenewalAlerts } from '../billing/renewal-alerts.js'
+import { getConfig } from '../../config.js'
 /**
  * Job handlers. These are plain functions (no BullMQ dependency) so they can
  * be unit-tested directly. The worker wraps them with retry/backoff.
@@ -689,7 +691,11 @@ async function syncLegacyPowerState(db: DbClient, server: typeof servers.$inferS
 // ---------------------------------------------------------------------------
 export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed: number; failed: number; pricingBlocked: number; suspended: number; shutdownRequested: number }> {
   const { db, queues } = ctx
-  // Refresh before transactions; historical invoice creation still selects only FX valid in its hour.
+  // Freeze the fallback once per sweep. Open invoices keep their saved rate.
+  const asOf = new Date()
+  const latest = await latestApprovedEuro(db, asOf)
+  const fxAgeMs = latest ? asOf.getTime() - latest.createdAt.getTime() : undefined
+  if (getConfig().PROVIDERS.hetzner.enabled) await monitorEuroRenewals(db, fxAgeMs)
   const needsUsdt = await db.query.quotes.findFirst({ where: t => inArray(t.providerCurrency, ['USD', 'USDT']), columns: { id: true } })
   if (needsUsdt) {
     try { await getActiveFxRate(db, 'USDT') } catch (error) {
@@ -707,7 +713,7 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
     const outcome = await db.transaction(async (tx) => {
       await tx.select({ id: users.id }).from(users).where(eq(users.id, sub.userId)).for('no key update')
       const [current] = await tx.select().from(subscriptions).where(eq(subscriptions.id, sub.id)).for('update').limit(1)
-      if (!current || current.nextInvoiceAt > new Date()) return 'skipped'
+      if (!current || current.nextInvoiceAt > asOf || current.currentPeriodEnd > asOf) return 'skipped'
       if (current.status !== 'active' && current.status !== 'grace') return 'skipped'
       if (current.serverId) {
         const server = await tx.query.servers.findFirst({ where: t => eq(t.id, current.serverId!) })
@@ -718,19 +724,38 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
         if (!server || server.status !== 'active' || server.billingPowerBlocked) return 'skipped'
       }
       const order = current.orderId ? await tx.query.orders.findFirst({ where: (t) => eq(t.id, current.orderId!) }) : null
+      const hourly = current.billingInterval === 'HOURLY'
+      const recoverable = hourly && !!current.serverId && order?.provider === 'hetzner'
+      const alert = (code: string, age?: number) => observeRenewalAlert(tx, { code, fxAgeMs: age,
+        subscriptionId: current.id, serverId: current.serverId, dueAt: current.currentPeriodEnd.toISOString() })
       // An unpaid period reuses its existing invoice on every sweep.
       let invoice = await tx.query.invoices.findFirst({
         where: (t) => and(eq(t.subscriptionId, current.id), eq(t.status, 'open')),
         orderBy: (t, { asc }) => [asc(t.createdAt)],
       })
+      if (hourly) {
+        const paid = await tx.query.invoices.findFirst({
+          where: (t, { or }) => and(eq(t.subscriptionId, current.id), eq(t.status, 'paid'),
+            or(eq(t.dueAt, current.currentPeriodEnd), sql`${t.snapshot}->>'periodStart' = ${current.currentPeriodEnd.toISOString()}`)),
+          columns: { id: true },
+        })
+        if (paid || invoice && invoice.dueAt?.getTime() !== current.currentPeriodEnd.getTime()) {
+          await alert('renewal_period_mismatch')
+          return 'pricing_blocked'
+        }
+      }
       if (!invoice) {
         let pricingSnapshot: Awaited<ReturnType<typeof renewalPrice>> | { totalRial: number; grandfathered: true }
         try {
           pricingSnapshot = current.billingInterval === 'HOURLY' || current.billingInterval === 'MONTHLY'
-            ? await renewalPrice(tx, current.orderId!, current.billingInterval, current.currentPeriodEnd)
+            ? await renewalPrice(tx, current.orderId!, current.billingInterval, current.currentPeriodEnd, recoverable ? { asOf, latest } : undefined)
             : { totalRial: current.priceRial, grandfathered: true }
         } catch (error) {
           if (!isRenewalPriceBlocked(error)) throw error
+          if (hourly) {
+            await alert(error.code, error.code === 'renewal_fx_unavailable' ? fxAgeMs : undefined)
+            return 'pricing_blocked'
+          }
           // Keep this period at its original boundary for reconciliation. The
           // subscription lock deduplicates the audit across retries/workers.
           const dueAt = current.currentPeriodEnd.toISOString()
@@ -743,6 +768,7 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
             metadata: { subscriptionId: current.id, dueAt, code: error.code } })
           return 'pricing_blocked'
         }
+        if ('fxFallback' in pricingSnapshot && pricingSnapshot.fxFallback) await alert('renewal_fx_fallback', pricingSnapshot.fxAgeMs)
         const renewalAmount = pricingSnapshot.totalRial
         const invoiceNumber = await generateNumber(tx, 'INV', invoices, invoices.invoiceNumber)
         const [created] = await tx.insert(invoices).values({
@@ -783,6 +809,11 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
         }
       }
       if (!current.autoRenew) return 'skipped'
+      const fxReceipt = invoice.snapshot as Record<string, unknown> | null
+      const fallbackMetadata = fxReceipt?.fxFallback === true ? Object.fromEntries(
+        ['fxFallback', 'fxRateId', 'fxRate', 'fxAt', 'fxSource', 'fxSelectedAt', 'fxAgeMs', 'fxSelectionPolicy', 'fxFallbackReason', 'periodStart']
+          .map(key => [key, fxReceipt[key]]),
+      ) : undefined
       const [attempt] = await tx.insert(renewalAttempts).values({
         subscriptionId: current.id,
         invoiceId: invoice.id,
@@ -798,10 +829,12 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
           referenceType: 'subscription',
           referenceId: current.id,
           idempotencyKey: `renewal:${invoice.id}`,
+          metadata: fallbackMetadata,
           description: `پرداخت خودکار تمدید ${invoice.invoiceNumber}`,
         })
       } catch (err) {
         if (!(err instanceof AppError) || err.code !== 'insufficient_funds') throw err
+        if (hourly) await alert('renewal_insufficient_funds')
         await tx.update(renewalAttempts).set({ status: 'insufficient_funds', error: (err as Error).message }).where(eq(renewalAttempts.id, attempt.id))
         if (current.status !== 'grace') {
           await enterGracePeriod(tx, current.id)
@@ -822,7 +855,14 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
       const renewedSub = await tx.query.subscriptions.findFirst({ where: t => eq(t.id, current.id) })
       await tx.update(invoices).set({ snapshot: { ...(invoice.snapshot as Record<string, unknown>), periodStart: renewedSub!.currentPeriodStart.toISOString(), periodEnd: renewedSub!.currentPeriodEnd.toISOString() } }).where(eq(invoices.id, invoice.id))
       await enqueueSms(tx, 'serviceRenewed', current.userId, `invoice:${invoice.id}:renewed`, { serviceName: order?.hostname ?? 'سرور', endDate: smsDate(renewedSub!.currentPeriodEnd) })
+      if (hourly && fxReceipt?.providerCurrency === 'EUR' && !fallbackMetadata && fxAgeMs !== undefined && fxAgeMs < fxMaxAgeMs('EUR') &&
+          renewedSub!.nextInvoiceAt > new Date()) await resolveRenewalAlerts(tx, current.id + '.')
       return 'renewed'
+    }).catch(async error => {
+      if (sub.billingInterval !== 'HOURLY') throw error
+      await db.transaction(tx => observeRenewalAlert(tx, { code: 'renewal_transaction_failed', subscriptionId: sub.id,
+        serverId: sub.serverId, dueAt: sub.currentPeriodEnd.toISOString() }))
+      return 'pricing_blocked'
     })
     if (outcome === 'renewed') renewed++
     if (outcome === 'failed') failed++

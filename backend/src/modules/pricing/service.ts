@@ -14,6 +14,7 @@ type FxRate = { rate: string; from: string; to: string; createdAt: Date; id?: nu
 const usdtRefreshes = new WeakMap<DbClient, Promise<FxRate>>()
 const euroRefreshes = new WeakMap<DbClient, Promise<FxRate>>()
 export const euroRefreshIntervalMs = 30 * 60 * 1000
+export const euroMarketSource = 'AbanTether EURIRT buy_price (toman × 10)'
 /** Market USDT expires at the configured TTL; operator-set non-USDT rates last 24h. */
 export const fxMaxAgeMs = (currency: string) => (['USD', 'USDT'].includes(currency) ? getConfig().USDT_RATE_MAX_AGE_SECONDS : 86400) * 1000
 const marketTicker = (currency: 'USDT' | 'EUR') => z.object({
@@ -124,7 +125,7 @@ export function refreshEuroRate(db: DbClient): Promise<FxRate> {
       id: row.id, rate: row.rate, from: 'EUR', to: 'IRR', createdAt: row.createdAt, source: row.note ?? 'operator-approved',
     }
     const rate = await fetchMarketRate('EUR')
-    const saved = await setFxRate(tx, rate, { currency: 'EUR', source: 'market', note: 'AbanTether EURIRT buy_price (toman × 10)' })
+    const saved = await setFxRate(tx, rate, { currency: 'EUR', source: 'market', note: euroMarketSource })
     return { id: saved.id, rate: saved.rate, from: 'EUR', to: 'IRR', createdAt: saved.createdAt, source: saved.note! }
   }).catch(error => {
     recordEvent('pricing.eur_refresh_failed', 'error', 'pricing', { code: 'eur_rate_unavailable' })
