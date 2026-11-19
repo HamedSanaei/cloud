@@ -12,7 +12,7 @@ vi.mock('../src/lib/platformClient', () => ({ getIntegrationStatus: async () => 
 const posted = '2026-11-13T23:26:00Z', due = '2026-11-13T23:25:00Z'
 vi.mock('../src/lib/endpoints', () => ({
   getWalletSummary: async () => ({ totalBalance: 100, wallets: 1 }), listWallets: async () => [],
-  listTransactions: async () => [{ id: 'tx-1', description: 'پرداخت خودکار تمدید INV-1', amount: -100, date: posted, scheduledAt: due, status: 'success' }],
+  listTransactions: async () => ({ complete: true, rows: [{ id: 'tx-1', description: 'پرداخت خودکار تمدید INV-1', amount: -100, date: posted, scheduledAt: due, status: 'success' }] }),
   listInvoices: async () => [{ id: 'inv-1', number: 'INV-1', description: 'تمدید ساعتی', amount: 100, date: posted, dueAt: due, paidAt: posted, status: 'paid' }],
   listChargeRequests: async () => [], createWallet: vi.fn(),
 }))
