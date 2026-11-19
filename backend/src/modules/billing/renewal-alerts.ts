@@ -3,7 +3,6 @@ import type { DbClient, DbOrTx } from '../../db/index.js'
 import { settings, systemEvents } from '../../db/schema.js'
 import { NotFoundError } from '../../lib/errors.js'
 import { writeAudit } from '../audit/service.js'
-import { latestApprovedEuro } from '../pricing/renewal.js'
 import { euroRefreshIntervalMs, fxMaxAgeMs } from '../pricing/service.js'
 
 const prefix = 'billing.renewal-alert.'
