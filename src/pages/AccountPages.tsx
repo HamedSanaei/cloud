@@ -212,7 +212,9 @@ export function SessionsPage() {
                 <p><MapPin size={15} /> {session.location} <span>·</span> آخرین فعالیت: <time dateTime={session.lastActivity}>{activity(session)}</time></p>
               </div>
               {session.current ? (
-                <LogoutButton icon={<LogOut size={17} />} disabled={revoking} onClick={() => void revoke()}>خروج از سایر نشست‌ها</LogoutButton>
+                <LogoutButton icon={<LogOut size={17} />} disabled={revoking} onClick={() => void revoke()}>
+                  {revoking && !target ? 'در حال خروج...' : 'خروج از سایر نشست‌ها'}
+                </LogoutButton>
               ) : <LogoutButton disabled={revoking} onClick={() => { setRevokeError(''); setTarget(session) }}>پایان این نشست</LogoutButton>}
             </article>
           ))
