@@ -57,12 +57,37 @@ export function embeddedPrices(html: string): PublicHomePrices | null {
 export function sortHetznerOffers(offers: PublicHetznerOffer[], period: 'hourly' | 'monthly') {
   return [...offers].sort((a, b) => (a[period] ?? Infinity) - (b[period] ?? Infinity) || a.name.localeCompare(b.name) || a.location.localeCompare(b.location))
 }
+// Officially assigned ISO 3166-1 alpha-2 codes. The catalog supplies the available filters.
+const countryCodes = new Set((
+  'AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ ' +
+  'CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR ' +
+  'GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP ' +
+  'KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT ' +
+  'MU MV MW MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW ' +
+  'SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG ' +
+  'UM US UY UZ VA VC VG VI VN VU WF WS YE YT ZA ZM ZW'
+).split(' '))
+const countryNames = new Intl.DisplayNames('fa', { type: 'region' })
+export function tariffCountryCode(country: string | null | undefined) {
+  const code = country?.trim().toUpperCase() ?? ''
+  return countryCodes.has(code) ? code : ''
+}
+export const tariffCountryName = (code: string) => countryNames.of(code) ?? code
+export const tariffFlagImage = (code: string) => ['DE', 'FI', 'US', 'SG'].includes(code) ? `/flags/${code.toLowerCase()}.svg` : undefined
+export const tariffFlagEmoji = (code: string) => String.fromCodePoint(...Array.from(code, char => char.charCodeAt(0) + 0x1f1a5))
 export function publicLocation(offer: Pick<PublicHetznerOffer, 'location' | 'country' | 'city'>) {
-  let country = ''
-  if (offer.country && /^[a-z]{2}$/i.test(offer.country)) country = new Intl.DisplayNames(['fa'], { type: 'region' }).of(offer.country.toUpperCase()) ?? ''
-  return [country, offer.city, offer.location].filter(Boolean).join('، ')
+  const code = tariffCountryCode(offer.country)
+  return [code ? tariffCountryName(code) : '', offer.city, offer.location].filter(Boolean).join('، ')
 }
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!)
+function locationCell(offer: PublicHetznerOffer) {
+  const code = tariffCountryCode(offer.country)
+  const place = `<bdi>${escapeHtml([offer.city, offer.location].filter(Boolean).join('، '))}</bdi>`
+  if (!code) return `<td><div class="tariff-location"><small>کشور نامشخص</small>${place}</div></td>`
+  const name = escapeHtml(tariffCountryName(code)), image = tariffFlagImage(code)
+  const flag = image ? `<img src="${image}" width="24" height="16" alt="" loading="lazy">` : `<span class="tariff-flag-emoji" aria-hidden="true">${tariffFlagEmoji(code)}</span>`
+  return `<td><div class="tariff-location"><details class="tariff-location-flag" name="tariff-location-countries"><summary aria-label="${name}">${flag}<span class="tariff-country-tip" aria-hidden="true">${name}</span></summary></details>${place}</div></td>`
+}
 const number = new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 })
 const moneyDisplay = new Intl.NumberFormat('fa-IR', { useGrouping: true, maximumFractionDigits: 0 })
 export const hetznerTrafficQuota = (bytes: number | null | undefined) => isTrafficByteCount(bytes) ? `${number.format(bytes / 2 ** 40)} TB` : 'اعلام نشده'
@@ -70,11 +95,11 @@ export const tariffTime = new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium'
 const toman = (rial: number) => `${moneyDisplay.format(rial / 10)} تومان`
 const inquiry = 'استعلام قیمت'
 export const iranRateMaximum = 1_000_000_000_000
-const wrapTable = (caption: string, headings: string[], body: string) => `<div class="tariff-scroll" tabindex="0" role="region" aria-label="${caption}"><table><caption>${caption}</caption><thead><tr>${headings.map(heading => `<th scope="col">${heading}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div>`
+const wrapTable = (caption: string, headings: string[], body: string, hetzner = false) => `<div class="tariff-scroll${hetzner ? ' tariff-scroll--hetzner' : ''}" tabindex="0" role="region" aria-label="${caption}"><table><caption>${caption}</caption><thead><tr>${headings.map(heading => `<th scope="col">${heading}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div>`
 
 export const hetznerTariffHeading = 'تعرفه سرور هتزنر'
 
-export function renderTariffSections(iran: IranTariffs | null, hetzner: PublicHetznerOffer[] | null, meta?: PublicTariffMeta, scope: TariffScope = 'all', sort: 'hourly' | 'monthly' = 'hourly') {
+export function renderTariffSections(iran: IranTariffs | null, hetzner: PublicHetznerOffer[] | null, meta?: PublicTariffMeta, scope: TariffScope = 'all', sort: 'hourly' | 'monthly' = 'hourly', countryFiltered = false) {
   const iranRows = (Object.keys(iranResources) as IranResource[]).map(key => {
     const rate = iran?.rates[key]
     const unit = key === 'cpu' ? '۱ هسته vCPU' : key === 'ram' ? '۱ گیگابایت RAM' : iran ? `۱ ${escapeHtml(iran.trafficUnit)}` : 'واحد پس از تأیید قرارداد'
@@ -92,12 +117,12 @@ export function renderTariffSections(iran: IranTariffs | null, hetzner: PublicHe
   }
   const sorted = sortHetznerOffers(hetzner ?? [], sort)
   const hetznerTable = hetzner?.length ? '<p class="tariff-scroll-hint">برای دیدن همهٔ قیمت‌ها، جدول را افقی پیمایش کنید.</p>' +
-    wrapTable('پلن‌های قابل سفارش هتزنر', ['پلن', 'موقعیت', 'vCPU', 'RAM (گیگابایت)', 'فضای دیسک (گیگابایت)', 'ترافیک ماهانهٔ مشمول', 'ساعتی (تومان / ساعت)', 'ماهانه (تومان / ماه)', 'قیمت هر ترابایت ترافیک مازاد (تومان / TB)'],
-    sorted.map(offer => `<tr><th scope="row">${planLink(offer)}${offer.diskType ? `<small class="tariff-disk-type">نوع دیسک <bdi>${escapeHtml(offer.diskType)}</bdi></small>` : ''}</th><td><bdi>${escapeHtml(publicLocation(offer))}</bdi></td>` +
+    wrapTable('پلن‌های قابل سفارش هتزنر', ['پلن', 'لوکیشن', 'vCPU', 'RAM (گیگابایت)', 'فضای دیسک (گیگابایت)', 'ترافیک ماهانهٔ مشمول', 'ساعتی (تومان / ساعت)', 'ماهانه (تومان / ماه)', 'قیمت هر ترابایت ترافیک مازاد (تومان / TB)'],
+    sorted.map(offer => `<tr><th scope="row">${planLink(offer)}${offer.diskType ? `<small class="tariff-disk-type">نوع دیسک <bdi>${escapeHtml(offer.diskType)}</bdi></small>` : ''}</th>${locationCell(offer)}` +
       `<td>${number.format(offer.vcpu)}</td><td>${number.format(offer.memoryMb / 1024)}</td><td>${number.format(offer.diskGb)}</td>` +
       `<td><bdi>${hetznerTrafficQuota(offer.includedTrafficBytes ?? offer.trafficOverage?.includedBytes)}</bdi></td>` +
-      `<td>${displayPrice(offer.hourly, 'hourly')}</td><td>${displayPrice(offer.monthly, 'monthly')}</td><td>${offer.trafficOverage ? `<bdi>${toman(offer.trafficOverage.perTbRial)}</bdi>` : 'نرخ معتبر در دسترس نیست'}</td></tr>`).join(''))
-    : `<p role="status">${meta?.status === 'pricing_unavailable' ? 'نرخ ارز معتبر برای محاسبهٔ قیمت هتزنر در دسترس نیست؛ پس از تأیید نرخ تازه، قیمت‌ها نمایش داده می‌شوند.' : hetzner === null ? 'دریافت تعرفهٔ هتزنر موقتاً ممکن نیست.' : 'در حال حاضر پلن قابل سفارش هتزنر برای نمایش وجود ندارد.'}</p>`
+      `<td>${displayPrice(offer.hourly, 'hourly')}</td><td>${displayPrice(offer.monthly, 'monthly')}</td><td>${offer.trafficOverage ? `<bdi>${toman(offer.trafficOverage.perTbRial)}</bdi>` : 'نرخ معتبر در دسترس نیست'}</td></tr>`).join(''), true)
+    : `<p role="status">${countryFiltered ? 'سروری برای این کشور یافت نشد' : meta?.status === 'pricing_unavailable' ? 'نرخ ارز معتبر برای محاسبهٔ قیمت هتزنر در دسترس نیست؛ پس از تأیید نرخ تازه، قیمت‌ها نمایش داده می‌شوند.' : hetzner === null ? 'دریافت تعرفهٔ هتزنر موقتاً ممکن نیست.' : 'در حال حاضر پلن قابل سفارش هتزنر برای نمایش وجود ندارد.'}</p>`
   const iranSection = `<section id="iran-server"><h3>تعرفه سرور ایران (ماهانه)</h3>` +
     (iran ? `<p>${iran.trafficUnit === 'TB' ? 'هر TB برابر ۱٬۰۰۰ GB است.' : 'هر TiB برابر ۱٬۰۲۴ GiB است.'} نرخ‌ها ${iran.tax === 'included' ? 'شامل مالیات هستند' : 'بدون مالیات هستند'}.</p>`
       : '<p>تعرفهٔ تأییدشدهٔ آسیاتک هنوز منتشر نشده است. برای خرید سرور ایران، وضعیت عرضه و قیمت را از پشتیبانی استعلام کنید.</p>') +

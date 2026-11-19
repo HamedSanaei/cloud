@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { expect, it, vi } from 'vitest'
 import { LandingPage } from '../src/pages/LandingPage'
@@ -42,8 +43,11 @@ it.each(['all', 'hetzner'] as const)('shows the same rounded money and exact all
   render(<HomeTariffs initialHtml={initial} scope={scope} />)
   const table = screen.getByRole('table', { name: 'پلن‌های قابل سفارش هتزنر' })
   expect(table.outerHTML).toBe(ssr.querySelector('#hetzner-server table')?.outerHTML)
-  expect(within(table).getAllByRole('cell').map(cell => cell.textContent)).toEqual([
-    'hel1', '۲', '۴', '۴۰', '۰٫۵ TB', '۱۲۳٬۴۵۷ تومان', '۵٬۰۰۰٬۰۰۰ تومان', '۳۳۳٬۴۵۶ تومان',
+  const [location, ...prices] = within(table).getAllByRole('cell')
+  expect(within(location).getByText('hel1')).toBeTruthy()
+  expect(within(location).getByText('کشور نامشخص')).toBeTruthy()
+  expect(prices.map(cell => cell.textContent)).toEqual([
+    '۲', '۴', '۴۰', '۰٫۵ TB', '۱۲۳٬۴۵۷ تومان', '۵٬۰۰۰٬۰۰۰ تومان', '۳۳۳٬۴۵۶ تومان',
   ])
   expect(within(table).getAllByRole('link')).toHaveLength(1)
   expect(within(table).getByRole('columnheader', { name: 'RAM (گیگابایت)' })).toBeTruthy()
@@ -106,4 +110,81 @@ it('sorts by independent retail monthly prices and filters real catalog location
   expect(screen.getAllByRole('rowheader')).toHaveLength(1)
   expect(firstPlan().textContent).toBe('CX monthly')
   expect(firstPlan().getAttribute('href')).toBe('/servers/create?offer=fixture&period=monthly&location=hel1')
+})
+
+const catalog = ([
+  ['fsn1', 'de', 'Falkenstein'], ['nbg1', 'DE', 'Nuremberg'],
+  ['ash', 'US', 'Ashburn'], ['hil', 'US', 'Hillsboro'],
+  ['hel1', 'FI', 'Helsinki'], ['sin', 'SG', 'Singapore'],
+  ['lon', 'GB', 'London'], ['unknown', 'ZZ', 'Unassigned'],
+] as const).map(([location, country, city], index) => ({
+  ...plan, id: location, name: `CX ${location}`, location, country, city,
+  hourly: 1_000 + index, monthly: 10_000 - index,
+}))
+
+it('uses actual countries, reconciles location filters and preserves sort and order links', async () => {
+  const user = userEvent.setup(), current = snapshot(catalog)
+  const initial = renderHomeTariffs(null, catalog, current.meta)
+  const ssr = new DOMParser().parseFromString(initial, 'text/html')
+  const beforeScript = ssr.querySelector('#hetzner-server table')!
+  expect(beforeScript.tBodies[0].rows).toHaveLength(8)
+  expect(beforeScript.tHead?.rows[0].cells[1].textContent).toBe('لوکیشن')
+  expect(beforeScript.querySelector('summary[aria-label="آلمان"] img')?.getAttribute('src')).toBe('/flags/de.svg')
+  expect(beforeScript.querySelector('summary[aria-label="آلمان"]')?.parentElement?.nextElementSibling?.textContent).toBe('Falkenstein، fsn1')
+  expect(beforeScript.textContent).toContain('کشور نامشخص')
+
+  render(<HomeTariffs initialHtml={initial} />)
+  const filters = within(screen.getByRole('group', { name: 'کشور دیتاسنتر' }))
+  const all = filters.getByRole('button', { name: 'همه کشورها' })
+  const table = () => within(screen.getByRole('table', { name: 'پلن‌های قابل سفارش هتزنر' }))
+  const plans = () => table().getAllByRole('link').map(link => link.textContent)
+  const location = screen.getByLabelText('موقعیت دیتاسنتر') as HTMLSelectElement
+  expect(all.getAttribute('aria-pressed')).toBe('true')
+  expect(filters.getAllByRole('button')).toHaveLength(6)
+  expect(plans()).toHaveLength(8)
+  expect(filters.getByRole('button', { name: 'بریتانیا' }).querySelector('.tariff-flag-emoji')?.textContent).toBe('🇬🇧')
+
+  await user.selectOptions(location, 'hel1')
+  const germany = filters.getByRole('button', { name: 'آلمان' })
+  germany.focus()
+  await user.keyboard('{Enter}')
+  expect(germany.getAttribute('aria-pressed')).toBe('true')
+  expect(location.value).toBe('')
+  expect([...location.options].map(option => option.value)).toEqual(['', 'fsn1', 'nbg1'])
+  expect(plans()).toEqual(['CX fsn1', 'CX nbg1'])
+  await user.selectOptions(screen.getByLabelText('مقایسه از کم‌هزینه به بیشتر'), 'monthly')
+  expect(plans()).toEqual(['CX nbg1', 'CX fsn1'])
+  expect(table().getByRole('link', { name: /خرید CX nbg1/ }).getAttribute('href')).toBe('/servers/create?offer=nbg1&period=monthly&location=nbg1')
+
+  for (const [name, expected] of [
+    ['ایالات متحده', ['CX hil', 'CX ash']], ['فنلاند', ['CX hel1']], ['سنگاپور', ['CX sin']],
+  ] as const) {
+    await user.click(filters.getByRole('button', { name }))
+    expect(plans()).toEqual(expected)
+    expect(filters.getAllByRole('button', { pressed: true })).toHaveLength(1)
+  }
+  await user.click(all)
+  expect(plans()).toHaveLength(8)
+  expect(table().getByText('کشور نامشخص')).toBeTruthy()
+  await user.selectOptions(location, 'hil')
+  expect(plans()).toEqual(['CX hil'])
+})
+
+it('keeps compatible filters during refresh and offers a reset when the selected country is withdrawn', async () => {
+  const next = vi.fn().mockResolvedValueOnce(Response.json({ data: snapshot(catalog.filter(offer => offer.location !== 'fsn1')) }))
+    .mockResolvedValueOnce(Response.json({ data: snapshot(catalog.filter(offer => !['DE', 'de'].includes(offer.country))) }))
+  vi.stubGlobal('fetch', next)
+  render(<HomeTariffs initialHtml={renderHomeTariffs(null, catalog, snapshot().meta, 'hetzner')} scope="hetzner" />)
+  const filters = within(screen.getByRole('group', { name: 'کشور دیتاسنتر' }))
+  fireEvent.click(filters.getByRole('button', { name: 'آلمان' }))
+  const location = screen.getByLabelText('موقعیت دیتاسنتر') as HTMLSelectElement
+  fireEvent.change(location, { target: { value: 'fsn1' } })
+  await act(async () => { fireEvent(window, new Event('online')) })
+  expect(location.value).toBe('')
+  expect(filters.getByRole('button', { name: 'آلمان', pressed: true })).toBeTruthy()
+  expect(screen.getByRole('link', { name: /خرید CX nbg1/ })).toBeTruthy()
+  await act(async () => { fireEvent(window, new Event('online')) })
+  expect(screen.getByText('سروری برای این کشور یافت نشد')).toBeTruthy()
+  fireEvent.click(filters.getByRole('button', { name: 'همه کشورها' }))
+  expect(screen.getAllByRole('rowheader')).toHaveLength(6)
 })

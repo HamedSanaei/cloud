@@ -30,7 +30,7 @@ it('shows a verified 20 TB quota independently of a missing overage price', () =
 })
 it('escapes provider text and safely roundtrips the SSR snapshot without executing markup', () => {
   const html = renderHomeTariffs(null, [plan], meta, 'hetzner')
-  expect(html).not.toContain('<img')
+  expect(html.match(/<img\b[^>]*>/g)).toEqual([expect.stringMatching(/^<img src="\/flags\/fi\.svg"[^>]*>$/)])
   expect(html).toContain('&lt;/script&gt;')
   expect(embeddedPrices(html)).toEqual({ iran: null, hetzner: [plan], meta })
   expect(html).toContain('۱۲٬۳۴۵ تومان')
