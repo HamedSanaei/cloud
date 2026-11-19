@@ -6,6 +6,7 @@ import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-do
 import { useAuth } from '../auth/AuthContext'
 import { BRAND_NAME, BrandMark } from '../components/Brand'
 import { OtpField } from '../components/OtpField'
+import { EmailSpamHint } from '../components/EmailSpamHint'
 import { ApiError } from '../lib/apiClient'
 import { toFaDigits } from '../lib/format'
 import { readSmsCode } from '../lib/webOtp'
@@ -329,7 +330,9 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
   const subtitle = challenge
     ? challenge.challengeType === 'totp'
       ? 'کد ۶ رقمی برنامه احراز هویت خود را وارد کنید.'
-      : <>کد ارسال‌شده به <bdi dir="ltr">{challenge.destination}</bdi> را وارد کنید.</>
+      : intent === 'forgot' && challenge.challengeType === 'email'
+        ? <>اگر حسابی با این آدرس وجود داشته باشد، کد بازیابی به <bdi dir="ltr">{challenge.destination}</bdi> ارسال می‌شود.</>
+        : <>کد ارسال‌شده به <bdi dir="ltr">{challenge.destination}</bdi> را وارد کنید.</>
     : intent === 'register' ? 'برای شروع مدیریت زیرساخت، حساب امن خود را بسازید.' : intent === 'forgot'
       ? method === 'phone' ? 'کد بازیابی را با پیامک به شمارهٔ همراه واردشده می‌فرستیم.' : 'کد بازیابی را به آدرس ایمیل واردشده می‌فرستیم.'
       : adminEntry ? 'با حساب مدیر پارس سرور وارد شوید.' : 'برای مدیریت سرویس‌های ابری وارد حساب خود شوید.'
@@ -438,6 +441,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
                     </>
                   )}
                   {intent === 'forgot' && <label className="auth-field"><span>کد برنامهٔ دومرحله‌ای (اگر فعال است)</span><input inputMode="numeric" dir="ltr" value={recoveryCode} onChange={e => setRecoveryCode(e.target.value)} autoComplete="off" /></label>}
+                  {challenge.challengeType === 'email' && <EmailSpamHint />}
                   {challenge.developmentCode && <p className="auth-dev-code">حالت توسعه — کد: <b dir="ltr">{challenge.developmentCode}</b></p>}
                   {error && <p className="auth-error" role="alert">{error}</p>}
                   <div role="status">{resent && 'کد جدید ارسال شد.'}</div>

@@ -22,6 +22,17 @@ their SHA-256 hashes are stored. A new challenge invalidates the previous one,
 and expiry, resend cooldown, resend ceiling, and attempt ceiling are all enforced
 by the API.
 
+Users who registered by phone can add a real email in their profile. The pending
+address is used only to send the verification code. The previously verified
+address stays current until the new code is accepted. Changing a verified
+address requires the current password and the TOTP code when enabled. A change
+revokes other sessions and disconnects Google sign-in for the previous address.
+
+Authorized administrators can block a customer account and revoke its sessions
+from the admin console. The separate data erasure action requires a reason and
+confirmation. Resolve active services, open orders and payments, and nonzero
+balances before erasure. Billing, audit, and operational records are retained.
+
 The older direct `/auth/register` and `/auth/login` endpoints remain available
 only outside production for existing tests and local tooling; production rejects
 them so email OTP or TOTP cannot be bypassed.

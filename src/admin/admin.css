@@ -132,6 +132,7 @@
 .admin-detail-content,.admin-detail-side { display: grid; gap: 20px; min-width: 0; }
 .admin-info-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px 18px; }
 .admin-fields { display: grid; gap: 21px; }
+.admin-fields dd { overflow-wrap: anywhere; }
 .admin-field { min-width: 0; }
 .admin-field dt { color: var(--admin-subtle); font-size: 11px; margin-bottom: 9px; }
 .admin-field dd { overflow-wrap: anywhere; font-size: 13px; font-weight: 650; line-height: 1.9; margin: 0; }

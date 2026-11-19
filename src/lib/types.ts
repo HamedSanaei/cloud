@@ -225,6 +225,7 @@ export interface Profile {
   nationalCode: string
   email: string
   emailVerified?: boolean
+  emailChangeTotp?: boolean
   legalEnabled: boolean
   companyName?: string
   nationalId?: string

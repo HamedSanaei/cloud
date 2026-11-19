@@ -41,7 +41,7 @@ try {
     const html = await normal.text(), bot = await (await fetch(origin + uri, { headers: { 'user-agent': 'Googlebot' } })).text()
     assert.equal(bot, html, 'Same complete content without JavaScript for ordinary and bot user agents')
     assert.equal((html.match(/<h1\b/g) || []).length, 1)
-    if (uri === '/') assert.ok(html.includes('<em>با پرداخت ریالی و امکان خرید به صورت ساعتی</em>'))
+    if (uri === '/') assert.ok(html.includes('<p class="hero-tagline">با پرداخت ریالی و امکان خرید به صورت ساعتی</p>'))
     assert.ok(html.includes(`rel="canonical" href="https://parserver.ir${uri}"`))
     assert.ok(!/<meta name="robots" content="noindex/.test(html))
     assert.ok(html.includes('CX-HTTP-fixture') && html.includes('۱۲٬۳۴۵ تومان'))

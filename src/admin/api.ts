@@ -13,6 +13,7 @@ export interface AdminUser {
   status: 'active' | 'pending' | 'disabled'
   emailVerifiedAt: string | null
   mobileVerifiedAt: string | null
+  dataDeleted?: boolean
   createdAt: string
   balanceRial?: number
   balanceToman?: number
@@ -36,6 +37,7 @@ export interface AdminOrder {
   paidAt: string | null
   createdAt: string
   error: string | null
+  serverStatus?: string | null
 }
 export interface AdminServer {
   id: string
@@ -90,17 +92,23 @@ export interface Paged<T> {
 }
 export interface AdminOverview {
   source: 'website'
-  users: number
-  orders: number
-  servers: number
-  activeServers: number
+  accounts: Array<{ role: 'user' | 'admin'; status: string; count: number }>
+  orderCounts: Record<string, number>
+  serverCounts: Record<string, number>
   ordersNeedingAttention: number
-  paidOrderTotalRial: number
-  paidOrderTotalToman: number
+  checkedAt: string
+  overdue: number
+  failedRenewals24h: number
+  finance?: {
+    initialRial: number; renewalRial: number; refundsRial: number; netRial: number; depositsRial: number
+    exceptionCount: number; renewalMismatchCount: number
+    exceptions: Array<{ id: string; orderNumber: string; debitRial: number; refundRial: number; invoicedRial: number; unreturned: boolean; mismatch: boolean }>
+  }
   recentOrders: AdminOrder[]
 }
 export interface AdminUserDetail {
   user: AdminUser
+  actions?: { canBlock: boolean; deleteBlocked: string | null } | null
   balanceRial: number
   balanceToman: number
   wallets: Array<{ id: string; name: string; currency: string; isDefault: boolean; balanceRial: number; balanceToman: number }>
@@ -115,6 +123,8 @@ export interface AdminOrderDetail {
   items: Array<{ id: string; description: string; quantity: number; totalRial: number; totalToman: number }>
   events: Array<{ fromStatus: string | null; toStatus: string; reason: string | null; createdAt: string }>
   invoice: { id: string; number: string; status: string; totalRial: number } | null
+  financialEvidence?: { debitRial: number; refundRial: number; invoicedRial: number; invoiceIds: string[]; transactionIds: string[];
+    operations: Array<{ id: string; status: string; kind: string }>; adjustments: Array<{ id: string; type: string; amountRial: number; referenceId: string | null; createdAt: string }> } | null
 }
 export interface AdminServerDetail {
   server: AdminServer
@@ -137,6 +147,8 @@ export const adminApi = {
   overview: () => fetchData<AdminOverview>('/overview'),
   users: (filter: ListFilters) => fetchData<Paged<AdminUser>>('/users' + listQuery(filter)),
   user: (id: string) => fetchData<AdminUserDetail>('/users/' + encodeURIComponent(id)),
+  userAccountAction: (id: string, action: 'block' | 'delete_data', reason: string) =>
+    apiPost(prefix + '/users/' + encodeURIComponent(id) + '/account-action', { action, confirm: id, reason }),
   userServers: (id: string, filter: ListFilters) => fetchData<Paged<AdminServer>>('/users/' + encodeURIComponent(id) + '/servers' + listQuery(filter)),
   orders: (filter: ListFilters) => fetchData<Paged<AdminOrder>>('/orders' + listQuery(filter)),
   order: (id: string) => fetchData<AdminOrderDetail>('/orders/' + encodeURIComponent(id)),

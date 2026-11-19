@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../../src/app.js'
-import { users } from '../../src/db/schema.js'
+import { authChallenges, users } from '../../src/db/schema.js'
 import { getConfig } from '../../src/config.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 import { createSession, registerUser } from '../../src/modules/auth/service.js'
@@ -144,5 +144,34 @@ describe.skipIf(skip)('site-wide single-step sign-in (integration)', () => {
     const list = (await app.inject({ url: '/api/sessions', headers })).json().data as { id: string }[]
     expect(list.map(item => item.id).sort()).toEqual([current.sessionId, spared.sessionId].sort())
     expect((await app.inject({ url: '/api/auth/me', headers: { authorization: `Bearer ${target.token}` } })).statusCode).toBe(401)
+  })
+
+  it('verifies a real address for a phone account and protects subsequent email changes', async () => {
+    const account = await registerUser(ctx.db, { email: 'phone.989000000000@accounts.serverhub.invalid', password: 'FixturePassword123!' })
+    await registerUser(ctx.db, { email: 'claimed-address@test.local', password: 'FixturePassword123!' })
+    const [current, other] = await Promise.all([createSession(ctx.db, account.id, {}), createSession(ctx.db, account.id, {})])
+    const headers = { authorization: `Bearer ${current.token}` }
+    const request = (path: string, payload: object, token = current.token) => app.inject({ method: 'POST', url: '/api/auth/account-email/' + path,
+      headers: { authorization: `Bearer ${token}` }, remoteAddress: '192.0.2.152', payload })
+    expect((await app.inject({ url: '/api/profile', headers })).json().data).toMatchObject({ email: '', emailVerified: false })
+    expect((await request('start', { email: account.email })).statusCode).toBe(400)
+    const conflict = await request('start', { email: ' CLAIMED-ADDRESS@test.local ' })
+    expect(conflict.statusCode).toBe(409)
+    expect(conflict.json().message).toContain('ایمیل دیگری')
+    const initial = await request('start', { email: ' Fresh-Address@test.local ' })
+    expect(initial.statusCode, initial.body).toBe(202)
+    const proof = { token: initial.json().data.token, code: initial.json().data.developmentCode }
+    expect((await request('verify', proof, other.token)).statusCode).toBe(403)
+    expect((await request('verify', proof)).statusCode).toBe(200)
+    expect((await request('verify', proof)).statusCode).toBe(400)
+    expect((await app.inject({ url: '/api/profile', headers })).json().data).toMatchObject({ email: 'fresh-address@test.local', emailVerified: true })
+    const replacement = 'new-address@test.local'
+    expect((await request('start', { email: replacement })).statusCode).toBe(403)
+    await ctx.db.update(authChallenges).set({ resendAfter: new Date(0) }).where(eq(authChallenges.userId, account.id))
+    const change = await request('start', { email: replacement, password: 'FixturePassword123!' })
+    expect(change.statusCode, change.body).toBe(202)
+    expect((await app.inject({ url: '/api/profile', headers })).json().data.email).toBe('fresh-address@test.local')
+    expect((await request('verify', { token: change.json().data.token, code: change.json().data.developmentCode })).statusCode).toBe(200)
+    expect((await app.inject({ url: '/api/profile', headers })).json().data).toMatchObject({ email: replacement, emailVerified: true })
   })
 })

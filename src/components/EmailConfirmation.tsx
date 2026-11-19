@@ -6,14 +6,19 @@ import { cancelOperationEmail, startOperationEmail, type EmailChallenge, type Em
 import { Button } from './ui/Button'
 import { Input } from './ui/FormControls'
 import { Modal } from './ui/Modal'
+import { EmailSpamHint } from './EmailSpamHint'
 
-export function EmailCode({ start, submit, cancel, onToken }: {
-  start: () => Promise<EmailChallenge>; submit: (proof: EmailProof) => Promise<void>
-  cancel: () => void; onToken?: (token: string) => void
+export type ActiveEmailChallenge = EmailChallenge & { expires: number; resendAt: number }
+export function EmailCode({ start, submit, cancel, onToken, initialChallenge, onChallenge, children }: {
+  start: (token?: string) => Promise<EmailChallenge>; submit: (proof: EmailProof) => Promise<void>
+  cancel: () => void; onToken?: (token: string) => void; initialChallenge?: ActiveEmailChallenge
+  onChallenge?: (challenge: ActiveEmailChallenge) => void; children?: ReactNode
 }) {
-  const [challenge, setChallenge] = useState<(EmailChallenge & { expires: number; resendAt: number }) | null>(null)
+  const [challenge, setChallenge] = useState<ActiveEmailChallenge | null>(initialChallenge ?? null)
   const [now, setNow] = useState(Date.now), [code, setCode] = useState(''), [busy, setBusy] = useState(false)
   const [error, setError] = useState(''), [needsEmail, setNeedsEmail] = useState(false)
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   useEffect(() => {
     if (!challenge) return
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
@@ -29,14 +34,20 @@ export function EmailCode({ start, submit, cancel, onToken }: {
     } finally { setBusy(false) }
   }
   const send = () => perform(async () => {
-    const next = await start(), timestamp = Date.now()
+    const next = await start(challenge && now < challenge.expires ? challenge.token : undefined), timestamp = Date.now()
+    const { token, expiresIn, resendAfter, destination } = next
+    const issued = { token, expiresIn, resendAfter, destination, expires: timestamp + expiresIn * 1000, resendAt: timestamp + resendAfter * 1000 }
     onToken?.(next.token)
+    if (!mounted.current) return
     setNow(timestamp); setCode('')
-    setChallenge({ ...next, expires: timestamp + next.expiresIn * 1000, resendAt: timestamp + next.resendAfter * 1000 })
+    setChallenge(issued)
+    onChallenge?.(issued)
   })
   return <div className="form-stack">
+    {(!challenge || now >= challenge.expires) && children}
     {challenge && <>
       <p>کد به <bdi>{challenge.destination}</bdi> فرستاده شد. {now < challenge.expires ? `${Math.ceil((challenge.expires - now) / 1000).toLocaleString('fa-IR')} ثانیه تا پایان اعتبار` : 'اعتبار کد تمام شده است.'}</p>
+      <EmailSpamHint />
       <Input label="کد تأیید ایمیل" inputMode="numeric" autoComplete="one-time-code" dir="ltr" maxLength={6} value={code}
         onChange={event => setCode(toAsciiDigits(event.target.value).replace(/\D/g, ''))} />
     </>}

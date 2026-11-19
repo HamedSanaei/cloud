@@ -16,7 +16,7 @@ it('renders trusted public prices, scopes table headers and links to the actual 
   const headings = screen.getAllByRole('heading', { level: 1 })
   expect(headings).toHaveLength(1)
   expect(headings[0]?.firstChild?.textContent).toBe('سرور ابری ایران و هتزنر')
-  expect(headings[0]?.querySelector('em')?.textContent).toBe('با پرداخت ریالی و امکان خرید به صورت ساعتی')
+  expect(headings[0]?.nextElementSibling?.textContent).toBe('با پرداخت ریالی و امکان خرید به صورت ساعتی')
   const name = 'خرید اکانت هتزنر'
   const faqLink = within(screen.getByRole('main')).getByRole('link', { name })
   const footerNav = within(screen.getByRole('contentinfo')).getByRole('navigation')
@@ -100,16 +100,16 @@ it('sorts by independent retail monthly prices and filters real catalog location
   const firstRow = () => screen.getAllByRole('rowheader')[0]
   const firstPlan = () => within(firstRow()).getByRole('link')
   const bar = screen.getByRole('heading', { name: 'تعرفه سرور هتزنر' }).parentElement!
-  expect(within(bar).getAllByRole('combobox')).toHaveLength(2)
+  expect(within(bar).getAllByRole('combobox')).toHaveLength(3)
   expect(firstPlan().textContent).toBe('CX monthly')
   expect(firstPlan().getAttribute('href')).toContain('period=hourly')
-  fireEvent.change(screen.getByLabelText('مقایسه از کم‌هزینه به بیشتر'), { target: { value: 'monthly' } })
+  fireEvent.change(screen.getByLabelText('مبنای قیمت'), { target: { value: 'monthly' } })
   expect(firstPlan().textContent).toBe('CX Germany')
-  expect(firstPlan().getAttribute('href')).toBe('/servers/create?offer=de&period=monthly&location=nbg1')
+  expect(firstPlan().getAttribute('href')).toBe('/servers/create?offer=de&period=hourly&location=nbg1')
   fireEvent.change(screen.getByLabelText('موقعیت دیتاسنتر'), { target: { value: 'hel1' } })
   expect(screen.getAllByRole('rowheader')).toHaveLength(1)
   expect(firstPlan().textContent).toBe('CX monthly')
-  expect(firstPlan().getAttribute('href')).toBe('/servers/create?offer=fixture&period=monthly&location=hel1')
+  expect(firstPlan().getAttribute('href')).toBe('/servers/create?offer=fixture&period=hourly&location=hel1')
 })
 
 const catalog = ([
@@ -152,9 +152,13 @@ it('uses actual countries, reconciles location filters and preserves sort and or
   expect(location.value).toBe('')
   expect([...location.options].map(option => option.value)).toEqual(['', 'fsn1', 'nbg1'])
   expect(plans()).toEqual(['CX fsn1', 'CX nbg1'])
-  await user.selectOptions(screen.getByLabelText('مقایسه از کم‌هزینه به بیشتر'), 'monthly')
+  await user.selectOptions(screen.getByLabelText('مبنای قیمت'), 'monthly')
   expect(plans()).toEqual(['CX nbg1', 'CX fsn1'])
-  expect(table().getByRole('link', { name: /خرید CX nbg1/ }).getAttribute('href')).toBe('/servers/create?offer=nbg1&period=monthly&location=nbg1')
+  expect(table().getByRole('link', { name: /خرید CX nbg1/ }).getAttribute('href')).toBe('/servers/create?offer=nbg1&period=hourly&location=nbg1')
+  await user.selectOptions(screen.getByLabelText('مرتب‌سازی بر اساس'), 'price:desc')
+  expect(plans()).toEqual(['CX fsn1', 'CX nbg1'])
+  expect(screen.getByText(/کم‌هزینه‌ترین گزینهٔ همین فهرست/).textContent).toContain('CX nbg1')
+  await user.selectOptions(screen.getByLabelText('مرتب‌سازی بر اساس'), 'price:asc')
 
   for (const [name, expected] of [
     ['ایالات متحده', ['CX hil', 'CX ash']], ['فنلاند', ['CX hel1']], ['سنگاپور', ['CX sin']],

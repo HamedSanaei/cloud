@@ -5,6 +5,7 @@ import { createLogger } from '../../logger.js'
 import { outboundFetch } from '../outbound/client.js'
 import { smsSegments } from './parsgreen-templates.js'
 import { normalizeIranMobile } from '../../contracts/iran-mobile.js'
+import { internalEmail } from './email-address.js'
 export { normalizeIranMobile } from '../../contracts/iran-mobile.js'
 
 // SOAP 1.1 contract published by /Api/SendSMS.asmx?op=SendGroupSMS.
@@ -37,7 +38,8 @@ export function maskEmail(email: string): string {
   return `${visible}${'*'.repeat(Math.max(3, local.length - visible.length))}@${domain}`
 }
 
-export async function sendEmailOtp(to: string, code: string, purpose: 'login' | 'register' | 'recovery' | 'operation', expiresIn?: number): Promise<{ developmentCode?: string }> {
+export async function sendEmailOtp(to: string, code: string, purpose: 'login' | 'register' | 'recovery' | 'operation' | 'account', expiresIn?: number): Promise<{ developmentCode?: string }> {
+  if (internalEmail(to)) throw new ProviderPermanentError('آدرس ایمیل قابل ارسال نیست')
   const config = getConfig()
   if (config.AUTH_DELIVERY_MODE === 'log') {
     if (isProduction()) throw new ProviderPermanentError('ارسال ایمیل در محیط عملیاتی پیکربندی نشده است')
@@ -48,6 +50,7 @@ export async function sendEmailOtp(to: string, code: string, purpose: 'login' | 
   const titles = {
     login: 'کد ورود به پارس سرور',
     register: 'تأیید ایمیل پارس سرور',
+    account: 'تأیید آدرس ایمیل حساب پارس سرور',
     recovery: 'بازیابی رمز عبور پارس سرور',
     operation: 'کد تأیید عملیات سرور پارس سرور',
   }
@@ -67,7 +70,19 @@ export async function sendEmailOtp(to: string, code: string, purpose: 'login' | 
       to,
       subject: titles[purpose],
       text: `کد تأیید شما: ${code}\n${validity}`,
-      html: `<div dir="rtl" style="font-family:Tahoma,sans-serif"><h2>${titles[purpose]}</h2><p>کد تأیید شما:</p><p style="font-size:30px;letter-spacing:8px;font-weight:bold" dir="ltr">${code}</p><p>${validity}</p></div>`,
+      html: `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" dir="rtl" style="background:#f1f5fb;font-family:Tahoma,Arial,sans-serif;color:#172842">
+        <tr><td align="center" style="padding:24px 12px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:440px;background:#fff;border:1px solid #d9e3f0;border-radius:16px">
+            <tr><td align="center" dir="rtl" style="padding:24px 16px;line-height:1.8">
+              <p style="margin:0;color:#1751a0;font-size:15px;font-weight:bold">پارس‌سرور</p>
+              <h1 style="margin:8px 0 4px;font-size:20px">${titles[purpose]}</h1>
+              <p style="margin:0;font-size:14px">کد زیر را در پنل وارد کنید.</p>
+              <p style="margin:16px 0;color:#123e7c;background:#edf4ff;border-radius:10px;padding:10px 6px;text-align:center"><bdo dir="ltr" style="font-family:Arial,sans-serif;font-size:32px;letter-spacing:4px">${code}</bdo></p>
+              <p style="margin:0;color:#475569;font-size:13px">${validity}</p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>`,
     })
     return {}
   } catch {

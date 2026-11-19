@@ -13,6 +13,7 @@ export const operationHeaders = (proof?: EmailProof): Record<string, string> => 
 export const startOperationEmail = async (intent: OperationIntent) =>
   (await apiPost<{ data: EmailChallenge }>('/auth/operation-email/start', intent)).data
 export const cancelOperationEmail = (token: string) => apiPost('/auth/operation-email/cancel', { token })
-export const startAccountEmail = async (email: string) =>
-  (await apiPost<{ data: EmailChallenge }>('/auth/account-email/start', { email })).data
+export const startAccountEmail = async (email: string, proof: { token?: string; password?: string; totp?: string } = {}) =>
+  (await apiPost<{ data: EmailChallenge }>('/auth/account-email/start', { email, ...proof })).data
 export const verifyAccountEmail = (proof: EmailProof) => apiPost('/auth/account-email/verify', proof)
+export const cancelAccountEmail = (token: string) => apiPost('/auth/account-email/cancel', { token })

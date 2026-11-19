@@ -13,6 +13,7 @@ import { AppError, BadRequestError, ConflictError, ForbiddenError } from '../../
 import { writeAudit } from '../audit/service.js'
 import { ensureDefaultWallet } from '../wallets/service.js'
 import { invalidIranMobile } from '../../contracts/iran-mobile.js'
+import { internalEmail } from './email-address.js'
 import { assertCanResend, consumeChallenge, findChallenge, issueChallenge, recordChallengeFailure, verifyChallengeCode, type ChallengeKind } from './challenges.js'
 import { maskEmail, maskMobile, normalizeIranMobile, sendEmailOtp } from './delivery.js'
 import { beginGoogleOAuth, completeGoogleOAuth } from './google.js'
@@ -48,7 +49,7 @@ function meta(request: FastifyRequest): RequestMeta {
 
 async function establishSession(ctx: AppContext, user: typeof users.$inferSelect, request: FastifyRequest, reply: FastifyReply) {
   await ensureDefaultWallet(ctx.db, user.id)
-  const session = await createSession(ctx.db, user.id, meta(request))
+  const session = await createSession(ctx.db, user.id, { ...meta(request), expectedEmail: user.email })
   reply.setCookie(AUTH_COOKIE, session.token, sessionCookieOptions())
   await writeAudit(ctx.db, { actorId: user.id, action: 'user.login.completed', metadata: { ip: request.ip } })
   return { user: publicUser(user), token: session.token }
@@ -109,11 +110,12 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
 
   app.post('/auth/register/start', { config: { rateLimit: sendLimiter } }, async (request, reply) => {
     const input = parse(registerSchema, request.body)
+    if (internalEmail(input.email)) throw new BadRequestError('آدرس ایمیل واقعی وارد کنید.')
     let user = await db.query.users.findFirst({ where: (t) => eq(t.email, input.email) })
-    if (user?.status === 'active') throw new ConflictError('این ایمیل قبلاً ثبت شده است')
+    if (user && user.status !== 'pending') throw new ConflictError('این ایمیل قبلاً ثبت شده است')
     const passwordHash = await hashPassword(input.password)
     if (user) {
-      const [updated] = await db.update(users).set({ passwordHash, firstName: input.firstName ?? user.firstName, lastName: input.lastName ?? user.lastName, updatedAt: new Date() }).where(eq(users.id, user.id)).returning()
+      const [updated] = await db.update(users).set({ passwordHash, firstName: input.firstName ?? user.firstName, lastName: input.lastName ?? user.lastName, updatedAt: new Date() }).where(and(eq(users.id, user.id), eq(users.status, 'pending'), eq(users.email, input.email))).returning()
       user = updated
     } else {
       const [created] = await db.insert(users).values({ email: input.email, passwordHash, firstName: input.firstName, lastName: input.lastName, status: 'pending' }).returning()
@@ -202,14 +204,22 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
     const challenge = await verifyChallengeCode(db, input.token, input.code, kind)
     if (!challenge.userId) throw new BadRequestError('حساب کاربری یافت نشد')
     if (challenge.kind === 'email_register') {
-      await db.update(users).set({ status: 'active', emailVerifiedAt: new Date(), updatedAt: new Date() }).where(eq(users.id, challenge.userId))
+      if (internalEmail(challenge.identifier)) throw new ForbiddenError('آدرس ایمیل قابل تأیید نیست')
+      const [activated] = await db.update(users).set({ status: 'active', emailVerifiedAt: new Date(), updatedAt: new Date() }).where(and(
+        eq(users.id, challenge.userId), eq(users.status, 'pending'), eq(users.email, challenge.identifier),
+      )).returning({ id: users.id })
+      if (!activated) throw new ForbiddenError('ایمیل یا وضعیت حساب تغییر کرده است')
       await writeAudit(db, { actorId: challenge.userId, action: 'user.email_verified' })
     } else if (challenge.kind === 'phone_register') {
-      await db.update(users).set({ status: 'active', mobileVerifiedAt: new Date(), updatedAt: new Date() }).where(eq(users.id, challenge.userId))
+      const [activated] = await db.update(users).set({ status: 'active', mobileVerifiedAt: new Date(), updatedAt: new Date() }).where(and(
+        eq(users.id, challenge.userId), eq(users.status, 'pending'), eq(users.mobile, challenge.identifier),
+      )).returning({ id: users.id })
+      if (!activated) throw new ForbiddenError('شماره یا وضعیت حساب تغییر کرده است')
       await writeAudit(db, { actorId: challenge.userId, action: 'user.mobile_verified' })
     }
     const user = await db.query.users.findFirst({ where: (t) => eq(t.id, challenge.userId!) })
     if (!user) throw new BadRequestError('حساب کاربری یافت نشد')
+    if (challenge.kind === 'email_login' && (user.email !== challenge.identifier || internalEmail(user.email))) throw new ForbiddenError('ایمیل حساب تغییر کرده است')
     if (challenge.kind === 'phone_login' && (user.status !== 'active' || !user.mobileVerifiedAt || user.mobile !== challenge.identifier)) {
       throw new ForbiddenError('شماره همراه این حساب تأیید نشده است')
     }
@@ -232,6 +242,11 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
         ? account.status !== 'pending'
         : account.status !== 'active' || !account.mobileVerifiedAt)) throw new BadRequestError('شماره یا وضعیت حساب تغییر کرده است؛ درخواست تازه ثبت کنید')
       if (old.kind === 'phone_operation' && old.payload?.sessionId !== requireUser(request).sessionId) throw new ForbiddenError('این کد به نشست جاری تعلق ندارد')
+    } else {
+      const account = old.userId ? await db.query.users.findFirst({ where: t => eq(t.id, old.userId!) }) : undefined
+      canDeliver = !!account && account.email === old.identifier && !internalEmail(account.email)
+        && (old.kind === 'email_register' ? account.status === 'pending' : account.status === 'active')
+      if (!canDeliver && old.kind !== 'password_recovery') throw new BadRequestError('ایمیل یا وضعیت حساب تغییر کرده است؛ درخواست تازه ثبت کنید')
     }
     const challenge = await issueChallenge(db, {
       kind: old.kind as ChallengeKind,
@@ -241,16 +256,17 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
       resendCount: old.resendCount + 1,
       resendToken: input.token,
     })
-    const delivery = canDeliver ? await deliverChallenge(db, old.kind, old.identifier, challenge.code, request.headers.origin) : {}
+    const delivery = canDeliver ? await deliverChallenge(db, old.kind, old.identifier, challenge.code, request.headers.origin)
+      .catch(error => { if (old.kind === 'password_recovery') return {} as { developmentCode?: string; smsAutofill?: true }; throw error }) : {}
     const isSms = old.kind.startsWith('phone_')
     return reply.status(202).send({ data: challengeResponse(challenge, isSms ? 'sms' : 'email', isSms ? maskMobile(old.identifier) : maskEmail(old.identifier), delivery.developmentCode, delivery.smsAutofill) })
   })
 
   app.post('/auth/password/forgot', { config: { rateLimit: sendLimiter } }, async (request, reply) => {
     const input = parse(z.object({ email }), request.body)
-    const user = await db.query.users.findFirst({ where: (t) => eq(t.email, input.email) })
+    const user = internalEmail(input.email) ? undefined : await db.query.users.findFirst({ where: (t) => and(eq(t.email, input.email), eq(t.status, 'active')) })
     const challenge = await issueChallenge(db, { kind: 'password_recovery', identifier: input.email, userId: user?.id })
-    const delivery = user ? await sendEmailOtp(input.email, challenge.code, 'recovery') : {}
+    const delivery = user ? await sendEmailOtp(input.email, challenge.code, 'recovery').catch(() => ({} as { developmentCode?: string })) : {}
     return reply.status(202).send({ data: challengeResponse(challenge, 'email', maskEmail(input.email), delivery.developmentCode) })
   })
 
@@ -279,6 +295,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
       if (!allowed.includes(raw.kind)) throw new BadRequestError('نوع درخواست بازیابی معتبر نیست')
       if (auth && (raw.userId !== auth.id || raw.payload?.operation !== 'password_change' || raw.payload?.sessionId !== auth.sessionId)) throw new ForbiddenError()
       const user = raw.userId ? (await tx.select().from(users).where(eq(users.id, raw.userId)).for('update'))[0] : null
+      if (raw.kind === 'password_recovery' && user && (user.status !== 'active' || user.email !== raw.identifier || internalEmail(user.email))) throw new BadRequestError('درخواست بازیابی دیگر معتبر نیست')
       if (raw.kind.startsWith('phone_') && raw.userId && (!user?.mobileVerifiedAt || user.mobile !== raw.identifier || user.status !== 'active')) throw new ForbiddenError('شماره تأییدشده تغییر کرده است')
       if (auth && user) await verifyPrimaryCredentials(db, { email: user.email, password: currentPassword ?? '' })
       try {
@@ -423,5 +440,5 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
 }
 
 function publicUser(u: { id: string; email: string; role: string; status: string; firstName?: string | null; lastName?: string | null; mobile?: string | null; twoFactorEnabled?: boolean; timezone?: string | null }) {
-  return { id: u.id, email: u.email.endsWith('@accounts.serverhub.invalid') ? '' : u.email, role: u.role, status: u.status, firstName: u.firstName ?? null, lastName: u.lastName ?? null, mobile: u.mobile ?? null, twoFactorEnabled: getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED && (u.twoFactorEnabled ?? false), timezone: u.timezone ?? 'Asia/Tehran' }
+  return { id: u.id, email: internalEmail(u.email) ? '' : u.email, role: u.role, status: u.status, firstName: u.firstName ?? null, lastName: u.lastName ?? null, mobile: u.mobile ?? null, twoFactorEnabled: getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED && (u.twoFactorEnabled ?? false), timezone: u.timezone ?? 'Asia/Tehran' }
 }
