@@ -20,12 +20,13 @@ import { Badge, Table } from '../components/ui/Table'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { ApiError } from '../lib/apiClient'
 import { getWalletSummary, listChargeRequests, listInvoices, listTransactions } from '../lib/endpoints'
-import { formatFaDateTime, formatToman, toAsciiDigits } from '../lib/format'
+import { formatCount, formatFaDateTime, formatToman, toAsciiDigits } from '../lib/format'
 import { WalletRecharge } from '../components/ui/WalletRecharge'
 import { WalletPaymentStatus } from '../components/ui/WalletPaymentStatus'
 import { useAuth } from '../auth/AuthContext'
 import { WalletLedgerAmountCells, WalletLedgerDescription } from '../components/ui/WalletLedgerCells'
 import { emptyAmount, movementAmounts, movementHeaders, transactionsCsv, transactionStatus } from '../lib/walletHistory'
+import { chargeReferences } from '../lib/paymentHandoff'
 
 const walletHistoryHeaders = ['شرح', 'کیف پول', ...movementHeaders, 'تاریخ', 'وضعیت']
 
@@ -37,10 +38,13 @@ export function WalletPage() {
   const { user } = useAuth()
   const [searchParams] = useSearchParams()
   const returnToCheckout = searchParams.get('returnTo') === 'server-checkout'
-  const [period, setPeriod] = useState('24h')
+  const chargeId = searchParams.get('charge')
+  const receiptId = chargeId ?? searchParams.get('payment')
+  const [period, setPeriod] = useState<'24h' | '7d'>('24h')
+  const [page, setPage] = useState(0)
 
   const summary = useApiQuery(getWalletSummary)
-  const transactions = useApiQuery(listTransactions)
+  const transactions = useApiQuery(async () => ({ period, ...await listTransactions(period) }), [period])
   const refreshSummary = summary.refetch, refreshTransactions = transactions.refetch
   useEffect(() => {
     const refresh = () => { refreshSummary(); refreshTransactions() }
@@ -49,15 +53,13 @@ export function WalletPage() {
   }, [refreshSummary, refreshTransactions])
 
   const summaryData = summary.data
-  const visibleTransactions = useMemo(() => {
-    const since = Date.now() - (period === '24h' ? 1 : 7) * 86400000
-    return (transactions.data ?? []).filter(item => {
-      const date = Date.parse(item.date)
-      return Number.isFinite(date) && date >= since
-    })
-  }, [transactions.data, period])
+  const rows = transactions.data?.period === period ? transactions.data.rows : []
+  const partial = transactions.data?.period === period && !transactions.data.complete
+  const pageSize = 50, pageCount = Math.ceil(rows.length / pageSize)
+  const currentPage = Math.min(page, Math.max(0, pageCount - 1))
+  const visibleTransactions = rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize)
   const downloadTransactions = () => {
-    const url = URL.createObjectURL(new Blob([transactionsCsv(visibleTransactions, user?.timezone)], { type: 'text/csv;charset=utf-8' }))
+    const url = URL.createObjectURL(new Blob([transactionsCsv(rows, user?.timezone)], { type: 'text/csv;charset=utf-8' }))
     const link = document.createElement('a'); link.href = url; link.download = 'wallet-transactions.csv'; link.click()
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
@@ -66,16 +68,18 @@ export function WalletPage() {
     <div className="page-stack wallet-page">
       <PageHeader title="کیف پول 💰" subtitle="موجودی و گردش حساب" icon={<WalletCards />} actions={<WalletRecharge />} />
       {returnToCheckout ? <div className="info-box checkout-return"><span>انتخاب‌های سرور شما برای بازگشت از شارژ نگه داشته شده‌اند.</span><LinkButton to="/servers/create" variant="secondary">بازگشت به سفارش سرور</LinkButton></div> : null}
-      {searchParams.get('payment') ? <WalletPaymentStatus id={searchParams.get('payment')!} onVerified={() => { summary.refetch(); transactions.refetch() }} /> : null}
+      {receiptId ? <WalletPaymentStatus key={receiptId} id={receiptId} byCharge={!!chargeId}
+        onVerified={() => { summary.refetch(); transactions.refetch() }} /> : null}
       {summary.error && <QueryError message={summary.error} onRetry={summary.refetch} />}
       <MetricCard label="موجودی کل" value={summary.loading ? '...' : summary.error ? 'دریافت نشد' : formatToman(summaryData?.totalBalance ?? 0)} icon={CircleDollarSign} accent="green" />
 
       <Card className="wallet-transactions">
-        <SectionHeading title="تراکنش‌ها" action={<Button variant="secondary" size="sm" icon={<Download size={16} />} disabled={!visibleTransactions.length || transactions.loading || !!transactions.error} onClick={downloadTransactions}>دانلود</Button>} />
+        <SectionHeading title="تراکنش‌ها" action={<Button variant="secondary" size="sm" icon={<Download size={16} />} disabled={!rows.length || partial || transactions.loading || !!transactions.error} onClick={downloadTransactions}>دانلود</Button>} />
         <div className="segmented-filter">
-          <button type="button" className={period === '24h' ? 'active' : ''} onClick={() => setPeriod('24h')}>۲۴ ساعت اخیر</button>
-          <button type="button" className={period === '7d' ? 'active' : ''} onClick={() => setPeriod('7d')}>۷ روز اخیر</button>
+          <button type="button" aria-pressed={period === '24h'} className={period === '24h' ? 'active' : ''} onClick={() => { setPeriod('24h'); setPage(0) }}>۲۴ ساعت اخیر</button>
+          <button type="button" aria-pressed={period === '7d'} className={period === '7d' ? 'active' : ''} onClick={() => { setPeriod('7d'); setPage(0) }}>۷ روز اخیر</button>
         </div>
+        {partial && !transactions.loading && !transactions.error && <p role="status">سرویس مشترک فقط ۵۰ تراکنش آخر را ارائه می‌دهد. دانلود برای بازهٔ ناقص در دسترس نیست.</p>}
         {transactions.loading ? (
           <LoadingState label="در حال دریافت تراکنش‌ها..." />
         ) : transactions.error ? (
@@ -97,6 +101,11 @@ export function WalletPage() {
             ))}
           </Table>
         )}
+        {!transactions.loading && !transactions.error && pageCount > 1 && <div className="segmented-filter" aria-label="صفحه‌بندی تراکنش‌ها" role="group">
+          <Button variant="secondary" size="sm" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>صفحهٔ قبل</Button>
+          <span aria-live="polite">صفحهٔ {formatCount(currentPage + 1)} از {formatCount(pageCount)} · {formatCount(rows.length)} تراکنش</span>
+          <Button variant="secondary" size="sm" disabled={currentPage + 1 === pageCount} onClick={() => setPage(currentPage + 1)}>صفحهٔ بعد</Button>
+        </div>}
       </Card>
     </div>
   )
@@ -129,10 +138,10 @@ function FinancialList({ type }: FinancialListProps) {
   }, [type])
 
   const rows = useMemo(() => {
-    const items = (active.data?.items ?? []) as Array<{ number: string; description?: string; invoiceNumber?: string; status: string; amount: number; formattedAmount?: string; date: string; dueAt?: string; paidAt?: string; id: string }>
+    const items = (active.data?.items ?? []) as Array<{ number: string; description?: string; invoiceNumber?: string; paymentReference?: string; status: string; amount: number; formattedAmount?: string; date: string; dueAt?: string; paidAt?: string; id: string }>
     const normalized = toAsciiDigits(query.trim())
     return items.filter((item) => {
-      const haystack = toAsciiDigits(`${item.number} ${item.description ?? ''} ${item.invoiceNumber ?? ''} ${isInvoice ? invoiceDescription(item.description) : ''}`)
+      const haystack = toAsciiDigits(`${item.number} ${item.description ?? ''} ${item.invoiceNumber ?? ''} ${item.paymentReference ?? ''} ${isInvoice ? invoiceDescription(item.description) : ''}`)
       const matchesQuery = !normalized || haystack.includes(normalized)
       const matchesStatus = status === 'all' || item.status === status
       return matchesQuery && matchesStatus
@@ -149,7 +158,7 @@ function FinancialList({ type }: FinancialListProps) {
       <FilterPanel
         query={query}
         onQueryChange={setQuery}
-        placeholder={isInvoice ? 'جستجو در شماره فاکتور یا توضیحات...' : 'جستجو در شماره درخواست یا فاکتور...'}
+        placeholder={isInvoice ? 'جستجو در شماره فاکتور یا توضیحات...' : 'جستجو در شماره درخواست، پیگیری پرداخت یا فاکتور...'}
         onReset={() => { setQuery(''); setStatus('all') }}
       >
         <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="وضعیت">
@@ -173,14 +182,16 @@ function FinancialList({ type }: FinancialListProps) {
             action={isInvoice ? <LinkButton to="/dashboard">بازگشت به داشبورد</LinkButton> : <LinkButton to="/wallet" icon={<Plus size={18} />}>شارژ کیف پول</LinkButton>}
           />
         ) : (
-          <Table headers={isInvoice ? ['شماره', 'شرح', 'مبلغ', 'تاریخ', 'وضعیت'] : ['شماره', 'فاکتور', 'مبلغ', 'تاریخ', 'وضعیت']}>
+          <Table headers={isInvoice ? ['شماره', 'شرح', 'مبلغ', 'تاریخ', 'وضعیت'] : ['شماره', 'شماره پیگیری پرداخت', 'فاکتور', 'مبلغ', 'تاریخ', 'وضعیت', 'پیگیری']}>
             {rows.map((row) => (
               <tr key={row.id}>
                 <td>{row.number}</td>
-                <td>{isInvoice ? invoiceDescription(row.description) : row.invoiceNumber ?? '—'}</td>
+                <td>{isInvoice ? invoiceDescription(row.description) : chargeReferences(row).paymentReference ?? '—'}</td>
+                {!isInvoice && <td>{chargeReferences(row).invoiceNumber ?? '—'}</td>}
                 <td>{row.formattedAmount ?? formatToman(row.amount)}</td>
                 <td><FinancialDate label={isInvoice ? 'صدور' : undefined} date={row.date} dueAt={isInvoice ? row.dueAt : undefined} paidAt={isInvoice ? row.paidAt : undefined} timezone={user?.timezone} /></td>
                 <td><Badge>{(isInvoice ? invoiceStatusLabels : chargeStatusLabels)[row.status] ?? 'نامشخص'}</Badge></td>
+                {!isInvoice && <td><LinkButton to={`/wallet?charge=${encodeURIComponent(row.id)}`} variant="secondary">پیگیری درخواست</LinkButton></td>}
               </tr>
             ))}
           </Table>

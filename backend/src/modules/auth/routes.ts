@@ -12,11 +12,12 @@ import { parse } from '../../http/validate.js'
 import { AppError, BadRequestError, ConflictError, ForbiddenError } from '../../lib/errors.js'
 import { writeAudit } from '../audit/service.js'
 import { ensureDefaultWallet } from '../wallets/service.js'
+import { invalidIranMobile } from '../../contracts/iran-mobile.js'
 import { assertCanResend, consumeChallenge, findChallenge, issueChallenge, recordChallengeFailure, verifyChallengeCode, type ChallengeKind } from './challenges.js'
 import { maskEmail, maskMobile, normalizeIranMobile, sendEmailOtp } from './delivery.js'
 import { beginGoogleOAuth, completeGoogleOAuth } from './google.js'
 import { createRecoveryCodes, createTotpSecret, decryptTotpSecret, encryptTotpSecret, buildOtpAuthUri, hashRecoveryCode, verifyTotp } from './totp.js'
-import { createSession, hashPassword, login, logout, registerUser, rotateSession, verifyPrimaryCredentials } from './service.js'
+import { createSession, hashPassword, login, logout, registerUser, rotateSession, verifyMobileCredentials, verifyPrimaryCredentials } from './service.js'
 
 const password = z.string().min(8, 'رمز عبور باید حداقل ۸ کاراکتر باشد').max(200)
 const email = z.string().email('ایمیل نامعتبر است').transform((value) => value.trim().toLowerCase())
@@ -26,7 +27,12 @@ const registerSchema = z.object({ email, password, firstName: z.string().max(100
 const loginSchema = z.object({ email, password: z.string().min(1, 'رمز عبور الزامی است') })
 const tokenSchema = z.object({ token: z.string().min(20) })
 const verifySchema = tokenSchema.extend({ code: otpCode })
-const phoneSchema = z.object({ mobile: z.string().min(10).max(20) })
+const phoneSchema = z.object({ mobile: z.string(invalidIranMobile).transform((value, ctx) => {
+  const normalized = normalizeIranMobile(value)
+  if (normalized) return normalized
+  ctx.addIssue({ code: 'custom', message: invalidIranMobile })
+  return z.NEVER
+}) })
 const phoneRegisterSchema = phoneSchema.extend({
   firstName: z.string().max(100).optional(),
   lastName: z.string().max(100).optional(),
@@ -138,8 +144,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
 
   app.post('/auth/register/phone/start', { config: { rateLimit: sendLimiter } }, async (request, reply) => {
     const input = parse(phoneRegisterSchema, request.body)
-    const normalized = normalizeIranMobile(input.mobile)
-    if (!normalized) throw new BadRequestError('شماره همراه ایرانی معتبر نیست')
+    const normalized = input.mobile
     let user = await db.query.users.findFirst({ where: (t) => eq(t.mobile, normalized) })
     if (user?.status === 'active' || user?.mobileVerifiedAt) throw new ConflictError('این شماره همراه قبلاً ثبت شده است؛ وارد شوید')
     if (user?.status === 'disabled') throw new ForbiddenError('این حساب غیرفعال است')
@@ -169,9 +174,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
   })
 
   app.post('/auth/phone/start', { config: { rateLimit: sendLimiter } }, async (request, reply) => {
-    const input = parse(phoneSchema, request.body)
-    const normalized = normalizeIranMobile(input.mobile)
-    if (!normalized) throw new BadRequestError('شماره همراه ایرانی معتبر نیست')
+    const { mobile: normalized } = parse(phoneSchema, request.body)
     const user = await db.query.users.findFirst({ where: (t) => eq(t.mobile, normalized) })
     if (!user || user.status === 'pending' || !user.mobileVerifiedAt) {
       throw new BadRequestError('این شماره همراه ثبت و تأیید نشده است؛ ابتدا ثبت‌نام کنید')
@@ -180,6 +183,16 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
     const challenge = await issueChallenge(db, { kind: 'phone_login', identifier: normalized, userId: user.id })
     const delivery = await deliverAuthSms(db, 'phoneLogin', normalized, challenge.code, request.headers.origin)
     return reply.status(202).send({ data: challengeResponse(challenge, 'sms', maskMobile(normalized), delivery.developmentCode, delivery.smsAutofill) })
+  })
+
+  app.post('/auth/phone/password', { config: { rateLimit: authLimiter } }, async (request, reply) => {
+    const input = parse(phoneSchema.extend({ password: loginSchema.shape.password.max(200) }), request.body)
+    const user = await verifyMobileCredentials(db, input.mobile, input.password)
+    if (user.twoFactorEnabled && user.totpSecretEncrypted) {
+      const challenge = await issueChallenge(db, { kind: 'totp', identifier: user.email, userId: user.id, payload: { verifiedMobile: input.mobile } })
+      return reply.status(202).send({ data: challengeResponse(challenge, 'totp', 'برنامه احراز هویت') })
+    }
+    return { data: await establishSession(ctx, user, request, reply) }
   })
 
   app.post('/auth/challenge/verify', { config: { rateLimit: authLimiter } }, async (request, reply) => {
@@ -200,8 +213,8 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
     if (challenge.kind === 'phone_login' && (user.status !== 'active' || !user.mobileVerifiedAt || user.mobile !== challenge.identifier)) {
       throw new ForbiddenError('شماره همراه این حساب تأیید نشده است')
     }
-    if (challenge.kind === 'phone_login' && getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED && user.twoFactorEnabled) {
-      const totpChallenge = await issueChallenge(db, { kind: 'totp', identifier: user.email, userId: user.id })
+    if (challenge.kind === 'phone_login' && user.twoFactorEnabled && user.totpSecretEncrypted) {
+      const totpChallenge = await issueChallenge(db, { kind: 'totp', identifier: user.email, userId: user.id, payload: { verifiedMobile: challenge.identifier } })
       return reply.status(202).send({ data: challengeResponse(totpChallenge, 'totp', 'برنامه احراز هویت') })
     }
     return { data: await establishSession(ctx, user, request, reply) }
@@ -242,9 +255,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
   })
 
   app.post('/auth/password/forgot/phone', { config: { rateLimit: sendLimiter } }, async (request, reply) => {
-    const input = parse(phoneSchema, request.body)
-    const mobile = normalizeIranMobile(input.mobile)
-    if (!mobile) throw new BadRequestError('شماره همراه ایرانی معتبر نیست')
+    const { mobile } = parse(phoneSchema, request.body)
     const user = await db.query.users.findFirst({ where: t => eq(t.mobile, mobile) })
     const eligible = user?.status === 'active' && !!user.mobileVerifiedAt
     const challenge = await issueChallenge(db, { kind: 'phone_recovery', identifier: mobile, userId: eligible ? user.id : undefined })
@@ -298,28 +309,36 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
     return { data: { ok: true } }
   })
 
-  app.post('/auth/2fa/verify', { config: { rateLimit: authLimiter } }, async (request, reply) => {
-    if (!getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED) throw new ForbiddenError('تأیید دومرحله‌ای ورود غیرفعال است')
-    const input = parse(verifySchema, request.body)
-    const challenge = await findChallenge(db, input.token, 'totp')
+  async function activeTotpLogin(token: string) {
+    const enabled = getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED
+    const disabled = () => new ForbiddenError('تأیید دومرحله‌ای ورود غیرفعال است')
+    const challenge = await findChallenge(db, token, 'totp').catch(error => {
+      if (!enabled && error instanceof BadRequestError) throw disabled()
+      throw error
+    })
+    const mobile = challenge.payload?.verifiedMobile
+    if (!enabled && typeof mobile !== 'string') throw disabled()
     if (!challenge.userId) throw new BadRequestError('حساب کاربری یافت نشد')
     const user = await db.query.users.findFirst({ where: (t) => eq(t.id, challenge.userId!) })
-    if (!user?.totpSecretEncrypted || !user.twoFactorEnabled) throw new BadRequestError('تأیید دومرحله‌ای برای این حساب فعال نیست')
-    if (!verifyTotp(decryptTotpSecret(user.totpSecretEncrypted), input.code)) {
+    if (!user?.totpSecretEncrypted || !user.twoFactorEnabled || user.status !== 'active') throw new BadRequestError('تأیید دومرحله‌ای برای این حساب فعال نیست')
+    if (typeof mobile === 'string' && (!user.mobileVerifiedAt || user.mobile !== mobile)) throw new ForbiddenError('شماره تأییدشده تغییر کرده است')
+    return { user, challenge, secret: user.totpSecretEncrypted }
+  }
+
+  app.post('/auth/2fa/verify', { config: { rateLimit: authLimiter } }, async (request, reply) => {
+    const input = parse(verifySchema, request.body)
+    const { user, challenge, secret } = await activeTotpLogin(input.token)
+    if (!verifyTotp(decryptTotpSecret(secret), input.code)) {
       await recordChallengeFailure(db, challenge.id, challenge.attempts, challenge.maxAttempts)
     }
-    if (!(await consumeChallenge(db, challenge.id))) throw new BadRequestError('این درخواست تأیید قبلاً استفاده شده است')
+    if (!(await consumeChallenge(db, challenge.id, challenge.maxAttempts))) throw new BadRequestError('این درخواست تأیید قبلاً استفاده شده است')
     return { data: await establishSession(ctx, user, request, reply) }
   })
 
   app.post('/auth/2fa/recovery', { config: { rateLimit: authLimiter } }, async (request, reply) => {
-    if (!getConfig().AUTH_LOGIN_SECOND_FACTOR_ENABLED) throw new ForbiddenError('تأیید دومرحله‌ای ورود غیرفعال است')
     const input = parse(z.object({ token: z.string().min(20), recoveryCode: z.string().min(8).max(30) }), request.body)
-    const challenge = await findChallenge(db, input.token, 'totp')
-    if (!challenge.userId) throw new BadRequestError('حساب کاربری یافت نشد')
-    const user = await db.query.users.findFirst({ where: (t) => eq(t.id, challenge.userId!) })
+    const { challenge, user } = await activeTotpLogin(input.token)
     const hash = hashRecoveryCode(input.recoveryCode)
-    if (!user) throw new BadRequestError('حساب کاربری یافت نشد')
     const codes = user.recoveryCodesHash ?? []
     if (!codes.includes(hash)) await recordChallengeFailure(db, challenge.id, challenge.attempts, challenge.maxAttempts)
     await db.update(users).set({ recoveryCodesHash: codes.filter((item) => item !== hash), updatedAt: new Date() }).where(eq(users.id, user.id))

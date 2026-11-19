@@ -11,7 +11,7 @@ import { effectiveGateway, gatewayLock } from '../system/gateway.js'
 import { publishNotification } from '../notifications/service.js'
 
 export function paymentDto(payment: typeof walletPayments.$inferSelect) {
-  return { id: payment.id, walletId: payment.walletId, amountRial: payment.amountRial, status: payment.status,
+  return { id: payment.id, walletId: payment.walletId, amountRial: payment.amountRial, status: payment.status, paymentReference: payment.providerReference,
     paymentUrl: payment.status === 'pending' && payment.gatewayToken ? paymentLink(payment.gatewayToken, payment.sandbox) : null }
 }
 export async function createRecharge(db: DbClient, userId: string, walletId: string | undefined, amountRial: number, key: string) {
@@ -86,7 +86,7 @@ export async function verifyRecharge(db: DbClient, id: string) {
     await applyWalletTransaction(tx, locked!.userId, locked!.walletId, { type: 'deposit', amountRial: locked!.amountRial,
       referenceType: 'tabapay', referenceId: payment.id, idempotencyKey: `tabapay:${payment.id}`, description: 'شارژ کیف پول با تاباپی' })
     await tx.update(walletPayments).set({ status: 'succeeded', providerReference: reference as string, updatedAt: new Date() }).where(eq(walletPayments.id, id))
-    await tx.update(chargeRequests).set({ status: 'approved', invoiceNumber: reference as string, updatedAt: new Date() }).where(eq(chargeRequests.id, payment.chargeRequestId))
+    await tx.update(chargeRequests).set({ status: 'approved', updatedAt: new Date() }).where(eq(chargeRequests.id, payment.chargeRequestId))
     await writeAudit(tx, { actorId: payment.userId, action: 'wallet.recharge_verified', targetType: 'wallet_payment', targetId: id,
       metadata: { amountRial: payment.amountRial, walletId: payment.walletId, reference } })
   })

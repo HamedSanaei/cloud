@@ -1,5 +1,5 @@
 import { Menu, Moon, Search, Sun, UserRound, WalletCards, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { accountLinks, allSearchItems } from '../../data/navigation'
 import { useApiQuery } from '../../hooks/useApiQuery'
@@ -10,7 +10,7 @@ import { BRAND_NAME } from '../Brand'
 import { useTheme } from '../../hooks/useTheme'
 import { NotificationCenter } from './NotificationCenter'
 
-export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
+export function Topbar({ onOpenSidebar, menuButton, sidebarOpen }: { onOpenSidebar: () => void; menuButton: Ref<HTMLButtonElement>; sidebarOpen: boolean }) {
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
@@ -57,7 +57,7 @@ export function Topbar({ onOpenSidebar }: { onOpenSidebar: () => void }) {
 
   return (
     <header className="topbar">
-      <button type="button" className="icon-button topbar__menu" onClick={onOpenSidebar} aria-label="باز کردن منو">
+      <button ref={menuButton} type="button" className="icon-button topbar__menu" onClick={onOpenSidebar} aria-label="باز کردن منو" aria-expanded={sidebarOpen} aria-controls="main-sidebar">
         <Menu size={22} />
       </button>
 

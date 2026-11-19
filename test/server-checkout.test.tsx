@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { CreateServerPage } from '../src/pages/WizardPages'
 import { WalletPage } from '../src/pages/FinancePages'
 import { ToastProvider } from '../src/components/ui/Toast'
@@ -18,20 +18,22 @@ const catalog = { datacenters: [{ id: 'hetzner', name: 'Hetzner', logo: '/provid
   offers: [offer('Expensive', 20000), offer('Cheap', 10000)] }
 let posts: Array<{ body: Record<string, unknown>; key?: string }>
 let balance: number
+let availableCatalog: typeof catalog
 beforeEach(() => {
-  sessionStorage.clear(); balance = 0; posts = []
+  sessionStorage.clear(); balance = 0; posts = []; availableCatalog = catalog
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     if (init?.method === 'POST') {
       posts.push({ body: JSON.parse(String(init.body)), key: (init.headers as Record<string, string>)['idempotency-key'] })
       return new Response(JSON.stringify({ data: { id: 'created-server' } }), { headers: { 'content-type': 'application/json' } })
     }
-    const data = url.includes('/catalog/storefront') ? catalog : url.endsWith('/wallets') ? [{ id: 'wallet', name: 'Test wallet', balance }] : url.includes('integration/status') ? { enabled: false, linked: false } : []
+    const data = url.includes('/catalog/storefront') ? availableCatalog : url.endsWith('/wallets') ? [{ id: 'wallet', name: 'Test wallet', balance }] : url.includes('integration/status') ? { enabled: false, linked: false } : []
     return new Response(JSON.stringify({ data }), { headers: { 'content-type': 'application/json' } })
   }))
 })
 function open(path = '/servers/create') {
   return render(<MemoryRouter initialEntries={[path]}><ToastProvider><Routes>
     <Route path="/servers/create" element={<CreateServerPage />} /><Route path="/wallet" element={<WalletPage />} />
+    <Route path="/servers" element={<Link to="/servers/create">ایجاد سرور جدید</Link>} />
   </Routes></ToastProvider></MemoryRouter>)
 }
 async function configure() {
@@ -46,6 +48,7 @@ async function configure() {
   expect(screen.getAllByRole('button').filter(button => /Cheap|Expensive/.test(button.textContent ?? '')).map(button => button.querySelector('strong')?.textContent)).toEqual(['Cheap', 'Expensive'])
   await user.click(screen.getByRole('button', { name: /Cheap/ }))
   await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
+  expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'سیستم عامل' }))
   await user.click(screen.getByRole('button', { name: /Ubuntu/ }))
   await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
   await screen.findAllByText('موجودی کیف پول')
@@ -104,6 +107,26 @@ describe('Issue #3 server checkout', () => {
     await user.type(screen.getByRole('textbox', { name: /نام سرور/ }), 'test-server')
     expect((screen.getByRole('button', { name: 'تایید و ایجاد سرور' }) as HTMLButtonElement).disabled).toBe(false)
     expect(readCheckoutDraft('checkout-user')!.purchaseKey).toBe(saved.purchaseKey)
+    for (let i = 0; i < 5; i++) await user.click(screen.getByRole('button', { name: 'مرحله قبل' }))
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'دیتاسنتر و موقعیت' }))
+    await user.click(screen.getByRole('button', { name: 'انصراف' }))
+    expect(readCheckoutDraft('checkout-user')).toBeNull()
+    await user.click(screen.getByRole('link', { name: 'ایجاد سرور جدید' }))
+    expect(screen.getByRole('heading', { name: 'دیتاسنتر و موقعیت' })).toBeTruthy()
+    expect(screen.queryByDisplayValue('test-server')).toBeNull()
+  })
+  it('labels monthly funding as a prepaid month in the wallet, review and shortfall', async () => {
+    availableCatalog = {
+      datacenters: catalog.datacenters.map(item => ({ ...item, billingPeriods: ['hourly', 'monthly'] })),
+      offers: catalog.offers.map(item => ({ ...item, prices: [...item.prices, { period: 'monthly', totalRial: 250000 }] })),
+    }
+    saveCheckoutDraft('checkout-user', { step: 4, providerId: 'hetzner', location: 'nbg1', billingPeriod: 'monthly', offerId: 'Cheap', os: 'ubuntu', name: '', purchaseKey: 'monthly-checkout' })
+    open()
+    expect(await screen.findByText(/پیش‌پرداخت دورهٔ ماهانه:/)).toBeTruthy()
+    expect(await screen.findByText(/پیش‌پرداخت دورهٔ ماهانه لازم است/)).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'مرحله بعد' }))
+    expect(screen.getByText('پیش‌پرداخت دورهٔ ماهانه')).toBeTruthy()
+    expect(screen.queryByText(/حداقل اعتبار برای ۷ روز/)).toBeNull()
   })
   it('does not expose raw schema failures and keeps insufficient funds distinct', () => {
     expect(checkoutFailure(new ApiError('Unrecognized key: "idempotencyKey"', 422, { error: 'validation_error' })).message).not.toMatch(/idempotencyKey|Unrecognized/)

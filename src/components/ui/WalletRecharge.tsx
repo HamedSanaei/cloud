@@ -7,6 +7,7 @@ import { useApiQuery } from '../../hooks/useApiQuery'
 import { apiGet, apiPost } from '../../lib/apiClient'
 import { Link } from 'react-router-dom'
 import { firstPartyTabapayHandoff } from '../../lib/paymentHandoff'
+import { toAsciiDigits } from '../../lib/format'
 
 export function WalletRecharge() {
   const status = useApiQuery(getIntegrationStatus)
@@ -17,6 +18,7 @@ export function WalletRecharge() {
   const [payment, setPayment] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [amountError, setAmountError] = useState('')
   const [attemptId, setAttemptId] = useState('')
   const [attemptStatus, setAttemptStatus] = useState('')
   const key = useRef(crypto.randomUUID())
@@ -45,10 +47,16 @@ export function WalletRecharge() {
     }}>شارژ کیف پول</Button>
     <Modal open={open} title="شارژ کیف پول" onClose={() => { if (!busy) setOpen(false) }}>
       <form className="form-stack" onSubmit={e => { e.preventDefault(); void perform(async () => {
-        const value = Number(amount)
-        if (!Number.isSafeInteger(value) || value <= 0 || !gateway) throw new Error('مبلغ صحیح مثبت و درگاه معتبر انتخاب کنید')
+        const digits = toAsciiDigits(amount.trim())
+        const value = Number(digits)
+        if (!/^\d+$/.test(digits) || !Number.isSafeInteger(value) || value <= 0) {
+          setAmountError('مبلغ را به صورت عدد صحیح مثبت وارد کنید.')
+          return
+        }
+        if (!gateways.includes(gateway)) throw new Error('یک درگاه پرداخت معتبر انتخاب کنید.')
         if (gateway === 'tabapay' && (value < 10_000 || value > 50_000_000)) {
-          throw new Error('مبلغ شارژ با تاباپی باید بین ۱۰٬۰۰۰ تا ۵۰٬۰۰۰٬۰۰۰ تومان باشد')
+          setAmountError('مبلغ شارژ با تاباپی باید بین ۱۰٬۰۰۰ تا ۵۰٬۰۰۰٬۰۰۰ تومان باشد')
+          return
         }
         const response = shared
           ? await platformPost<{ paymentUrl: string; id?: string; status?: string }>('/recharge', { amountMinor: value, gateway }, key.current)
@@ -62,8 +70,9 @@ export function WalletRecharge() {
       }) }}>
         <p>مبلغ به تومان است. موجودی پس از تأیید پرداخت توسط درگاه افزایش می‌یابد.</p>
         <div className="payment-vpn-notice" role="note"><strong>پیش از ورود به درگاه، VPN یا فیلترشکن را خاموش کنید.</strong><p>روشن بودن آن ممکن است باعث اختلال یا رد پرداخت شود.</p></div>
-        <Input label="مبلغ (تومان)" inputMode="numeric" required disabled={busy || !!attemptId} value={amount} onChange={e => { setAmount(e.target.value); setPayment(''); key.current = crypto.randomUUID() }} />
-        <Select label="درگاه پرداخت" required disabled={busy || !!attemptId} value={gateway} onChange={e => { setGateway(e.target.value); setPayment(''); key.current = crypto.randomUUID() }}><option value="">انتخاب کنید</option>{gateways.map(item => <option key={item} value={item}>{item === 'tabapay' ? 'تاباپی' : item}</option>)}</Select>
+        <Input label="مبلغ (تومان)" inputMode="numeric" required disabled={busy || !!attemptId} value={amount} error={amountError}
+          onChange={e => { setAmount(e.target.value); setAmountError(''); setError(''); setPayment(''); key.current = crypto.randomUUID() }} />
+        <Select label="درگاه پرداخت" required disabled={busy || !!attemptId} value={gateway} onChange={e => { setGateway(e.target.value); setAmountError(''); setError(''); setPayment(''); key.current = crypto.randomUUID() }}><option value="">انتخاب کنید</option>{gateways.map(item => <option key={item} value={item}>{item === 'tabapay' ? 'تاباپی' : item}</option>)}</Select>
         {!busy && !gateways.length && <p role="status">درگاه سازگار با کیف پول در دسترس نیست.</p>}
         {error && <p role="alert" className="platform-error">{error}</p>}
         <Button type="submit" disabled={busy || !gateway || !amount || !!payment || !!attemptId}>دریافت لینک پرداخت امن</Button>

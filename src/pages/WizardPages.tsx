@@ -54,6 +54,14 @@ export function CreateServerPage() {
   const [emailOrder, setEmailOrder] = useState<(CreateServerPayload & { idempotencyKey: string; expectedTotalRial: number }) | null>(null)
   const [submitError, setSubmitError] = useState<ReturnType<typeof checkoutFailure> | null>(null)
   const purchaseKey = useRef(draft?.purchaseKey || crypto.randomUUID())
+  const stepTitle = useRef<HTMLHeadingElement>(null)
+  const previousStep = useRef(step)
+  useEffect(() => {
+    if (previousStep.current === step) return
+    previousStep.current = step
+    stepTitle.current?.focus({ preventScroll: true })
+    stepTitle.current?.scrollIntoView?.({ block: 'start' })
+  }, [step])
   const submitLock = useRef(false)
   const navigate = useNavigate()
   const { showToast } = useToast()
@@ -96,6 +104,8 @@ export function CreateServerPage() {
   const shortfall = wallet && price && walletBalanceRial < requiredBalanceRial ? {
     balanceRial: walletBalanceRial, requiredBalanceRial, orderTotalRial: price.totalRial, shortfallRial: requiredBalanceRial - walletBalanceRial,
   } : submitError?.funding
+  const monthly = billingPeriod === 'monthly'
+  const fundingLabel = monthly ? 'پیش‌پرداخت دورهٔ ماهانه' : 'حداقل اعتبار برای ۷ روز'
   const nameValid = shared || /^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]$/.test(name.trim())
   const allValid = catalogReady && locationValid && periodValid && offerValid && !!selectedOs && walletValid && nameValid && !shortfall
   const canContinue = catalogReady && [
@@ -166,7 +176,9 @@ export function CreateServerPage() {
         actions={<LinkButton to="/servers" variant="secondary" icon={<ArrowLeft size={18} />}>بازگشت</LinkButton>} />
       <Card padding="none" className="wizard-card">
         <div className="wizard-card__header">
-          <SectionHeading title={serverSteps[step]} />
+          <div className="section-heading"><div className="section-heading__title">
+            <h2 ref={stepTitle} tabIndex={-1} style={{ scrollMarginTop: '6rem' }}>{serverSteps[step]}</h2>
+          </div></div>
           <p>{['دیتاسنتر فعال و سپس موقعیت واقعی سرور را انتخاب کنید.', 'دوره پرداخت را پیش از انتخاب منابع مشخص کنید.', 'فقط محصولات قابل سفارش در موقعیت و دوره انتخاب‌شده نمایش داده می‌شوند.', 'سیستم عامل قابل نصب روی محصول انتخابی را مشخص کنید.', 'موجودی کیف پول را برای پرداخت بررسی کنید.', 'نام سرور و جزئیات سفارش را بررسی و تایید کنید.'][step]}</p>
         </div>
         <Stepper steps={serverSteps} current={step} />
@@ -229,7 +241,10 @@ export function CreateServerPage() {
               {wallets.loading ? <div className="storefront-state" role="status">در حال دریافت کیف پول…</div> : wallet && !wallets.error
                 ? <ReviewRow label="موجودی کیف پول" value={`${formatFaNumber(wallet.balance)} تومان`} />
                 : <div className="storefront-state" role="alert"><p>{wallets.error || 'کیف پول در دسترس نیست.'}</p><Button variant="secondary" onClick={wallets.refetch}>تلاش دوباره</Button></div>}
-              <div className="info-box"><WalletCards size={20} /><span>{price ? `مبلغ ${priceLabel(price.totalRial)} برای دوره ${billingPeriod ? periodLabels[billingPeriod] : ''} پرداخت می‌شود. حداقل اعتبار این سرور برای ۷ روز: ${priceLabel(requiredBalanceRial)}. تعهد سرورهای دیگر هنگام ثبت سفارش بررسی می‌شود؛ اعتبار اضافه برداشت نمی‌شود.` : 'ابتدا محصول و دوره پرداخت معتبر انتخاب کنید.'}</span></div>
+              <div className="info-box"><WalletCards size={20} /><span>{price ? monthly
+                ? `پیش‌پرداخت دورهٔ ماهانه: ${priceLabel(requiredBalanceRial)}.`
+                : `مبلغ ${priceLabel(price.totalRial)} برای دورهٔ ساعتی پرداخت می‌شود. حداقل اعتبار این سرور برای ۷ روز: ${priceLabel(requiredBalanceRial)}. تعهد سرورهای دیگر هنگام ثبت سفارش بررسی می‌شود؛ اعتبار اضافه برداشت نمی‌شود.`
+                : 'ابتدا محصول و دوره پرداخت معتبر انتخاب کنید.'}</span></div>
             </div> : null}
             {step === 5 ? <div className="review-grid">
               {billingPeriod && <p className="info-box billing-period-explanation">{periodExplanation[billingPeriod]}</p>}
@@ -247,14 +262,14 @@ export function CreateServerPage() {
                 <ReviewRow label="سیستم عامل" value={selectedOs?.label || selectedOs?.id || 'انتخاب نشده'} />
                 <ReviewRow label="کیف پول" value={wallet?.name ?? 'انتخاب نشده'} />
                 <ReviewRow label="مبلغ پرداخت" value={price ? priceLabel(price.totalRial) : 'انتخاب نشده'} />
-                <ReviewRow label="حداقل اعتبار برای ۷ روز" value={price ? priceLabel(requiredBalanceRial) : 'انتخاب نشده'} />
+                <ReviewRow label={fundingLabel} value={price ? priceLabel(requiredBalanceRial) : 'انتخاب نشده'} />
               </div>
               {!locationValid || !periodValid || !offerValid || !selectedOs || !walletValid ? <div className="storefront-state" role="alert"><p>انتخاب‌های سفارش معتبر نیست؛ کاتالوگ را دوباره دریافت و مراحل را تکمیل کنید.</p><Button variant="secondary" onClick={reloadCatalog}>انتخاب دوباره</Button></div> : null}
               {submitError && !shortfall ? <div className="storefront-state" role="alert"><p>{submitError.message}</p><LinkButton to="/servers" variant="secondary">بررسی سرورهای من</LinkButton><Button variant="secondary" onClick={() => setStep(0)}>بررسی انتخاب‌های سفارش</Button></div> : null}
             </div> : null}
             {step >= 4 && shortfall ? <div className="checkout-funding" role="alert">
               <strong>موجودی کیف پول شما کافی نیست.</strong>
-              <p>برای ساخت سرور، اعتبار حداقل یک هفتهٔ آینده لازم است.</p>
+              <p>{monthly ? 'برای ساخت سرور، پیش‌پرداخت دورهٔ ماهانه لازم است.' : 'برای ساخت سرور، اعتبار حداقل یک هفتهٔ آینده لازم است.'}</p>
               <div className="review-list"><ReviewRow label="موجودی کیف پول" value={priceLabel(shortfall.balanceRial)} /><ReviewRow label="مبلغ پرداخت سفارش" value={priceLabel(shortfall.orderTotalRial)} /><ReviewRow label="حداقل موجودی موردنیاز" value={priceLabel(shortfall.requiredBalanceRial)} /><ReviewRow label="مبلغ افزایش موجودی" value={priceLabel(shortfall.shortfallRial)} /></div>
               <LinkButton to="/wallet?returnTo=server-checkout" onClick={preserveOrder}>افزایش موجودی کیف پول</LinkButton>
               <Button variant="secondary" onClick={() => { setSubmitError(null); wallets.refetch() }}>بررسی دوباره موجودی</Button>
@@ -263,7 +278,10 @@ export function CreateServerPage() {
         </div>
       </Card>
         <div className="wizard-card__footer storefront-footer">
-          <Button variant="secondary" disabled={submitting} onClick={() => { if (step === 0) navigate('/servers'); else setStep((value) => Math.max(0, value - 1)) }}>{step === 0 ? 'انصراف' : 'مرحله قبل'}</Button>
+          <Button variant="secondary" disabled={submitting} onClick={() => {
+            if (step === 0) { clearCheckoutDraft(user?.id); navigate('/servers') }
+            else setStep(value => value - 1)
+          }}>{step === 0 ? 'انصراف' : 'مرحله قبل'}</Button>
           <Button icon={step === serverSteps.length - 1 ? <CheckCircle2 size={18} /> : undefined} disabled={submitting || !canContinue} onClick={next}>{submitting ? 'در حال ایجاد...' : step === serverSteps.length - 1 ? 'تایید و ایجاد سرور' : 'مرحله بعد'}</Button>
         </div>
     </div>

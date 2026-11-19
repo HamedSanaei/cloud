@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WalletPage } from '../src/pages/FinancePages'
@@ -55,7 +55,7 @@ describe('wallet transaction columns', () => {
       entry({ id: 'traffic', description: 'مصرف مازاد آزمایشی', amountRial: -500, type: 'purchase', referenceType: 'traffic_overage' }),
       entry({ id: 'failed', description: 'پرداخت آزمایشی', status: 'failed' }),
     ]
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => Response.json({ data: url.endsWith('/wallets/transactions') ? entries
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => Response.json({ data: url.split('?')[0].endsWith('/wallets/transactions') ? entries
       : url.endsWith('/wallets') ? [{ id: 'wallet', name: 'کیف پول', balance: 0 }, { id: 'other', name: 'کیف دوم', balance: 0 }]
         : url.endsWith('/wallets/summary') ? { totalBalance: 0 } : { enabled: false } })))
     render(<MemoryRouter initialEntries={['/wallet']}><ToastProvider><WalletPage /></ToastProvider></MemoryRouter>)
@@ -73,5 +73,70 @@ describe('wallet transaction columns', () => {
     expect(screen.queryByRole('button', { name: 'ایجاد کیف پول' })).toBeNull()
     expect(screen.getByText('تعویض سرور آزمایشی')).toBeTruthy()
     expect(screen.getByText('جبران هزینه')).toBeTruthy()
+  })
+
+  it('fetches every server page and exports the full selected window', async () => {
+    const entries = Array.from({ length: 168 }, (_, index) => entry({ id: String(index), description: `ledger-${index}`, date: new Date(Date.now() - (index < 80 ? 1 : 48) * 3600000).toISOString() }))
+    vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+      const url = new URL(path, 'https://fixture.test')
+      if (!url.pathname.endsWith('/transactions')) return Response.json({ data: { enabled: false, totalBalance: 0 } })
+      const since = Date.parse(url.searchParams.get('since')!), until = Date.parse(url.searchParams.get('until')!)
+      const offset = Number(url.searchParams.get('offset')), limit = Number(url.searchParams.get('limit'))
+      const rows = entries.filter(row => Date.parse(row.date) >= since && Date.parse(row.date) < until)
+      return Response.json({ data: rows.slice(offset, offset + limit), pagination: { nextOffset: offset + limit < rows.length ? offset + limit : null } })
+    }))
+    const objectUrl = vi.fn(() => 'blob:wallet-test')
+    vi.stubGlobal('URL', class extends URL { static createObjectURL = objectUrl; static revokeObjectURL = vi.fn() })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    render(<MemoryRouter><ToastProvider><WalletPage /></ToastProvider></MemoryRouter>)
+    expect(await screen.findByText(/۸۰ تراکنش/)).toBeTruthy()
+    const week = screen.getByRole('button', { name: '۷ روز اخیر' })
+    fireEvent.click(week)
+    expect(await screen.findByText(/۱۶۸ تراکنش/)).toBeTruthy()
+    expect(week.getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: '۲۴ ساعت اخیر' }).getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(screen.getByRole('button', { name: 'صفحهٔ بعد' }))
+    expect(screen.getByText('ledger-50')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'دانلود' }))
+    const [blob] = (objectUrl.mock.calls as unknown as [Blob][])[0]
+    const csv = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = reject
+      reader.readAsText(blob)
+    })
+    expect(csv.split('\r\n')).toHaveLength(169)
+    expect(csv).toContain('ledger-167')
+  })
+  it('validates Latin, Persian and Arabic top-up amounts with the same field error', async () => {
+    const attempts: number[] = []
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.endsWith('/wallets/recharge/options')) return Response.json({ data: { enabled: true, gateways: ['tabapay'] } })
+      if (path.endsWith('/wallets/recharges')) {
+        attempts.push(JSON.parse(String(init?.body)).amountToman)
+        return Response.json({ data: { id: 'fixture', status: 'pending', paymentUrl: null } })
+      }
+      return Response.json({ data: { enabled: false, totalBalance: 0 } })
+    }))
+    render(<MemoryRouter><ToastProvider><WalletPage /></ToastProvider></MemoryRouter>)
+    const open = await screen.findByRole<HTMLButtonElement>('button', { name: 'شارژ کیف پول' })
+    await waitFor(() => expect(open.disabled).toBe(false))
+    fireEvent.click(open)
+    await screen.findByRole('option', { name: 'تاباپی' })
+    const amount = screen.getByRole('textbox', { name: 'مبلغ (تومان)' })
+    const submit = screen.getByRole('button', { name: 'دریافت لینک پرداخت امن' })
+    for (const text of ['9999', '۹۹۹۹', '٩٩٩٩']) {
+      fireEvent.change(amount, { target: { value: text } })
+      fireEvent.click(submit)
+      expect(await screen.findByText(/باید بین ۱۰٬۰۰۰/)).toBeTruthy()
+      expect(amount.getAttribute('aria-invalid')).toBe('true')
+      await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(false))
+    }
+    expect(attempts).toEqual([])
+    fireEvent.change(amount, { target: { value: '۱۰٠۰۰' } })
+    expect(screen.queryByText(/باید بین ۱۰٬۰۰۰/)).toBeNull()
+    fireEvent.click(submit)
+    expect(await screen.findByRole('link', { name: 'پیگیری نتیجه پرداخت' })).toBeTruthy()
+    expect(attempts).toEqual([10000])
   })
 })

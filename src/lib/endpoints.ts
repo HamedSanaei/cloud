@@ -235,10 +235,24 @@ export async function listWallets(): Promise<Wallet[]> {
   return unwrapList<Wallet>(payload)
 }
 
-export async function listTransactions(): Promise<Transaction[]> {
-  if (noApi()) return []
-  const payload = await apiGet<Paginated<Transaction> | Transaction[]>('/wallets/transactions')
-  return unwrapList<Transaction>(payload)
+export async function listTransactions(period: '24h' | '7d'): Promise<{ rows: Transaction[]; complete: boolean }> {
+  if (noApi()) return { rows: [], complete: true }
+  const end = Date.now()
+  const since = end - (period === '24h' ? 1 : 7) * 86400000
+  const range = new URLSearchParams({ since: new Date(since).toISOString(), until: new Date(end).toISOString(), limit: '100' })
+  const rows: Transaction[] = []
+  let offset = 0
+  let complete = true
+  for (;;) {
+    range.set('offset', String(offset))
+    const payload: Paginated<Transaction> & { pagination?: { nextOffset: number | null; complete?: boolean } } = await apiGet(`/wallets/transactions?${range}`)
+    rows.push(...unwrapList<Transaction>(payload))
+    complete &&= payload.pagination?.complete !== false
+    const next = payload.pagination?.nextOffset
+    if (next == null) return { rows: rows.filter(row => Date.parse(row.date) >= since && Date.parse(row.date) < end), complete }
+    if (!Number.isSafeInteger(next) || next <= offset) throw new Error('صفحه‌بندی گردش کیف پول معتبر نیست.')
+    offset = next
+  }
 }
 
 export async function listInvoices(): Promise<Invoice[]> {
@@ -301,18 +315,16 @@ export async function verifyNationalCode(payload: { nationalCode: string; mobile
 }
 
 export async function listSessions(): Promise<Session[]> {
-  if (noApi()) {
-    return [{ id: 'current', device: 'Chrome روی Windows', location: 'Asia/Tehran', lastActivity: 'همین حالا', current: true }]
-  }
+  if (noApi()) return []
   const payload = await apiGet<Paginated<Session> | Session[]>('/sessions')
-  const items = unwrapList<Session>(payload)
-  return items.length
-    ? items
-    : [{ id: 'current', device: 'Chrome روی Windows', location: 'Asia/Tehran', lastActivity: 'همین حالا', current: true }]
+  return unwrapList<Session>(payload)
 }
 
 export async function revokeOtherSessions(): Promise<void> {
   await apiDelete('/sessions/others')
+}
+export async function revokeSession(id: string): Promise<void> {
+  await apiDelete(`/sessions/${encodeURIComponent(id)}`)
 }
 
 export async function updateTimezone(timezone: string): Promise<void> {

@@ -8,12 +8,13 @@ import { invoices, orders, platformLinks, providerOperations, servers, subscript
 import type { DbClient } from '../../db/index.js'
 import { requireUser } from '../../http/auth.js'
 import { parse } from '../../http/validate.js'
-import { AppError, BadRequestError, ConflictError } from '../../lib/errors.js'
+import { AppError, BadRequestError, ConflictError, NotFoundError } from '../../lib/errors.js'
 import { transactionDirection } from '../../lib/dto.js'
 import { storefrontProjection, type ConsoleOffer } from './storefront.js'
 import { listNotifications, publishNotification } from '../notifications/service.js'
 import { isPlatformAuthority } from './authority.js'
 import { authorizeOperation, type OperationIntent } from '../auth/operation-email.js'
+import { walletHistoryPage, walletHistoryQuery } from '../wallets/history.js'
 
 export function platformEnabled(): boolean { return isPlatformAuthority() }
 
@@ -268,6 +269,13 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
     if (pathname === '/api/charge-requests') {
       return reply.send(await platformRequest(token, '/charge-requests'))
     }
+    if (pathname.startsWith('/api/charge-requests/')) {
+      const id = parse(z.uuid(), pathname.slice('/api/charge-requests/'.length))
+      const { data } = await platformRequest<{ data: Array<{ id: string }> }>(token, '/charge-requests')
+      const row = data.find(item => item.id === id)
+      if (!row) throw new NotFoundError('درخواست شارژ یافت نشد.')
+      return reply.send({ data: row })
+    }
     if (pathname === '/api/invoices') {
       throw new AppError(501, 'invoices_unavailable', 'سرویس مرجع فعلاً فاکتور رسمی صادر نمی‌کند. سوابق واقعی پرداخت در «درخواست‌های شارژ» و گردش حساب در «کیف پول» قابل مشاهده است.')
     }
@@ -282,12 +290,22 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
       }> } } }>(token, '/wallet')
       const amount = requireToman(data.balance)
       if (pathname.endsWith('/summary')) return reply.send({ data: { totalBalance: amount, wallets: 1, defaultWallet: 'مشترک تلگرام و سایت', connectedProducts: 0 } })
-      if (pathname.endsWith('/transactions')) return reply.send({ data: data.history.items.map(item => {
-        if (!Number.isSafeInteger(item.amount_minor)) throw new ConflictError('مبلغ تراکنش خارج از محدوده نمایش است')
-        return { id: item.entry_id, amount: item.amount_minor, direction: transactionDirection(item.amount_minor), currency: item.currency,
-          formattedAmount: item.formatted, description: item.description, wallet: 'مشترک تلگرام و سایت', walletId: 'platform', type: item.entry_type,
-          date: item.created_at, status: item.status ?? 'success', referenceType: item.reference_type, referenceId: item.reference_id }
-      }) })
+      if (pathname.endsWith('/transactions')) {
+        const { since, until, limit, offset } = parse(walletHistoryQuery, request.query)
+        const start = since ? Date.parse(since) : -Infinity, end = until ? Date.parse(until) : Infinity
+        const items = data.history.items
+        // The canonical /wallet contract returns at most 50 entries without a continuation token.
+        const complete = items.length < 50 || items.some(item => Date.parse(item.created_at) < start)
+        const rows = items.filter(item => (!since || Date.parse(item.created_at) >= start) && (!until || Date.parse(item.created_at) < end))
+          .slice(offset, offset + limit + 1).map(item => {
+            if (!Number.isSafeInteger(item.amount_minor)) throw new ConflictError('مبلغ تراکنش خارج از محدوده نمایش است')
+            return { id: item.entry_id, amount: item.amount_minor, direction: transactionDirection(item.amount_minor), currency: item.currency,
+              formattedAmount: item.formatted, description: item.description, wallet: 'مشترک تلگرام و سایت', walletId: 'platform', type: item.entry_type,
+              date: item.created_at, status: item.status ?? 'success', referenceType: item.reference_type, referenceId: item.reference_id }
+          })
+        const page = walletHistoryPage(rows, limit, offset)
+        return reply.send({ ...page, pagination: { ...page.pagination, complete } })
+      }
       return reply.send({ data: [{ id: 'platform', name: 'مشترک تلگرام و سایت', balance: amount, isDefault: true }] })
     }
     if (pathname === '/api/dashboard/summary') {

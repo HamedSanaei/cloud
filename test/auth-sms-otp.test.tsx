@@ -118,7 +118,7 @@ describe('WebOTP during mobile login', () => {
     const restart = screen.getByRole('button', { name: 'درخواست منقضی شده؛ شروع دوباره و دریافت کد جدید' })
     expect(resendChallenge).not.toHaveBeenCalled()
     fireEvent.click(restart)
-    expect(screen.getByLabelText('شماره همراه')).toBeTruthy()
+    expect(screen.getByRole('textbox', { name: 'شماره همراه' })).toBeTruthy()
     expect(startPhoneLogin).toHaveBeenCalledTimes(1)
   })
   it('recognizes server-side expiry on resend when the local clock has not expired yet', async () => {
@@ -143,6 +143,18 @@ describe('WebOTP during mobile login', () => {
     await waitFor(() => expect(verifyChallenge).toHaveBeenCalledExactlyOnceWith('replacement', '654321', expect.any(AbortSignal)))
     expect(getCredential.mock.calls[0]![0].signal.aborted).toBe(true)
     expect(resendChallenge).toHaveBeenCalledExactlyOnceWith('login-otp')
+  })
+
+  it('returns focus to OTP and announces a successful resend before continuing the cooldown', async () => {
+    getCredential.mockResolvedValue(null)
+    resendChallenge.mockResolvedValue({ ...loginChallenge, challengeToken: 'new-code', resendAfter: 45 })
+    startLogin()
+    const resend = await screen.findByRole('button', { name: 'ارسال مجدد کد' })
+    resend.focus()
+    fireEvent.click(resend)
+    expect(await screen.findByText('کد جدید ارسال شد.')).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByLabelText('کد تأیید ۶ رقمی'))
+    expect((screen.getByRole('button', { name: /ارسال مجدد تا/ }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it.each(['manual input', 'back', 'navigation', 'send error'])('aborts on %s and ignores a late credential', async (action) => {

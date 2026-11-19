@@ -4,6 +4,8 @@ import { ProviderPermanentError, ProviderRetryableError, ProviderUnknownError } 
 import { createLogger } from '../../logger.js'
 import { outboundFetch } from '../outbound/client.js'
 import { smsSegments } from './parsgreen-templates.js'
+import { normalizeIranMobile } from '../../contracts/iran-mobile.js'
+export { normalizeIranMobile } from '../../contracts/iran-mobile.js'
 
 // SOAP 1.1 contract published by /Api/SendSMS.asmx?op=SendGroupSMS.
 const PARSGREEN_SOAP_NAMESPACE = 'http://ParsGreen.com/'
@@ -17,18 +19,6 @@ function soapInteger(body: string, name: 'SendGroupSMSResult' | 'success'): numb
 
 function xmlEscape(value: string): string {
   return value.replace(/[<>&'\"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[char]!)
-}
-
-export function normalizeIranMobile(value: string): string | null {
-  const ascii = value
-    .trim()
-    .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
-    .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
-    .replace(/[\s()-]/g, '')
-  if (/^09\d{9}$/.test(ascii)) return `+98${ascii.slice(1)}`
-  if (/^989\d{9}$/.test(ascii)) return `+${ascii}`
-  if (/^\+989\d{9}$/.test(ascii)) return ascii
-  return null
 }
 
 export function parsGreenRecipient(value: string): string {

@@ -1,3 +1,5 @@
+import type { ChargeRequest } from './types'
+
 const TABAPAY_GATEWAY_ORIGIN = 'https://api.tabapay.ir'
 const TABAPAY_PAYMENT_PATH = /^\/(?:sandbox\/)?pay\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -8,4 +10,9 @@ export function firstPartyTabapayHandoff(paymentUrl: string): string {
     throw new Error('لینک پرداخت تاباپی معتبر نیست.')
   }
   return '/payment-continue.html#' + url.pathname.slice(1).toLowerCase()
+}
+
+export function chargeReferences(charge: Pick<ChargeRequest, 'invoiceNumber' | 'paymentReference'>) {
+  const historicalReference = /^[0-9۰-۹٠-٩]+$/.test(charge.invoiceNumber ?? '') ? charge.invoiceNumber : undefined
+  return { paymentReference: charge.paymentReference ?? historicalReference, invoiceNumber: historicalReference ? undefined : charge.invoiceNumber }
 }

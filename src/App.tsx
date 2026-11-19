@@ -29,9 +29,9 @@ export function App({ initialTariffs }: { initialTariffs?: string } = {}) {
     <Routes>
       <Route index element={<LandingPage initialTariffs={initialTariffs} />} />
       <Route caseSensitive path="hetzner" element={<HetznerPage initialTariffs={initialTariffs} />} />
-      <Route path="login" element={<AuthPage intent="login" />} />
-      <Route path="register" element={<AuthPage intent="register" />} />
-      <Route path="forgot-password" element={<AuthPage intent="forgot" />} />
+      <Route path="login" element={<AuthPage key="login" intent="login" />} />
+      <Route path="register" element={<AuthPage key="register" intent="register" />} />
+      <Route path="forgot-password" element={<AuthPage key="forgot" intent="forgot" />} />
       <Route path="auth/callback" element={<GoogleCallbackPage />} />
       <Route path="admin" element={<AdminLayout />}>
         <Route index element={<AdminOverview />} />
