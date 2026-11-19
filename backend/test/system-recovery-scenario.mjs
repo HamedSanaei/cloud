@@ -85,6 +85,20 @@ try {
     const job = await requestRestore(db, a, rehearsal.id, await authorize(a, 'backup.restore', { rehearsalId: rehearsal.id, confirm: 'RESTORE DATABASE' }))
     return jobDone(job.id)
   }
+  // A queued restore must recheck the requester after draining writers.
+  const roleGate = coordinationPool(1)
+  const releaseRoleGate = await sharedWriter(roleGate)
+  let queuedRestore
+  try {
+    queuedRestore = await requestRestore(db, a, rehearsal.id, await authorize(a, 'backup.restore', { rehearsalId: rehearsal.id, confirm: 'RESTORE DATABASE' }))
+    await db.update(users).set({ role: 'admin' }).where(eq(users.id, a.id))
+  } finally { releaseRoleGate(); await roleGate.end() }
+  const revokedRestore = await jobDone(queuedRestore.id)
+  await waitBackupJobs()
+  assert.equal(revokedRestore.status, 'failed')
+  assert.match(revokedRestore.message, /سوپرادمین درخواست‌کننده/)
+  assert.equal(revokedRestore.preBackupId, undefined)
+  await db.update(users).set({ role: 'super_admin' }).where(eq(users.id, a.id))
   // A real sending receipt must block rewind even when its template is now off.
   // This is a synthetic receipt inside the disposable DB; no SMS is transmitted.
   const [receipt] = await db.insert(smsOutbox).values({ key: 'newLogin', userId: customer.id, eventId: 'fixture-accepted-login',

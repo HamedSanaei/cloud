@@ -4,6 +4,7 @@ import { promisify } from 'node:util'
 import { readFile, writeFile, mkdir, readdir, rename, unlink, stat, mkdtemp, rm, open, statfs } from 'node:fs/promises'
 import path from 'node:path'
 import pg, { type PoolClient } from 'pg'
+import { isSuperAdmin, type AccountRole } from '../../contracts/account-role.js'
 import { getConfig } from '../../config.js'
 import type { DbClient } from '../../db/index.js'
 import type { SessionUser } from '../auth/service.js'
@@ -194,13 +195,13 @@ async function run(db: DbClient, job: BackupJob) {
       await client.query("set statement_timeout='60s'")
       await client.query('select pg_advisory_lock($1,$2)', [...writerLock])
       await client.query('set statement_timeout=0')
+      const administrator = await client.query<{ role: AccountRole; status: string }>('select role, status from users where id=$1::uuid', [job.actorId])
+      if (!isSuperAdmin(administrator.rows[0])) throw new ForbiddenError('سوپرادمین درخواست‌کننده باید فعال باشد.')
       const candidate = await getBackupJob(job.sourceId!)
       if (candidate.kind !== 'rehearsal' || candidate.status !== 'completed' || !candidate.expiresAt || Date.parse(candidate.expiresAt) < Date.now()) throw new ConflictError('بازیابی آزمایشی موفق و تازه لازم است.')
       const live = await currentSnapshot(client), original = await decodeArtifact(candidate.sourceId!)
       if (live.financialHash !== original.header.financialHash || live.schemaHead !== original.header.schemaHead || live.pgMajor !== original.header.pgMajor) throw new ConflictError('دفتر مالی، سفارش‌ها، schema یا اعتبارنامه‌ها از زمان Backup تغییر کرده‌اند؛ تطبیق و بازیابی آفلاین لازم است.')
       if (JSON.stringify(live.counts) !== JSON.stringify(candidate.snapshot?.counts)) throw new ConflictError('خلاصهٔ تغییرات از زمان آزمایش بازیابی عوض شده است؛ آزمایش تازه و تأیید دوباره لازم است.')
-      const administrator = await client.query("select id from users where id=$1::uuid and role='admin' and status='active'", [job.actorId])
-      if (administrator.rowCount !== 1) throw new ForbiddenError('مدیر درخواست‌کننده باید فعال باشد.')
       const active = await client.query("select 1 from wallet_payments where status in ('creating','pending','unknown') union all select 1 from provider_operations where status in ('pending','running','unknown','needs_reconciliation') union all select 1 from orders where status::text in ('pending_payment','paid','queued','provisioning','requires_review') limit 1")
       if (active.rowCount) throw new ConflictError('پرداخت یا عملیات سرویس‌دهندهٔ تعیین‌تکلیف‌نشده مانع Restore است.')
       const auditDelta = (await client.query('select * from audit_logs where id > $1 order by id limit 50001', [original.header.auditHead])).rows
