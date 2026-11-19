@@ -177,6 +177,9 @@ export interface ChargeRequest {
   id: string
   number: string
   invoiceNumber?: string
+  paymentReference?: string
+  paymentId?: string
+  paymentStatus?: string
   amount: number
   status: string
   date: string

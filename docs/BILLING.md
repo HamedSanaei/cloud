@@ -136,6 +136,10 @@ provider_base_cost (cents)
   Hijri dates with Persian digits and a 24-hour clock. The authenticated account
   timezone takes priority over the browser cache; Tehran is the Persian default
   and is visibly labeled «به وقت ایران». API timestamps remain UTC ISO values.
+- Site wallet history filters by UTC bounds at the API and pages all rows in the
+  selected window. CSV uses the same window across all pages. The legacy shared
+  wallet API provides only its latest 50 entries, so the panel labels an
+  incomplete window and disables its CSV export.
 - Wallet renewal rows show transaction posting separately from the invoice's
   scheduled due time. This context is resolved from the existing
   `renewal:<invoice UUID>` idempotency reference for historical rows too, with

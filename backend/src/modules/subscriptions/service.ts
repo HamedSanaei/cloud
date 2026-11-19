@@ -170,6 +170,7 @@ export function addInterval(date: Date, interval: typeof subscriptions.$inferSel
   const out = new Date(date)
   const months = ({ MONTHLY: 1, QUARTERLY: 3, SEMIANNUAL: 6, ANNUAL: 12 } as Partial<Record<string, number>>)[interval]
   if (months) {
+    // Each renewal uses the preceding UTC boundary, including any clamped day.
     const day = out.getUTCDate()
     out.setUTCDate(1)
     out.setUTCMonth(out.getUTCMonth() + months)
@@ -184,17 +185,6 @@ export function addInterval(date: Date, interval: typeof subscriptions.$inferSel
     case 'DAILY':
       out.setUTCDate(out.getUTCDate() + 1)
       break
-    case 'QUARTERLY':
-      out.setUTCMonth(out.getUTCMonth() + 3)
-      break
-    case 'SEMIANNUAL':
-      out.setUTCMonth(out.getUTCMonth() + 6)
-      break
-    case 'ANNUAL':
-      out.setUTCMonth(out.getUTCMonth() + 12)
-      break
-    default:
-      out.setUTCMonth(out.getUTCMonth() + 1)
   }
   return out
 }

@@ -1,4 +1,5 @@
 import { Home, LogOut, Settings, X } from 'lucide-react'
+import { useCallback, useEffect, useRef } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { accountLinks, navGroups, settingsLinks } from '../../data/navigation'
 import { useToast } from '../ui/Toast'
@@ -13,6 +14,13 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const navigate = useNavigate()
   const { logout: endSession, user } = useAuth()
   const integration = useApiQuery(getIntegrationStatus)
+  const closeButton = useRef<HTMLButtonElement>(null)
+  const focusClose = useCallback(() => closeButton.current?.focus({ preventScroll: true }), [])
+  useEffect(() => {
+    if (!open) return
+    const frame = window.requestAnimationFrame(focusClose)
+    return () => window.cancelAnimationFrame(frame)
+  }, [open, focusClose])
 
   const logout = async () => {
     await endSession()
@@ -27,16 +35,22 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         type="button"
         className={`sidebar-backdrop ${open ? 'sidebar-backdrop--visible' : ''}`}
         aria-label="بستن منو"
+        tabIndex={-1}
         onClick={onClose}
       />
-      <aside className={`sidebar ${open ? 'sidebar--open' : ''}`}>
+      <aside id="main-sidebar" className={`sidebar ${open ? 'sidebar--open' : ''}`}
+        onKeyDown={event => { if (open && event.key === 'Escape') onClose() }}
+        onTransitionEnd={event => {
+          if (open && event.target === event.currentTarget && event.propertyName === 'transform'
+            && !event.currentTarget.contains(document.activeElement)) focusClose()
+        }}>
         <div className="sidebar__brand">
           <BrandMark className="brand-mark" />
           <div>
             <strong>{BRAND_NAME}</strong>
             <span className="sidebar__tagline">کنسول مدیریت زیرساخت</span>
           </div>
-          <button type="button" className="icon-button sidebar__close" onClick={onClose} aria-label="بستن منو">
+          <button ref={closeButton} type="button" className="icon-button sidebar__close" onClick={onClose} aria-label="بستن منو">
             <X size={21} />
           </button>
         </div>

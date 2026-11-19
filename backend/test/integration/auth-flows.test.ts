@@ -5,6 +5,8 @@ import { buildApp } from '../../src/app.js'
 import { users } from '../../src/db/schema.js'
 import { getConfig } from '../../src/config.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
+import { createSession, registerUser } from '../../src/modules/auth/service.js'
+import { createTotpSecret, encryptTotpSecret, generateTotpCode } from '../../src/modules/auth/totp.js'
 
 // SMS is the first authentication factor for passwordless phone login.
 // Email registration and password recovery still require ownership proof.
@@ -96,5 +98,51 @@ describe.skipIf(skip)('site-wide single-step sign-in (integration)', () => {
     expect(data.token).toMatch(/^cls_/)
     expect(data.challengeToken).toBeUndefined()
     expect(data.user.twoFactorEnabled).toBe(false)
+  })
+
+  it('accepts a recovered password only on a verified phone and requires configured TOTP', async () => {
+    const mobile = '+989121234567'
+    const { id } = await registerUser(ctx.db, { email: 'phone-password@test.local', mobile, password: 'Initial-password123!' })
+    const post = (path: string, payload: object) => app.inject({ method: 'POST', url: `/api${path}`, payload, remoteAddress: '192.0.2.150' })
+    const login = (password: string) => post('/auth/phone/password', { mobile: '۰۹۱۲۱۲۳۴۵۶۷', password })
+    expect((await login('Initial-password123!')).statusCode).toBe(401)
+    await ctx.db.update(users).set({ mobileVerifiedAt: new Date() }).where(eq(users.id, id))
+    const recovered = await post('/auth/password/forgot/phone', { mobile })
+    expect(recovered.statusCode).toBe(202)
+    const { challengeToken, developmentCode } = recovered.json().data
+    expect((await post('/auth/password/reset', { token: challengeToken, code: developmentCode, password: 'Recovered-password123!' })).statusCode).toBe(200)
+    expect((await login('Initial-password123!')).statusCode).toBe(401)
+    expect((await login('Recovered-password123!')).json().data.token).toMatch(/^cls_/)
+
+    const secret = createTotpSecret()
+    await ctx.db.update(users).set({ twoFactorEnabled: true, totpSecretEncrypted: encryptTotpSecret(secret) }).where(eq(users.id, id))
+    const step = await login('Recovered-password123!')
+    expect(step.statusCode).toBe(202)
+    expect(step.json().data.challengeType).toBe('totp')
+    expect(step.json().data.token).toBeUndefined()
+    const verified = await post('/auth/2fa/verify', { token: step.json().data.challengeToken, code: generateTotpCode(secret) })
+    expect(verified.json().data.token).toMatch(/^cls_/)
+  })
+
+  it('persists accepted legal profile fields and revokes only the selected owned session', async () => {
+    const owner = await registerUser(ctx.db, { email: 'legal-profile@test.local', password: 'FixturePassword123!' })
+    const foreign = await registerUser(ctx.db, { email: 'foreign-session@test.local', password: 'FixturePassword123!' })
+    const [current, target, spared, other] = await Promise.all([
+      createSession(ctx.db, owner.id, {}), createSession(ctx.db, owner.id, {}),
+      createSession(ctx.db, owner.id, {}), createSession(ctx.db, foreign.id, {}),
+    ])
+    const headers = { authorization: `Bearer ${current.token}` }
+    const profileUrl = '/api/profile'
+    expect((await app.inject({ method: 'PUT', url: profileUrl, headers, payload: { firstName: 'نام تازه', legalEnabled: true, companyName: 'شرکت آزمایشی' } })).statusCode).toBe(200)
+    expect((await app.inject({ url: profileUrl, headers })).json().data).toMatchObject({ firstName: 'نام تازه', legalEnabled: true, companyName: 'شرکت آزمایشی' })
+    expect((await app.inject({ method: 'PUT', url: profileUrl, headers, payload: { firstName: 'x'.repeat(101) } })).json().message).toContain('حداکثر ۱۰۰ نویسه')
+
+    const end = (id: string) => app.inject({ method: 'DELETE', url: '/api/sessions/' + id, headers })
+    expect((await end(other.sessionId)).statusCode).toBe(404)
+    expect((await end(current.sessionId)).statusCode).toBe(404)
+    expect((await end(target.sessionId)).statusCode).toBe(200)
+    const list = (await app.inject({ url: '/api/sessions', headers })).json().data as { id: string }[]
+    expect(list.map(item => item.id).sort()).toEqual([current.sessionId, spared.sessionId].sort())
+    expect((await app.inject({ url: '/api/auth/me', headers: { authorization: `Bearer ${target.token}` } })).statusCode).toBe(401)
   })
 })

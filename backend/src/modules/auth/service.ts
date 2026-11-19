@@ -111,6 +111,13 @@ export async function verifyPrimaryCredentials(db: DbClient, input: { email: str
   return user
 }
 
+export async function verifyMobileCredentials(db: DbClient, mobile: string, password: string) {
+  const user = await db.query.users.findFirst({ where: t => eq(t.mobile, mobile) })
+  const ok = user ? await verifyPassword(user.passwordHash, password) : await verifyPassword(await hashPassword(password), password)
+  if (!user?.mobileVerifiedAt || !ok || user.status !== 'active') throw new UnauthorizedError('شماره همراه یا رمز عبور نادرست است')
+  return user
+}
+
 export async function logout(db: DbClient, sessionId: string): Promise<void> {
   await db.update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.id, sessionId))
 }

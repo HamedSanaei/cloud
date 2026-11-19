@@ -7,6 +7,7 @@ import { getWallet, listTransactions, listWalletRecords, listWallets } from './s
 import { transactionToDto, walletToDto } from '../../lib/dto.js'
 import { rialToToman } from '../../lib/money.js'
 import { ConflictError } from '../../lib/errors.js'
+import { walletHistoryPage, walletHistoryQuery } from './history.js'
 
 export const registerWalletRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
   const { db } = ctx
@@ -54,10 +55,11 @@ export const registerWalletRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
 
   app.get('/wallets/transactions', async (request) => {
     const user = requireUser(request)
-    const query = parse(z.object({ limit: z.coerce.number().int().positive().max(200).optional() }), request.query)
-    const [rows, wallets] = await Promise.all([listTransactions(db, user.id, { limit: query.limit ?? 50 }), listWalletRecords(db, user.id)])
+    const { since, until, limit, offset } = parse(walletHistoryQuery, request.query)
+    const [rows, wallets] = await Promise.all([listTransactions(db, user.id, { limit: limit + 1, offset,
+      since: since ? new Date(since) : undefined, until: until ? new Date(until) : undefined }), listWalletRecords(db, user.id)])
     const names = new Map(wallets.map(wallet => [wallet.id, wallet.name]))
-    return { data: rows.map(row => transactionToDto(row, names.get(row.walletId))) }
+    return walletHistoryPage(rows.map(row => transactionToDto(row, names.get(row.walletId))), limit, offset)
   })
 }
 

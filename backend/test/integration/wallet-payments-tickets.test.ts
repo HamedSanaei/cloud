@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify'
 import { eq } from 'drizzle-orm'
 import { buildApp } from '../../src/app.js'
 import * as config from '../../src/config.js'
-import { orders, servers, users } from '../../src/db/schema.js'
+import { chargeRequests, orders, servers, users, walletTransactions } from '../../src/db/schema.js'
 import { createSession, registerUser } from '../../src/modules/auth/service.js'
 import { ensureDefaultWallet } from '../../src/modules/wallets/service.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
@@ -82,6 +82,45 @@ describe.skipIf(!dbAvailable)('site wallet gateway and ticket ownership integrat
     expect(ledger).toHaveLength(1); expect(ledger[0]!.amountRial).toBe(200000)
     const notices = await app.inject({ url: '/api/notifications', headers: a.headers })
     expect(notices.json().data).toEqual([expect.objectContaining({ title: 'کیف پول شارژ شد', href: '/wallet' })])
+    const [charge] = (await app.inject({ url: '/api/charge-requests', headers: a.headers })).json().data
+    expect(charge).toMatchObject({ paymentId: payment.id, paymentStatus: 'succeeded', paymentReference: expect.stringMatching(/^\d+$/) })
+    expect(charge.invoiceNumber).toBeUndefined()
+  })
+  it('tracks the same owned request and preserves historical payment references', async () => {
+    const a = await account(), b = await account(), payment = await intent(a)
+    const [charge] = (await app.inject({ url: '/api/charge-requests', headers: a.headers })).json().data
+    const url = '/api/charge-requests/' + charge.id
+    expect((await app.inject({ url, headers: b.headers })).statusCode).toBe(404)
+    expect((await app.inject({ url, headers: a.headers })).json().data).toMatchObject({ paymentId: payment.id, status: 'processing', paymentStatus: 'pending' })
+    expect(creates).toBe(1)
+    const [historical] = await ctx.db.insert(chargeRequests).values({ userId: a.user.id, number: 'PAY-HISTORICAL', amountRial: 200000, status: 'approved', invoiceNumber: '4500123' }).returning()
+    const detail = (await app.inject({ url: '/api/charge-requests/' + historical!.id, headers: a.headers })).json().data
+    expect(detail.paymentReference).toBe('4500123')
+    expect(detail.invoiceNumber).toBeUndefined()
+  })
+
+  it('returns the complete seven-day and high-volume daily ledger through stable pages', async () => {
+    const a = await account(), foreign = await account()
+    const now = new Date('2026-11-19T12:00:00Z')
+    const transaction = { walletId: a.wallet.id, userId: a.user.id, type: 'renewal' as const, amountRial: -1000, balanceBeforeRial: 2000, balanceAfterRial: 1000 }
+    await ctx.db.insert(walletTransactions).values([
+      ...Array.from({ length: 168 }, (_, index) => ({ ...transaction, createdAt: new Date(now.getTime() - (index < 80 ? 1 : 2 + index % 5) * 86400000 + 60000) })),
+      { ...transaction, createdAt: new Date(now.getTime() - 8 * 86400000) },
+      { ...transaction, walletId: foreign.wallet.id, userId: foreign.user.id, createdAt: new Date(now.getTime() - 3000) },
+    ])
+    for (const [days, count] of [[1, 80], [7, 168]]) {
+      const query = new URLSearchParams({ since: new Date(now.getTime() - days! * 86400000).toISOString(), until: now.toISOString(), limit: '50' })
+      const ids = []
+      let offset: number | null = 0
+      while (offset !== null) {
+        query.set('offset', String(offset))
+        const { data, pagination } = (await app.inject({ url: '/api/wallets/transactions?' + query, headers: a.headers })).json()
+        ids.push(...data.map((row: { id: string }) => row.id))
+        offset = pagination.nextOffset
+      }
+      expect(ids).toHaveLength(count!)
+      expect(new Set(ids).size).toBe(count!)
+    }
   })
   it('rejects foreign wallets, foreign receipt reads and forged webhooks', async () => {
     const a = await account(), b = await account(), payment = await intent(a)

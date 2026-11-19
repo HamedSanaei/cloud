@@ -188,10 +188,11 @@ export async function creditWallet(
   })
 }
 
-export async function listTransactions(db: DbClient, userId: string, opts: { limit?: number; offset?: number; walletId?: string } = {}) {
+export async function listTransactions(db: DbClient, userId: string, opts: { limit?: number; offset?: number; walletId?: string; since?: Date; until?: Date } = {}) {
   const rows = await db.query.walletTransactions.findMany({
-    where: (t, { and, eq }) => and(eq(t.userId, userId), opts.walletId ? eq(t.walletId, opts.walletId) : undefined),
-    orderBy: (t, { desc }) => [desc(t.createdAt)],
+    where: (t, { and, eq, gte, lt }) => and(eq(t.userId, userId), opts.walletId ? eq(t.walletId, opts.walletId) : undefined,
+      opts.since ? gte(t.createdAt, opts.since) : undefined, opts.until ? lt(t.createdAt, opts.until) : undefined),
+    orderBy: (t, { desc }) => [desc(t.createdAt), desc(t.id)],
     limit: opts.limit ?? 50,
     offset: opts.offset ?? 0,
   })

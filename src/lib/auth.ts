@@ -51,6 +51,12 @@ export async function startPhoneLogin(mobile: string): Promise<AuthChallenge> {
   return (await apiPost<Data<AuthChallenge>>('/auth/phone/start', { mobile }, { timeoutMs: 30000 })).data
 }
 
+export async function startPhonePasswordLogin(mobile: string, password: string): Promise<AuthChallenge | AuthSession> {
+  const result = (await apiPost<Data<AuthChallenge | AuthSession>>('/auth/phone/password', { mobile, password })).data
+  if ('token' in result) setAuthToken(result.token)
+  return result
+}
+
 export async function verifyChallenge(token: string, code: string, signal?: AbortSignal): Promise<AuthSession | AuthChallenge> {
   const result = (await apiPost<Data<AuthSession | AuthChallenge>>('/auth/challenge/verify', { token, code }, { signal })).data
   if (!signal?.aborted && 'token' in result) setAuthToken(result.token)
@@ -77,8 +83,8 @@ export async function startPasswordRecovery(email: string): Promise<AuthChalleng
   return (await apiPost<Data<AuthChallenge>>('/auth/password/forgot', { email })).data
 }
 
-export async function resetPassword(token: string, code: string, password: string, totp?: string): Promise<void> {
-  await apiPost('/auth/password/reset', { token, code, password, ...(totp ? { totp } : {}) })
+export async function resetPassword(token: string, code: string, password: string, totp?: string, signal?: AbortSignal): Promise<void> {
+  await apiPost('/auth/password/reset', { token, code, password, ...(totp ? { totp } : {}) }, { signal })
 }
 
 export async function getGoogleLoginUrl(redirectTo = '/dashboard'): Promise<string> {

@@ -13,8 +13,9 @@ session guard and every API route continues to enforce authorization server-side
 - Google OAuth 2.0 Authorization Code flow with state and PKCE
 - Login by previously verified Iranian mobile (`09…`, `989…`, or `+989…`) → E.164 account lookup → ParsGreen SMS challenge; login never auto-creates accounts
 - Phone login for TOTP-enabled accounts → SMS challenge → additional TOTP challenge before session
+- Verified mobile and password → session, with an additional TOTP challenge for enrolled accounts
 - Password login for 2FA-enabled accounts → TOTP or one-time recovery code
-- Password recovery → email challenge → new password
+- Password recovery → email or verified-mobile challenge → explicit new password submission → sign-in
 
 OTP values are HMAC-protected at rest. Challenge tokens are random and only
 their SHA-256 hashes are stored. A new challenge invalidates the previous one,
@@ -100,6 +101,7 @@ once and stored as HMAC hashes. Disabling 2FA requires the current password.
 | POST | `/api/v1/auth/register/phone/start` | Start verified mobile registration (default) |
 | POST | `/api/v1/auth/register/start` | Start verified email-only registration |
 | POST | `/api/v1/auth/login/start` | Validate password and select email/TOTP challenge |
+| POST | `/api/v1/auth/phone/password` | Validate a password for a verified mobile and apply enrolled TOTP |
 | POST | `/api/v1/auth/phone/start` | Login with an already verified mobile; no implicit signup |
 | POST | `/api/v1/auth/challenge/verify` | Verify email or SMS challenge |
 | POST | `/api/v1/auth/challenge/resend` | Resend after server cooldown |

@@ -12,8 +12,9 @@ import { Badge, Table } from '../components/ui/Table'
 import { useToast } from '../components/ui/Toast'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { isApiConfigured } from '../lib/apiClient'
-import { getProfile, listSessions, revokeOtherSessions, updateProfile, updateTimezone, verifyNationalCode } from '../lib/endpoints'
-import { formatCount } from '../lib/format'
+import { getProfile, listSessions, revokeOtherSessions, revokeSession, updateProfile, updateTimezone, verifyNationalCode } from '../lib/endpoints'
+import { formatCount, formatFaDateTime } from '../lib/format'
+import type { Session } from '../lib/types'
 import { useAuth } from '../auth/AuthContext'
 import { EmailCode } from '../components/EmailConfirmation'
 import { Modal } from '../components/ui/Modal'
@@ -32,8 +33,10 @@ export function ProfilePage() {
   const [registrationNumber, setRegistrationNumber] = useState('')
   const [economicCode, setEconomicCode] = useState('')
   const [saving, setSaving] = useState(false)
+  const [nameErrors, setNameErrors] = useState<{ firstName?: string; lastName?: string }>({})
   const [verifying, setVerifying] = useState(false)
   const { showToast } = useToast()
+  const { refresh } = useAuth()
   const profile = useApiQuery(getProfile)
 
   useEffect(() => {
@@ -53,6 +56,10 @@ export function ProfilePage() {
 
   const save = async (event: FormEvent) => {
     event.preventDefault()
+    const firstNameError = firstName.length > 100 ? 'نام حداکثر ۱۰۰ نویسه است.' : undefined
+    const lastNameError = lastName.length > 100 ? 'نام خانوادگی حداکثر ۱۰۰ نویسه است.' : undefined
+    setNameErrors({ firstName: firstNameError, lastName: lastNameError })
+    if (firstNameError || lastNameError) return
     if (!isApiConfigured()) {
       showToast('اطلاعات پروفایل به صورت آزمایشی ذخیره شد.')
       return
@@ -60,6 +67,7 @@ export function ProfilePage() {
     setSaving(true)
     try {
       await updateProfile({ firstName, lastName, mobile, nationalCode, email, legalEnabled: legal, companyName, nationalId, registrationNumber, economicCode })
+      await refresh()
       profile.refetch()
       showToast('اطلاعات پروفایل ذخیره شد.')
     } catch (error) {
@@ -101,8 +109,10 @@ export function ProfilePage() {
           <Card>
             <SectionHeading title="اطلاعات شخصی" icon={<UserRoundCheck size={20} />} />
             <div className="form-grid form-grid--two">
-              <Input label="نام" placeholder="نام خود را وارد کنید" value={firstName} onChange={(event) => setFirstName(event.target.value)} />
-              <Input label="نام خانوادگی" placeholder="نام خانوادگی خود را وارد کنید" value={lastName} onChange={(event) => setLastName(event.target.value)} />
+              <Input label="نام" hint="حداکثر ۱۰۰ نویسه" maxLength={100} error={nameErrors.firstName} placeholder="نام خود را وارد کنید" value={firstName}
+                onChange={event => { setFirstName(event.target.value); setNameErrors(current => ({ ...current, firstName: undefined })) }} />
+              <Input label="نام خانوادگی" hint="حداکثر ۱۰۰ نویسه" maxLength={100} error={nameErrors.lastName} placeholder="نام خانوادگی خود را وارد کنید" value={lastName}
+                onChange={event => { setLastName(event.target.value); setNameErrors(current => ({ ...current, lastName: undefined })) }} />
               <Input label="شماره همراه" type="tel" inputMode="numeric" placeholder="09xxxxxxxxx" value={mobile} onChange={(event) => setMobile(event.target.value)} />
               <div className="identity-field">
                 <Input label="کد ملی" inputMode="numeric" placeholder="کد ملی خود را وارد کنید" hint="کد ملی باید متعلق به صاحب شماره همراه باشد." value={nationalCode} onChange={(event) => setNationalCode(event.target.value)} />
@@ -123,16 +133,16 @@ export function ProfilePage() {
             </div>
             {legal ? (
               <div className="form-grid form-grid--two form-reveal">
-                <Input label="نام شرکت" placeholder="نام رسمی شرکت" value={companyName} onChange={(event) => setCompanyName(event.target.value)} />
-                <Input label="شناسه ملی" placeholder="شناسه ملی شرکت" value={nationalId} onChange={(event) => setNationalId(event.target.value)} />
-                <Input label="شماره ثبت" placeholder="شماره ثبت" value={registrationNumber} onChange={(event) => setRegistrationNumber(event.target.value)} />
-                <Input label="کد اقتصادی" placeholder="کد اقتصادی" value={economicCode} onChange={(event) => setEconomicCode(event.target.value)} />
+                <Input label="نام شرکت" maxLength={250} placeholder="نام رسمی شرکت" value={companyName} onChange={(event) => setCompanyName(event.target.value)} />
+                <Input label="شناسه ملی" maxLength={40} placeholder="شناسه ملی شرکت" value={nationalId} onChange={(event) => setNationalId(event.target.value)} />
+                <Input label="شماره ثبت" maxLength={40} placeholder="شماره ثبت" value={registrationNumber} onChange={(event) => setRegistrationNumber(event.target.value)} />
+                <Input label="کد اقتصادی" maxLength={40} placeholder="کد اقتصادی" value={economicCode} onChange={(event) => setEconomicCode(event.target.value)} />
               </div>
             ) : null}
           </Card>
         </>
       )}
-      <div className="page-footer-actions"><Button type="submit" icon={<Save size={18} />} disabled={saving}>{saving ? 'در حال ذخیره...' : 'ذخیره تغییرات'}</Button></div>
+      <div className="page-footer-actions"><Button type="submit" icon={<Save size={18} />} disabled={saving || profile.loading || !!profile.error}>{saving ? 'در حال ذخیره...' : 'ذخیره تغییرات'}</Button></div>
       <Modal open={!!emailToVerify} title="تأیید ایمیل حساب" trapFocus onClose={() => setEmailToVerify('')}>
         {emailToVerify && <EmailCode start={() => startAccountEmail(emailToVerify)} cancel={() => setEmailToVerify('')}
           submit={async proof => { await verifyAccountEmail(proof); setEmailToVerify(''); profile.refetch(); showToast('ایمیل حساب تأیید شد.') }} />}
@@ -143,24 +153,34 @@ export function ProfilePage() {
 
 export function SessionsPage() {
   const { showToast } = useToast()
+  const { user } = useAuth()
   const sessions = useApiQuery(listSessions)
   const [revoking, setRevoking] = useState(false)
+  const [target, setTarget] = useState<Session | null>(null)
+  const [revokeError, setRevokeError] = useState('')
 
   const items = sessions.data ?? []
-  const activeCurrent = items.find((item) => item.current) ?? items[0]
+  const latest = items.reduce<Session | undefined>((best, item) => !best || Date.parse(item.lastActivity) > Date.parse(best.lastActivity) ? item : best, undefined)
+  const activity = (session: Session) => formatFaDateTime(session.lastActivity, user?.timezone)
+  const summaryState = sessions.loading ? 'در حال دریافت…' : sessions.error ? 'دریافت نشد' : undefined
 
-  const revoke = async () => {
+  const revoke = async (session?: Session) => {
     if (!isApiConfigured()) {
       showToast('نشست دیگری برای خروج وجود ندارد.')
       return
     }
     setRevoking(true)
+    setRevokeError('')
     try {
-      await revokeOtherSessions()
+      if (session) await revokeSession(session.id)
+      else await revokeOtherSessions()
+      setTarget(null)
       sessions.refetch()
-      showToast('از سایر نشست‌ها خارج شدید.')
+      showToast(session ? 'نشست انتخاب‌شده پایان یافت.' : 'از سایر نشست‌ها خارج شدید.')
     } catch (error) {
-      showToast(error instanceof Error ? error.message : 'خروج از نشست‌ها ناموفق بود.')
+      const message = error instanceof Error ? error.message : 'خروج از نشست ناموفق بود.'
+      if (session) setRevokeError(message)
+      else showToast(message)
     } finally {
       setRevoking(false)
     }
@@ -170,8 +190,8 @@ export function SessionsPage() {
     <div className="page-stack">
       <PageHeader title="نشست‌های فعال 🔐" subtitle="مدیریت دستگاه‌ها و نشست‌های فعال خود" icon={<ShieldCheck />} />
       <div className="metrics-grid metrics-grid--two metrics-grid--narrow">
-        <MetricCard label="نشست فعال" value={formatCount(items.length || 1)} icon={Laptop} accent="green" />
-        <MetricCard label="آخرین فعالیت" value={activeCurrent?.lastActivity ?? 'همین حالا'} icon={Clock3} />
+        <MetricCard label="نشست فعال" value={summaryState ?? formatCount(items.length)} icon={Laptop} accent="green" />
+        <MetricCard label="آخرین فعالیت" value={summaryState ?? (latest ? activity(latest) : '—')} icon={Clock3} />
       </div>
       <Card>
         <SectionHeading title="دستگاه‌های متصل" />
@@ -189,15 +209,27 @@ export function SessionsPage() {
               <span className="session-card__icon"><Laptop size={32} /></span>
               <div className="session-card__copy">
                 <div><strong>{session.device}</strong>{session.current ? <Badge tone="success">نشست فعلی</Badge> : null}</div>
-                <p><MapPin size={15} /> {session.location} <span>·</span> آخرین فعالیت: {session.lastActivity}</p>
+                <p><MapPin size={15} /> {session.location} <span>·</span> آخرین فعالیت: <time dateTime={session.lastActivity}>{activity(session)}</time></p>
               </div>
               {session.current ? (
-                <LogoutButton icon={<LogOut size={17} />} disabled={revoking} onClick={revoke}>{revoking ? 'در حال خروج...' : 'خروج از سایر نشست‌ها'}</LogoutButton>
-              ) : null}
+                <LogoutButton icon={<LogOut size={17} />} disabled={revoking} onClick={() => void revoke()}>خروج از سایر نشست‌ها</LogoutButton>
+              ) : <LogoutButton disabled={revoking} onClick={() => { setRevokeError(''); setTarget(session) }}>پایان این نشست</LogoutButton>}
             </article>
           ))
         )}
       </Card>
+      <Modal open={!!target} title="پایان این نشست" trapFocus onClose={() => { if (!revoking) setTarget(null) }}>
+        {target && <div className="form-stack">
+          <p>{target.device} · <bdi>{target.location}</bdi></p>
+          <p>آخرین فعالیت: {activity(target)}</p>
+          <p>شناسهٔ نشست <bdi>{target.id}</bdi></p>
+          {revokeError && <p role="alert">{revokeError}</p>}
+          <div className="server-inline-actions">
+            <Button variant="secondary" disabled={revoking} onClick={() => setTarget(null)}>انصراف</Button>
+            <Button variant="danger" disabled={revoking} onClick={() => void revoke(target)}>تأیید پایان نشست</Button>
+          </div>
+        </div>}
+      </Modal>
     </div>
   )
 }

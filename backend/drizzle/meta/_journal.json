@@ -99,6 +99,13 @@
       "when": 1794845951103,
       "tag": "0013_sms-control-outbox",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1795096000000,
+      "tag": "0014_customer-legal-profile",
+      "breakpoints": true
     }
   ]
 }

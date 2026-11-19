@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type MouseEvent } from 'react'
+import { useRef, useState, type ChangeEvent, type MouseEvent, type Ref } from 'react'
 
 const codeLength = 6
 
@@ -9,7 +9,7 @@ function normalizeCode(value: string) {
     .replace(/\D/g, '').slice(0, codeLength)
 }
 
-export function OtpField({ value, onChange, disabled }: { value: string; onChange: (value: string) => void; disabled?: boolean }) {
+export function OtpField({ value, onChange, disabled, inputRef }: { value: string; onChange: (value: string) => void; disabled?: boolean; inputRef?: Ref<HTMLInputElement> }) {
   const slots = useRef<HTMLSpanElement>(null)
   const [selection, setSelection] = useState({ start: 0, end: 0 })
   const start = Math.min(selection.start, value.length)
@@ -53,6 +53,7 @@ export function OtpField({ value, onChange, disabled }: { value: string; onChang
       <span>کد تأیید ۶ رقمی</span>
       <span className="auth-otp-control" dir="ltr">
         <input
+          ref={inputRef}
           autoFocus
           autoComplete="one-time-code"
           dir="ltr"

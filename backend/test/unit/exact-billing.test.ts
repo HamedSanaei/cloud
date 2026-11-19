@@ -9,9 +9,16 @@ describe('exact ledger and UTC prepaid calendar', () => {
     ['2028-01-31T00:00:00.000Z', '2028-02-29T00:00:00.000Z'],
     ['2026-12-31T20:30:00.000Z', '2027-01-31T20:30:00.000Z'],
     ['2026-03-29T01:30:00.000Z', '2026-04-29T01:30:00.000Z'],
+    ['2026-03-31T12:00:00.000Z', '2026-04-30T12:00:00.000Z'],
   ])('clamps one UTC calendar month from %s', (start, end) => {
     expect(addInterval(new Date(start), 'MONTHLY').toISOString()).toBe(end)
     expect(new Date(start).toISOString()).toBe(start)
+  })
+  it('anchors successive monthly periods to the prior clamped boundary and keeps an exact UTC hour', () => {
+    const january = new Date('2026-01-31T23:30:00Z')
+    const february = addInterval(january, 'MONTHLY')
+    expect(addInterval(february, 'MONTHLY').toISOString()).toBe('2026-03-28T23:30:00.000Z')
+    expect(addInterval(january, 'HOURLY').toISOString()).toBe('2026-02-01T00:30:00.000Z')
   })
   it('preserves a grandfathered daily 24-hour interval over local DST', () => {
     const date = new Date('2026-03-29T01:30:00Z')

@@ -10,7 +10,8 @@
  */
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
-import { eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
+import { chargeRequests, walletPayments } from '../../db/schema.js'
 import type { AppContext } from '../../app.js'
 import { parse } from '../../http/validate.js'
 import { requireUser } from '../../http/auth.js'
@@ -18,7 +19,6 @@ import { ticketToDto } from '../../lib/dto.js'
 import { countOpenInvoices } from '../invoices/service.js'
 import { totalBalanceRial } from '../wallets/service.js'
 import { rialToToman } from '../../lib/money.js'
-import { users } from '../../db/schema.js'
 import { listNotifications, readNotifications } from '../notifications/service.js'
 import { BadRequestError } from '../../lib/errors.js'
 import { NotFoundError } from '../../lib/errors.js'
@@ -113,67 +113,38 @@ export const registerFrontendCompatRoutes: FastifyPluginAsync<{ ctx: AppContext 
   })
 
   // ---- Charge requests ------------------------------------------------------------
-  app.get('/charge-requests', async (request) => {
-    const user = requireUser(request)
-    const rows = await db.query.chargeRequests.findMany({
-      where: (t) => eq(t.userId, user.id),
-      orderBy: (t, { desc }) => [desc(t.createdAt)],
-      limit: 50,
-    })
-    return {
-      data: rows.map((c) => ({
+  const chargesForUser = async (userId: string, id?: string) => {
+    const rows = await db.select({ charge: chargeRequests, paymentId: walletPayments.id, paymentStatus: walletPayments.status,
+      providerReference: walletPayments.providerReference }).from(chargeRequests)
+      .leftJoin(walletPayments, and(eq(walletPayments.chargeRequestId, chargeRequests.id), eq(walletPayments.userId, userId)))
+      .where(and(eq(chargeRequests.userId, userId), id ? eq(chargeRequests.id, id) : undefined))
+      .orderBy(desc(chargeRequests.createdAt)).limit(id ? 1 : 50)
+    return rows.map(({ charge: c, paymentId, paymentStatus, providerReference }) => {
+      const historicalReference = /^\d+$/.test(c.invoiceNumber ?? '') ? c.invoiceNumber : undefined
+      return {
         id: c.id,
         number: c.number,
-        invoiceNumber: c.invoiceNumber ?? undefined,
+        invoiceNumber: historicalReference ? undefined : c.invoiceNumber ?? undefined,
+        paymentReference: providerReference ?? historicalReference,
+        paymentId: paymentId ?? undefined,
+        paymentStatus: paymentStatus ?? undefined,
         amount: rialToToman(c.amountRial),
         amountRial: c.amountRial,
         status: c.status,
         date: c.createdAt.toISOString(),
-      })),
-    }
+      }
+    })
+  }
+  app.get('/charge-requests', async request => ({ data: await chargesForUser(requireUser(request).id) }))
+  app.get('/charge-requests/:id', async (request, reply) => {
+    const { id } = parse(z.object({ id: z.uuid() }), request.params)
+    const [charge] = await chargesForUser(requireUser(request).id, id)
+    if (!charge) throw new NotFoundError('درخواست شارژ یافت نشد.')
+    return reply.header('Cache-Control', 'private, no-store').send({ data: charge })
   })
 
   // Wallets/invoices compat endpoints are provided by the versioned route
   // plugins (also registered under /api).
-
-  // ---- Profile (compat) ---------------------------------------------------------------
-  app.get('/profile', async (request) => {
-    const user = requireUser(request)
-    const row = await db.query.users.findFirst({ where: (t) => eq(t.id, user.id) })
-    if (!row) throw new BadRequestError('کاربر یافت نشد')
-    return {
-      data: {
-        firstName: row.firstName ?? '',
-        lastName: row.lastName ?? '',
-        mobile: row.mobile ?? '',
-        nationalCode: row.nationalCode ?? '',
-        email: row.email,
-        emailVerified: Boolean(row.emailVerifiedAt),
-        legalEnabled: false,
-        timezone: row.timezone ?? 'Asia/Tehran',
-      },
-    }
-  })
-
-  app.put('/profile', async (request) => {
-    const user = requireUser(request)
-    const input = parse(
-      z.object({
-        firstName: z.string().max(100).optional(),
-        lastName: z.string().max(100).optional(),
-        mobile: z.string().max(30).optional(),
-        nationalCode: z.string().max(20).optional(),
-      }),
-      request.body,
-    )
-    const updates: Record<string, unknown> = { updatedAt: new Date() }
-    if (input.firstName !== undefined) updates.firstName = input.firstName
-    if (input.lastName !== undefined) updates.lastName = input.lastName
-    if (input.mobile !== undefined) updates.mobile = input.mobile
-    if (input.nationalCode !== undefined) updates.nationalCode = input.nationalCode
-    await db.update(users).set(updates).where(eq(users.id, user.id))
-    return { data: { ok: true } }
-  })
 
   app.post('/profile/verify-national-code', async () => {
     throw new BadRequestError('تأیید کد ملی به‌زودی فعال می‌شود')

@@ -107,6 +107,7 @@ export const users = pgTable(
     lastName: text('last_name'),
     mobile: text('mobile'),
     nationalCode: text('national_code'),
+    legalProfile: jsonb('legal_profile').$type<{ legalEnabled?: boolean; companyName?: string; nationalId?: string; registrationNumber?: string; economicCode?: string }>(),
     role: userRoleEnum('role').notNull().default('user'),
     status: userStatusEnum('status').notNull().default('active'),
     emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),

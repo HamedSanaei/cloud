@@ -2092,10 +2092,11 @@ textarea:focus-visible {
   .sidebar {
     width: min(290px, 88vw);
     transform: translateX(110%);
+    visibility: hidden;
     box-shadow: var(--shadow-lg);
     transition: transform 220ms ease;
   }
-  .sidebar--open { transform: translateX(0); }
+  .sidebar--open { transform: translateX(0); visibility: visible; }
   .sidebar__close,
   .topbar__menu { display: grid !important; }
   .sidebar__close { margin-inline-start: auto; }

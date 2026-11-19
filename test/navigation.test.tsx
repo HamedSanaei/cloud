@@ -146,7 +146,7 @@ describe('Penpot routes with canonical integration ENABLED', () => {
     expect(screen.getByLabelText('آدرس ایمیل')).toBeTruthy()
     expect(document.querySelector('input[type="password"]')).toBeTruthy()
     await user.click(screen.getByRole('tab', { name: /شماره همراه/ }))
-    expect(screen.getByLabelText('شماره همراه')).toBeTruthy()
+    expect(screen.getByRole('textbox', { name: 'شماره همراه' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'ارسال کد پیامکی' })).toBeTruthy()
     await user.click(screen.getByRole('tab', { name: /ایمیل و رمز عبور/ }))
     expect(screen.getByRole('button', { name: /ورود با حساب گوگل/ })).toBeTruthy()
@@ -259,10 +259,10 @@ describe('Penpot routes with canonical integration ENABLED', () => {
 
   it('keeps long wallet history intact rather than truncating it to fit the viewport', async () => {
     const original = globalThis.fetch
-    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => url.endsWith('/wallets/transactions')
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => url.split('?')[0].endsWith('/wallets/transactions')
       ? Promise.resolve(new Response(JSON.stringify({ data: Array.from({ length: 40 }, (_, index) => ({
         id: `history-${index}`, description: `Fixture transaction ${index + 1}`, wallet: 'shared',
-        amount: 100, date: new Date().toISOString(), status: 'success',
+        amount: 100, date: new Date(Date.now() - 1000).toISOString(), status: 'success',
       })) }), { headers: { 'content-type': 'application/json' } })) : original(url, init)))
     open('/wallet')
     await screen.findByText('Fixture transaction 40')
@@ -315,9 +315,9 @@ describe('Penpot routes with canonical integration ENABLED', () => {
 
   it('filters wallet history by the chosen period without relabelling foreign amounts as toman', async () => {
     const original = globalThis.fetch
-    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => url.endsWith('/wallets/transactions')
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => url.split('?')[0].endsWith('/wallets/transactions')
       ? Promise.resolve(new Response(JSON.stringify({ data: [
-        { id: 'recent', description: 'native USD entry', wallet: 'shared', amount: 500, formattedAmount: '+5.00 USD', date: new Date().toISOString(), status: 'success' },
+        { id: 'recent', description: 'native USD entry', wallet: 'shared', amount: 500, formattedAmount: '+5.00 USD', date: new Date(Date.now() - 1000).toISOString(), status: 'success' },
         { id: 'older', description: 'older entry', wallet: 'shared', amount: 1000, date: new Date(Date.now() - 48 * 3600000).toISOString(), status: 'success' },
       ] }), { headers: { 'content-type': 'application/json' } }))
       : original(url, init)))

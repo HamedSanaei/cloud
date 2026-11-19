@@ -1,4 +1,5 @@
 import { safeReturnPath } from '../../backend/src/contracts/return-path'
+import { invalidIranMobile, normalizeIranMobile } from '../../backend/src/contracts/iran-mobile'
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ArrowLeft, Check, Eye, EyeOff, KeyRound, LockKeyhole, Mail, Phone, RefreshCw, Server, ShieldCheck } from 'lucide-react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
@@ -16,6 +17,7 @@ import {
   startPasswordRecovery,
   startPhonePasswordRecovery,
   startPhoneLogin,
+  startPhonePasswordLogin,
   startPhoneRegistration,
   startRegistration,
   verifyChallenge,
@@ -27,6 +29,7 @@ import {
 
 type AuthIntent = 'login' | 'register' | 'forgot'
 type LoginMethod = 'email' | 'phone'
+const methods: LoginMethod[] = ['phone', 'email']
 
 function AuthBrandPanel() {
   return (
@@ -57,9 +60,13 @@ function GoogleIcon() {
 export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; adminEntry?: boolean }) {
   const navigate = useNavigate()
   const location = useLocation()
-  const requestedReturn = new URLSearchParams(location.search).get('returnTo')
+  const params = new URLSearchParams(location.search)
+  const requestedReturn = params.get('returnTo')
+  const passwordReset = intent === 'login' && location.state?.passwordReset === true
+  const afterPhoneReset = passwordReset && location.state?.method === 'phone'
   const { acceptSession } = useAuth()
-  const [method, setMethod] = useState<LoginMethod>(intent === 'register' ? 'phone' : 'email')
+  const [method, setMethod] = useState<LoginMethod>(intent === 'register' || afterPhoneReset || intent === 'forgot' && params.get('method') === 'phone' ? 'phone' : 'email')
+  const [phonePassword, setPhonePassword] = useState(afterPhoneReset)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -73,6 +80,13 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
   const [recoveryCode, setRecoveryCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [mobileError, setMobileError] = useState('')
+  const [passwordError, setPasswordError] = useState('')
+  const [confirmationError, setConfirmationError] = useState('')
+  const [resent, setResent] = useState(false)
+  const focusAfterResend = useRef(false)
+  const otpInput = useRef<HTMLInputElement>(null)
+  const methodTabs = useRef<Partial<Record<LoginMethod, HTMLButtonElement | null>>>({})
   const [success, setSuccess] = useState(false)
   const [countdown, setCountdown] = useState(0)
   const [otpLocked, setOtpLocked] = useState(false)
@@ -112,6 +126,23 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
     return () => window.clearInterval(timer)
   }, [countdown])
 
+  useEffect(() => {
+    if (busy || !focusAfterResend.current) return
+    focusAfterResend.current = false
+    otpInput.current?.focus()
+  }, [busy, challenge])
+
+  function selectMethod(next: LoginMethod) {
+    if (next === method) return
+    setMethod(next)
+    setError('')
+    setMobileError('')
+    setPasswordError('')
+    setPassword('')
+    setConfirmPassword('')
+    setShowPassword(false)
+  }
+
   function complete(session: AuthSession) {
     acceptSession(session)
     setSuccess(true)
@@ -148,6 +179,14 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
     event.preventDefault()
     if (busy || sending.current) return
     setError('')
+    if (method === 'phone' && !normalizeIranMobile(mobile)) {
+      setMobileError(invalidIranMobile)
+      return
+    }
+    if (intent === 'login' && method === 'phone' && phonePassword && !password) {
+      setPasswordError('رمز عبور را وارد کنید.')
+      return
+    }
     if (intent === 'register' && method === 'email' && password !== confirmPassword) {
       setError('تکرار رمز عبور با رمز اصلی یکسان نیست.')
       return
@@ -155,12 +194,13 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
     const controller = new AbortController()
     sending.current = controller
     setBusy(true)
+    setResent(false)
     try {
       let result: AuthChallenge | AuthSession
       if (intent === 'register' && method === 'phone') result = await startPhoneRegistration({ mobile, firstName, lastName })
       else if (intent === 'register') result = await startRegistration({ email, password, firstName, lastName })
       else if (intent === 'forgot') result = method === 'phone' ? await startPhonePasswordRecovery(mobile) : await startPasswordRecovery(email)
-      else if (method === 'phone') result = await requestSms(() => startPhoneLogin(mobile))
+      else if (method === 'phone') result = phonePassword ? await startPhonePasswordLogin(mobile, password) : await requestSms(() => startPhoneLogin(mobile))
       else result = await startEmailLogin(email, password)
       if (controller.signal.aborted) return
       if ('token' in result) complete(result)
@@ -177,8 +217,15 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
 
   async function submitChallenge(event?: FormEvent, submittedCode = code) {
     event?.preventDefault()
-    if (!challenge || busy || success || otpLocked || verification.current) return
+    if (!challenge || busy || success || otpLocked || challengeExpired || verification.current) return
     if (!recoveryMode && !/^\d{6}$/.test(submittedCode)) return
+    if (intent === 'forgot') {
+      const invalidPassword = password.length < 8 || password.length > 200
+      const mismatch = password !== confirmPassword
+      setPasswordError(invalidPassword ? 'رمز جدید باید ۸ تا ۲۰۰ نویسه داشته باشد.' : '')
+      setConfirmationError(mismatch ? 'تکرار رمز عبور با رمز اصلی یکسان نیست.' : '')
+      if (invalidPassword || mismatch) return
+    }
     cancelSmsRead()
     const controller = new AbortController()
     verification.current = controller
@@ -186,10 +233,8 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
     setError('')
     try {
       if (intent === 'forgot') {
-        if (password !== confirmPassword) throw new Error('تکرار رمز عبور با رمز اصلی یکسان نیست.')
-        await resetPassword(challenge.challengeToken, submittedCode, password, recoveryCode || undefined)
-        setSuccess(true)
-        window.setTimeout(() => navigate('/login?returnTo=' + encodeURIComponent(returnTo), { replace: true }), 1000)
+        await resetPassword(challenge.challengeToken, submittedCode, password, recoveryCode || undefined, controller.signal)
+        if (!controller.signal.aborted) navigate('/login?returnTo=' + encodeURIComponent(returnTo), { replace: true, state: { passwordReset: true, method } })
       } else if (challenge.challengeType === 'totp' && recoveryMode) {
         complete(await verifyRecoveryCode(challenge.challengeToken, recoveryCode))
       } else if (challenge.challengeType === 'totp') {
@@ -227,7 +272,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
   function changeOtp(value: string) {
     cancelSmsRead()
     setCode(value)
-    if (challenge?.challengeType === 'sms' && value.length === 6) void submitChallenge(undefined, value)
+    if (intent !== 'forgot' && challenge?.challengeType === 'sms' && value.length === 6) void submitChallenge(undefined, value)
   }
 
   const fillSmsCode = useEffectEvent((sms: NonNullable<typeof receivedSms>) => {
@@ -246,12 +291,15 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
     sending.current = controller
     setBusy(true)
     setError('')
+    setResent(false)
     try {
       const send = () => resendChallenge(challenge.challengeToken)
       const next = challenge.challengeType === 'sms' && intent === 'login' ? await requestSms(send) : await send()
       if (controller.signal.aborted) return
       setChallenge(next)
       setCode('')
+      setResent(true)
+      focusAfterResend.current = true
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 410) setChallengeExpired(true)
       if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : 'ارسال مجدد ناموفق بود.')
@@ -282,7 +330,9 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
     ? challenge.challengeType === 'totp'
       ? 'کد ۶ رقمی برنامه احراز هویت خود را وارد کنید.'
       : <>کد ارسال‌شده به <bdi dir="ltr">{challenge.destination}</bdi> را وارد کنید.</>
-    : intent === 'register' ? 'برای شروع مدیریت زیرساخت، حساب امن خود را بسازید.' : intent === 'forgot' ? 'لینک بازیابی را با یک کد امن به ایمیل شما می‌فرستیم.' : adminEntry ? 'با حساب مدیر پارس سرور وارد شوید.' : 'برای مدیریت سرویس‌های ابری وارد حساب خود شوید.'
+    : intent === 'register' ? 'برای شروع مدیریت زیرساخت، حساب امن خود را بسازید.' : intent === 'forgot'
+      ? method === 'phone' ? 'کد بازیابی را با پیامک به شمارهٔ همراه واردشده می‌فرستیم.' : 'کد بازیابی را به آدرس ایمیل واردشده می‌فرستیم.'
+      : adminEntry ? 'با حساب مدیر پارس سرور وارد شوید.' : 'برای مدیریت سرویس‌های ابری وارد حساب خود شوید.'
 
   return (
     <main className={'auth-page' + (adminEntry ? ' auth-page--admin' : '')} dir="rtl">
@@ -297,8 +347,8 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
           {success ? (
             <div className="auth-success" role="status">
               <span><Check size={34} /></span>
-              <h1>{intent === 'forgot' ? 'رمز عبور تغییر کرد' : 'ورود موفقیت‌آمیز'}</h1>
-              <p>{intent === 'forgot' ? 'اکنون می‌توانید با رمز جدید وارد شوید.' : 'در حال انتقال شما به پنل مدیریت…'}</p>
+              <h1>ورود موفقیت‌آمیز</h1>
+              <p>در حال انتقال شما به پنل مدیریت…</p>
             </div>
           ) : (
             <>
@@ -313,13 +363,26 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
                 </p> : <p>{subtitle}</p>}
               </div>
               {!challenge ? (
-                <form className="auth-form" onSubmit={submitEntry}>
-                  {(
-                    <div className="auth-method-tabs" role="tablist" aria-label={intent === 'register' ? 'روش ثبت‌نام' : 'روش ورود'}>
-                      <button aria-selected={method === 'phone'} className={method === 'phone' ? 'active' : ''} disabled={busy} onClick={() => { setMethod('phone'); setError('') }} role="tab" type="button"><Phone size={17} /> {intent === 'register' ? 'ثبت‌نام با شماره همراه' : 'شماره همراه'}</button>
-                      <button aria-selected={method === 'email'} className={method === 'email' ? 'active' : ''} disabled={busy} onClick={() => { setMethod('email'); setError('') }} role="tab" type="button"><Mail size={17} /> {intent === 'register' ? 'ثبت‌نام با ایمیل' : intent === 'forgot' ? 'ایمیل بازیابی' : 'ایمیل و رمز عبور'}</button>
-                    </div>
-                  )}
+                <form className="auth-form" onSubmit={submitEntry} noValidate={method === 'phone'}>
+                  {passwordReset && <p className="auth-security-hint" role="status">رمز عبور تغییر کرد. اکنون با رمز جدید وارد شوید.</p>}
+                  <div className="auth-method-tabs" role="tablist" aria-label={intent === 'register' ? 'روش ثبت‌نام' : intent === 'forgot' ? 'روش بازیابی' : 'روش ورود'}>
+                    {methods.map((tab, index) => <button key={tab} ref={node => { methodTabs.current[tab] = node }}
+                      id={`auth-tab-${tab}`} aria-controls={`auth-panel-${tab}`} aria-selected={method === tab} tabIndex={method === tab ? 0 : -1}
+                      className={method === tab ? 'active' : ''} disabled={busy} onClick={() => selectMethod(tab)} role="tab" type="button"
+                      onKeyDown={event => {
+                        const next = event.key === 'Home' ? methods[0] : event.key === 'End' ? methods.at(-1)
+                          : event.key === 'ArrowLeft' || event.key === 'ArrowRight' ? methods[1 - index] : undefined
+                        if (!next) return
+                        event.preventDefault()
+                        selectMethod(next)
+                        methodTabs.current[next]?.focus()
+                      }}>
+                      {tab === 'phone' ? <><Phone size={17} /> {intent === 'register' ? 'ثبت‌نام با شماره همراه' : 'شماره همراه'}</>
+                        : <><Mail size={17} /> {intent === 'register' ? 'ثبت‌نام با ایمیل' : intent === 'forgot' ? 'ایمیل بازیابی' : 'ایمیل و رمز عبور'}</>}
+                    </button>)}
+                  </div>
+                  {methods.filter(tab => tab !== method).map(tab => <div key={tab} role="tabpanel" id={`auth-panel-${tab}`} aria-labelledby={`auth-tab-${tab}`} hidden />)}
+                  <div key={method} className="auth-method-panel" role="tabpanel" id={`auth-panel-${method}`} aria-labelledby={`auth-tab-${method}`}>
                   {intent === 'register' && (
                     <div className="auth-name-row">
                       <label className="auth-field"><span>نام</span><input autoComplete="given-name" onChange={(e) => setFirstName(e.target.value)} value={firstName} /></label>
@@ -327,38 +390,58 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
                     </div>
                   )}
                   {method === 'phone' ? (
-                    <label className="auth-field"><span>شماره همراه</span><input autoComplete="tel" dir="ltr" inputMode="tel" onChange={(e) => setMobile(e.target.value)} placeholder="09123456789" required value={mobile} /></label>
+                    <label className="auth-field"><span id="login-mobile-label">شماره همراه</span><input autoComplete="tel" dir="ltr" inputMode="tel"
+                      aria-labelledby="login-mobile-label" aria-invalid={!!mobileError} aria-describedby={mobileError ? 'login-mobile-error' : undefined}
+                      onChange={e => { setMobile(e.target.value); setMobileError('') }} placeholder="09123456789" required value={mobile} />
+                      {mobileError && <small className="auth-error" id="login-mobile-error" role="alert">{mobileError}</small>}
+                    </label>
                   ) : (
                     <label className="auth-field"><span>آدرس ایمیل</span><input autoComplete="email" dir="ltr" onChange={(e) => setEmail(e.target.value)} placeholder="example@email.com" required type="email" value={email} /></label>
                   )}
-                  {intent !== 'forgot' && method === 'email' && (
-                    <label className="auth-field"><span>رمز عبور</span><span className="password-input"><input autoComplete={intent === 'register' ? 'new-password' : 'current-password'} dir="ltr" minLength={8} onChange={(e) => setPassword(e.target.value)} required type={showPassword ? 'text' : 'password'} value={password} /><button aria-label="نمایش رمز عبور" onClick={() => setShowPassword((value) => !value)} type="button">{showPassword ? <EyeOff /> : <Eye />}</button></span></label>
+                  {intent === 'login' && method === 'phone' && <button type="button" className="auth-text-link" disabled={busy} onClick={() => {
+                    setPhonePassword(value => !value); setPassword(''); setShowPassword(false); setError(''); setPasswordError('')
+                  }}>{phonePassword ? 'ورود با کد پیامکی' : 'ورود با رمز عبور'}</button>}
+                  {intent !== 'forgot' && (method === 'email' || intent === 'login' && phonePassword) && (
+                    <label className="auth-field"><span id="login-password-label">رمز عبور</span><span className="password-input">
+                      <input autoComplete={intent === 'register' ? 'new-password' : 'current-password'} dir="ltr" minLength={intent === 'register' ? 8 : undefined}
+                        aria-labelledby="login-password-label" aria-invalid={!!passwordError} aria-describedby={passwordError ? 'login-password-error' : undefined}
+                        onChange={e => { setPassword(e.target.value); setPasswordError('') }} required type={showPassword ? 'text' : 'password'} value={password} />
+                      <button aria-label={showPassword ? 'پنهان کردن رمز عبور' : 'نمایش رمز عبور'} onClick={() => setShowPassword(value => !value)} type="button">{showPassword ? <EyeOff /> : <Eye />}</button>
+                    </span>{passwordError && <small id="login-password-error" className="auth-error" role="alert">{passwordError}</small>}</label>
                   )}
                   {intent === 'register' && method === 'email' && (
                     <label className="auth-field"><span>تکرار رمز عبور</span><input autoComplete="new-password" dir="ltr" minLength={8} onChange={(e) => setConfirmPassword(e.target.value)} required type={showPassword ? 'text' : 'password'} value={confirmPassword} /></label>
                   )}
-                  {intent === 'login' && method === 'email' && <Link className="auth-text-link" to={`/forgot-password?returnTo=${encodeURIComponent(returnTo)}`} state={location.state}>رمز عبور را فراموش کرده‌اید؟</Link>}
+                  {intent === 'login' && <Link className="auth-text-link" to={`/forgot-password?returnTo=${encodeURIComponent(returnTo)}${method === 'phone' ? '&method=phone' : ''}`} state={location.state}>رمز عبور را فراموش کرده‌اید؟</Link>}
                   {error && <p className="auth-error" role="alert">{error}</p>}
-                  <button className="auth-primary-button" disabled={busy} type="submit">{busy ? <RefreshCw className="spin" size={19} /> : intent === 'register' ? 'ساخت حساب' : intent === 'forgot' ? 'ارسال کد بازیابی' : method === 'phone' ? 'ارسال کد پیامکی' : 'ورود به حساب'}</button>
+                  <button className="auth-primary-button" disabled={busy} type="submit">{busy ? <RefreshCw className="spin" size={19} /> : intent === 'register' ? 'ساخت حساب' : intent === 'forgot' ? 'ارسال کد بازیابی' : method === 'phone' && !phonePassword ? 'ارسال کد پیامکی' : 'ورود به حساب'}</button>
                   {(intent === 'register' || (intent === 'login' && method === 'email')) && <button className="auth-google-button" disabled={busy} onClick={googleLogin} type="button"><GoogleIcon /> {intent === 'register' ? 'ادامه با گوگل' : 'ورود با حساب گوگل'}</button>}
+                  </div>
                   <p className="auth-switch-copy">{intent === 'register' ? <>حساب دارید؟ <Link to={`/login?returnTo=${encodeURIComponent(returnTo)}`} state={location.state}>وارد شوید</Link></> : intent === 'login' ? <>حساب ندارید؟ <Link to={`/register?returnTo=${encodeURIComponent(returnTo)}`} state={location.state}>ثبت‌نام کنید</Link></> : <Link to={`/login?returnTo=${encodeURIComponent(returnTo)}`} state={location.state}><ArrowLeft size={15} /> بازگشت به ورود</Link>}</p>
                 </form>
               ) : (
-                <form className="auth-form" onSubmit={submitChallenge}>
+                <form className="auth-form" onSubmit={submitChallenge} noValidate={intent === 'forgot'}>
                   {challenge.challengeType === 'totp' && !recoveryMode && <div className="auth-security-hint"><KeyRound size={18} /> Google Authenticator یا برنامه مشابه</div>}
                   {challenge.challengeType === 'totp' && recoveryMode ? (
                     <label className="auth-field"><span>کد بازیابی یک‌بارمصرف</span><input autoFocus dir="ltr" onChange={(e) => setRecoveryCode(e.target.value.toUpperCase())} placeholder="ABCDE-12345" required value={recoveryCode} /></label>
-                  ) : <OtpField disabled={busy || success || otpLocked} onChange={changeOtp} value={code} />}
+                  ) : <OtpField inputRef={otpInput} disabled={busy || success || otpLocked} onChange={changeOtp} value={code} />}
                   {intent === 'forgot' && (
                     <>
-                      <label className="auth-field"><span>رمز عبور جدید</span><input autoComplete="new-password" dir="ltr" minLength={8} onChange={(e) => setPassword(e.target.value)} required type="password" value={password} /></label>
-                      <label className="auth-field"><span>تکرار رمز جدید</span><input autoComplete="new-password" dir="ltr" minLength={8} onChange={(e) => setConfirmPassword(e.target.value)} required type="password" value={confirmPassword} /></label>
+                      <label className="auth-field"><span id="new-password-label">رمز عبور جدید</span><input autoComplete="new-password" dir="ltr" minLength={8} maxLength={200}
+                        aria-labelledby="new-password-label" aria-invalid={!!passwordError} aria-describedby={passwordError ? 'new-password-error' : undefined}
+                        onChange={e => { setPassword(e.target.value); setPasswordError(''); setConfirmationError('') }} required type="password" value={password} />
+                        {passwordError && <small id="new-password-error" className="auth-error" role="alert">{passwordError}</small>}</label>
+                      <label className="auth-field"><span id="repeat-password-label">تکرار رمز جدید</span><input autoComplete="new-password" dir="ltr" maxLength={200}
+                        aria-labelledby="repeat-password-label" aria-invalid={!!confirmationError} aria-describedby={confirmationError ? 'repeat-password-error' : undefined}
+                        onChange={e => { setConfirmPassword(e.target.value); setConfirmationError('') }} required type="password" value={confirmPassword} />
+                        {confirmationError && <small id="repeat-password-error" className="auth-error" role="alert">{confirmationError}</small>}</label>
                     </>
                   )}
                   {intent === 'forgot' && <label className="auth-field"><span>کد برنامهٔ دومرحله‌ای (اگر فعال است)</span><input inputMode="numeric" dir="ltr" value={recoveryCode} onChange={e => setRecoveryCode(e.target.value)} autoComplete="off" /></label>}
                   {challenge.developmentCode && <p className="auth-dev-code">حالت توسعه — کد: <b dir="ltr">{challenge.developmentCode}</b></p>}
                   {error && <p className="auth-error" role="alert">{error}</p>}
-                  <button className="auth-primary-button" disabled={busy || success || otpLocked || (!recoveryMode && code.length !== 6)} type="submit">{busy ? <RefreshCw className="spin" size={19} /> : intent === 'forgot' ? 'ثبت رمز عبور جدید' : intent === 'register' ? 'تأیید و تکمیل ثبت‌نام' : 'تأیید هویت و ورود'}</button>
+                  <div role="status">{resent && 'کد جدید ارسال شد.'}</div>
+                  <button className="auth-primary-button" disabled={busy || success || otpLocked || challengeExpired || (!recoveryMode && code.length !== 6)} type="submit">{busy ? <RefreshCw className="spin" size={19} /> : intent === 'forgot' ? 'ثبت رمز عبور جدید' : intent === 'register' ? 'تأیید و تکمیل ثبت‌نام' : 'تأیید هویت و ورود'}</button>
                   {challenge.challengeType === 'totp' ? (
                     <button className="auth-secondary-button" disabled={busy} onClick={() => { setRecoveryMode((value) => !value); setError('') }} type="button"><LockKeyhole size={17} /> {recoveryMode ? 'استفاده از کد برنامه' : 'استفاده از کد بازیابی'}</button>
                   ) : (
