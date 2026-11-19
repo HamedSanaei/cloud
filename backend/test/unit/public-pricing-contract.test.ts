@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { embeddedPrices, isPublicHomePrices, renderHomeTariffs, sortHetznerOffers } from '../../src/contracts/home-tariffs.js'
+import { embeddedPrices, isPublicHomePrices, renderHomeTariffs, sortHetznerOffers, type TariffSort } from '../../src/contracts/home-tariffs.js'
 import { safeReturnPath } from '../../src/contracts/return-path.js'
 
 const plan = { id: 'fixture', name: '</script><img src=x onerror=alert(1)>', location: 'hel1', country: 'FI', city: 'Helsinki', vcpu: 2, memoryMb: 4096, diskGb: 40, diskType: 'Local', trafficGb: null, hourly: 123450, monthly: null }
@@ -12,7 +12,7 @@ it('includes all prices in SSR and keeps the extra TB rate indicative', () => {
   expect(html).toContain('۶۷۸٬۹۰۰ تومان')
   expect(html).toContain('۳۳٬۳۴۵ تومان')
   expect(html).toContain('۰٫۵ TB')
-  expect(html).toContain('period=monthly&amp;location=hel1')
+  expect(html).toContain('period=hourly&amp;location=hel1')
   expect(html).toContain('هزینهٔ مازاد فعلاً به‌صورت خودکار')
   expect(html).not.toContain('استعلامی')
   expect(html).not.toContain('انتخاب ماهانه')
@@ -54,4 +54,21 @@ it('retains local purchase intent but rejects external and header-injection redi
   const path = '/servers/create?offer=real-plan&period=monthly&location=hel1'
   expect(safeReturnPath(path)).toBe(path)
   for (const value of ['//evil.example', '/\\evil.example', 'https://evil.example', '/%5cevil.example', '/x%0d%0aLocation:evil', undefined, ' '.repeat(3001)]) expect(safeReturnPath(value)).toBe('/dashboard')
+})
+
+it('sorts names naturally and numeric specifications in both directions with unknown prices and quotas last', () => {
+  const offers = [
+    { ...plan, id: 'large', name: 'CX10', country: 'FI', vcpu: 8, memoryMb: 10240, diskGb: 100, includedTrafficBytes: 20 * 2 ** 40, monthly: 100 },
+    { ...plan, id: 'small', name: 'CX2', country: 'DE', vcpu: 1, memoryMb: 1024, diskGb: 20, includedTrafficBytes: 2 ** 40, monthly: 20 },
+    { ...plan, id: 'unknown', name: 'CX3', country: 'ES' },
+  ]
+  const sort = (by: TariffSort['by'], direction: TariffSort['direction']) => sortHetznerOffers(offers, { by, direction, period: 'monthly' }).map(o => o.id)
+  for (const by of ['name', 'location', 'vcpu', 'memoryMb', 'diskGb'] as const) {
+    expect(sort(by, 'asc')).toEqual(['small', 'unknown', 'large'])
+    expect(sort(by, 'desc')).toEqual(['large', 'unknown', 'small'])
+  }
+  for (const by of ['price', 'traffic'] as const) {
+    expect(sort(by, 'asc')).toEqual(['small', 'large', 'unknown'])
+    expect(sort(by, 'desc')).toEqual(['large', 'small', 'unknown'])
+  }
 })

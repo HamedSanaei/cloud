@@ -1,12 +1,13 @@
 import { safeReturnPath } from '../../contracts/return-path.js'
 import { createHash, randomBytes } from 'node:crypto'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { getConfig } from '../../config.js'
 import type { DbClient } from '../../db/index.js'
 import { oauthAccounts, users } from '../../db/schema.js'
 import { BadRequestError, ProviderPermanentError, ProviderRetryableError } from '../../lib/errors.js'
 import { issueChallenge, findChallenge, consumeChallenge } from './challenges.js'
 import { hashPassword } from './service.js'
+import { internalEmail } from './email-address.js'
 
 function base64url(buffer: Buffer): string {
   return buffer.toString('base64url')
@@ -74,32 +75,31 @@ export async function completeGoogleOAuth(db: DbClient, code: string, state: str
     })
     if (!profileResponse.ok) throw new Error('google profile rejected')
     const profile = (await profileResponse.json()) as GoogleUserInfo
-    if (!profile.sub || !profile.email || !profile.email_verified) throw new BadRequestError('ایمیل حساب گوگل تأیید نشده است')
+    if (!profile.sub || !profile.email || !profile.email_verified || internalEmail(profile.email)) throw new BadRequestError('ایمیل حساب گوگل تأیید نشده است')
     if (!(await consumeChallenge(db, challenge.id))) throw new BadRequestError('درخواست ورود گوگل قبلاً استفاده شده است')
 
-    const linked = await db.query.oauthAccounts.findFirst({
-      where: (t) => and(eq(t.provider, 'google'), eq(t.providerAccountId, profile.sub)),
+    const address = profile.email.toLowerCase()
+    const user = await db.transaction(async tx => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${'google:' + profile.sub}, 0))`)
+      const linked = await tx.query.oauthAccounts.findFirst({
+        where: t => and(eq(t.provider, 'google'), eq(t.providerAccountId, profile.sub)),
+      })
+      const [account] = await tx.select().from(users).where(linked ? eq(users.id, linked.userId) : eq(users.email, address)).for('update')
+      if (linked) {
+        // A concurrent email change can revoke the OAuth link while this request waits.
+        const stillLinked = await tx.query.oauthAccounts.findFirst({ where: t => eq(t.id, linked.id) })
+        if (!stillLinked || !account || account.status === 'disabled') throw new BadRequestError('دسترسی حساب گوگل تغییر کرده است؛ دوباره وارد شوید.')
+        return account
+      }
+      if (account?.status === 'disabled') throw new BadRequestError('این حساب غیرفعال است')
+      const resolved = account ?? (await tx.insert(users).values({
+        email: address, passwordHash: await hashPassword(base64url(randomBytes(32))), firstName: profile.given_name ?? null,
+        lastName: profile.family_name ?? null, emailVerifiedAt: new Date(), status: 'active',
+      }).returning())[0]
+      if (!resolved) throw new Error('failed to create oauth user')
+      await tx.insert(oauthAccounts).values({ userId: resolved.id, provider: 'google', providerAccountId: profile.sub })
+      return resolved
     })
-    let user = linked ? await db.query.users.findFirst({ where: (t) => eq(t.id, linked.userId) }) : undefined
-    if (!user) user = await db.query.users.findFirst({ where: (t) => eq(t.email, profile.email.toLowerCase()) })
-    if (!user) {
-      const [created] = await db
-        .insert(users)
-        .values({
-          email: profile.email.toLowerCase(),
-          passwordHash: await hashPassword(base64url(randomBytes(32))),
-          firstName: profile.given_name ?? null,
-          lastName: profile.family_name ?? null,
-          emailVerifiedAt: new Date(),
-          status: 'active',
-        })
-        .returning()
-      user = created
-    }
-    if (!user) throw new Error('failed to create oauth user')
-    if (!linked) {
-      await db.insert(oauthAccounts).values({ userId: user.id, provider: 'google', providerAccountId: profile.sub }).onConflictDoNothing()
-    }
     return { user, redirectTo: typeof challenge.payload?.redirectTo === 'string' ? challenge.payload.redirectTo : '/dashboard' }
   } catch (error) {
     if (error instanceof BadRequestError) throw error

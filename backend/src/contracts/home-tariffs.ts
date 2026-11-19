@@ -54,8 +54,34 @@ export function embeddedPrices(html: string): PublicHomePrices | null {
   const json = html.match(/<script id="home-prices-state" type="application\/json">([\s\S]*?)<\/script>/)?.[1]
   try { const parsed: unknown = JSON.parse(json ?? 'null'); return isPublicHomePrices(parsed) ? parsed : null } catch { return null }
 }
-export function sortHetznerOffers(offers: PublicHetznerOffer[], period: 'hourly' | 'monthly') {
-  return [...offers].sort((a, b) => (a[period] ?? Infinity) - (b[period] ?? Infinity) || a.name.localeCompare(b.name) || a.location.localeCompare(b.location))
+export type TariffPeriod = 'hourly' | 'monthly'
+export type TariffSort = { by: 'name' | 'location' | 'price' | 'vcpu' | 'memoryMb' | 'diskGb' | 'traffic'; direction: 'asc' | 'desc'; period: TariffPeriod }
+const natural = new Intl.Collator('en', { numeric: true, sensitivity: 'base' })
+const compareLocation = (a: PublicHetznerOffer, b: PublicHetznerOffer) =>
+  natural.compare(tariffCountryCode(a.country) || 'ZZ', tariffCountryCode(b.country) || 'ZZ')
+  || natural.compare(a.city ?? '', b.city ?? '') || natural.compare(a.location, b.location)
+export function sortHetznerOffers(offers: PublicHetznerOffer[], sort: TariffSort | TariffPeriod = 'hourly') {
+  const { by, direction, period }: TariffSort = typeof sort === 'string' ? { by: 'price', direction: 'asc', period: sort } : sort
+  function value(offer: PublicHetznerOffer) {
+    if (by === 'price') return offer[period]
+    if (by === 'traffic') {
+      const bytes = offer.includedTrafficBytes ?? offer.trafficOverage?.includedBytes
+      return isTrafficByteCount(bytes) ? bytes : null
+    }
+    return by === 'name' || by === 'location' ? null : offer[by]
+  }
+  return [...offers].sort((a, b) => {
+    let order: number
+    if (by === 'name') order = natural.compare(a.name, b.name)
+    else if (by === 'location') order = compareLocation(a, b)
+    else {
+      const first = value(a), second = value(b)
+      if ((first === null) !== (second === null)) return first === null ? 1 : -1
+      order = (first ?? 0) - (second ?? 0)
+    }
+    return (direction === 'asc' ? order : -order) || natural.compare(a.name, b.name)
+      || natural.compare(a.location, b.location) || a.id.localeCompare(b.id)
+  })
 }
 // Officially assigned ISO 3166-1 alpha-2 codes. The catalog supplies the available filters.
 const countryCodes = new Set((
@@ -99,7 +125,7 @@ const wrapTable = (caption: string, headings: string[], body: string, hetzner = 
 
 export const hetznerTariffHeading = 'تعرفه سرور هتزنر'
 
-export function renderTariffSections(iran: IranTariffs | null, hetzner: PublicHetznerOffer[] | null, meta?: PublicTariffMeta, scope: TariffScope = 'all', sort: 'hourly' | 'monthly' = 'hourly', countryFiltered = false) {
+export function renderTariffSections(iran: IranTariffs | null, hetzner: PublicHetznerOffer[] | null, meta?: PublicTariffMeta, scope: TariffScope = 'all', sort: TariffSort | TariffPeriod = 'hourly', countryFiltered = false) {
   const iranRows = (Object.keys(iranResources) as IranResource[]).map(key => {
     const rate = iran?.rates[key]
     const unit = key === 'cpu' ? '۱ هسته vCPU' : key === 'ram' ? '۱ گیگابایت RAM' : iran ? `۱ ${escapeHtml(iran.trafficUnit)}` : 'واحد پس از تأیید قرارداد'
@@ -110,7 +136,7 @@ export function renderTariffSections(iran: IranTariffs | null, hetzner: PublicHe
     : `<bdi>${toman(price)}</bdi>`
   const planLink = (offer: PublicHetznerOffer) => {
     const name = `<bdi>${escapeHtml(offer.name)}</bdi>`
-    const period = offer[sort] !== null ? sort : offer.hourly !== null ? 'hourly' : offer.monthly !== null ? 'monthly' : null
+    const period = offer.hourly !== null ? 'hourly' : offer.monthly !== null ? 'monthly' : null
     if (!period) return name
     const label = period === 'hourly' ? 'ساعتی' : 'ماهانه'
     return `<a href="/servers/create?offer=${encodeURIComponent(offer.id)}&amp;period=${period}&amp;location=${encodeURIComponent(offer.location)}" aria-label="خرید ${escapeHtml(offer.name)} ${label} در ${escapeHtml(offer.location)}">${name}</a>`
@@ -130,8 +156,10 @@ export function renderTariffSections(iran: IranTariffs | null, hetzner: PublicHe
     '<p>این ارقام نرخ واحد منابع‌اند. هزینهٔ دیسک، IPv4 و بسته‌های اضافی در قیمت کامل ماشین مشخص می‌شود.</p></section>'
   const date = (value: string) => `<time datetime="${escapeHtml(value)}">${tariffTime.format(new Date(value))}</time>`
   const time = meta ? `<p class="tariff-freshness">بررسی قیمت: ${date(meta.checkedAt)} (تهران).${meta.catalogUpdatedAt ? ` تعرفهٔ کاتالوگ: ${date(meta.catalogUpdatedAt)}.` : ''}${meta.fxUpdatedAt ? ` نرخ ارز: ${date(meta.fxUpdatedAt)}.` : ''} این جدول پیش‌فاکتور قطعی نیست.</p>` : ''
-  const cheapest = sorted.find(o => o[sort] !== null)
-  const affordable = cheapest ? `<p>کم‌هزینه‌ترین گزینهٔ همین فهرست برای پرداخت ${sort === 'hourly' ? 'ساعتی' : 'ماهانه'}: <bdi>${escapeHtml(cheapest.name)}</bdi> در <bdi>${escapeHtml(publicLocation(cheapest))}</bdi>، <bdi>${toman(cheapest[sort]!)}</bdi>. این مقایسه فقط بین پلن‌های منتشرشدهٔ پارس سرور است.</p>` : ''
+  const period = typeof sort === 'string' ? sort : sort.period
+  const cheapest = sortHetznerOffers(hetzner ?? [], period)[0]
+  const amount = cheapest?.[period]
+  const affordable = cheapest && amount != null ? `<p>کم‌هزینه‌ترین گزینهٔ همین فهرست برای پرداخت ${period === 'hourly' ? 'ساعتی' : 'ماهانه'}: <bdi>${escapeHtml(cheapest.name)}</bdi> در <bdi>${escapeHtml(publicLocation(cheapest))}</bdi>، <bdi>${toman(amount)}</bdi>. این مقایسه فقط بین پلن‌های منتشرشدهٔ پارس سرور است.</p>` : ''
   return { iran: scope === 'all' ? iranSection : '', hetzner: `<p>مبالغ جدول شامل مالیاتِ تنظیم‌شده‌اند. قیمت و موجودی پلن هنگام سفارش دوباره بررسی می‌شوند.</p><p>${indicativeOverageNotice}</p>${time}${affordable}${hetznerTable}` }
 }
 

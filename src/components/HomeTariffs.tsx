@@ -1,7 +1,17 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { embeddedPrices, hetznerTariffHeading, isPublicHomePrices, publicLocation, renderHomeTariffs, renderTariffSections, tariffCountryCode, tariffCountryName, tariffFlagEmoji, tariffFlagImage, type PublicHomePrices, type TariffScope } from '../../backend/src/contracts/home-tariffs'
+import type { TariffSort } from '../../backend/src/contracts/home-tariffs'
 
 export const fallbackTariffs = renderHomeTariffs(null, null)
+const sortOptions = [
+  ['price:asc', 'قیمت کم به زیاد'], ['price:desc', 'قیمت زیاد به کم'],
+  ['name:asc', 'نام پلن، صعودی'], ['name:desc', 'نام پلن، نزولی'],
+  ['location:asc', 'لوکیشن، صعودی'], ['location:desc', 'لوکیشن، نزولی'],
+  ['vcpu:asc', 'پردازنده، کم به زیاد'], ['vcpu:desc', 'پردازنده، زیاد به کم'],
+  ['memoryMb:asc', 'RAM، کم به زیاد'], ['memoryMb:desc', 'RAM، زیاد به کم'],
+  ['diskGb:asc', 'دیسک، کم به زیاد'], ['diskGb:desc', 'دیسک، زیاد به کم'],
+  ['traffic:asc', 'ترافیک مجاز رایگان، کم به زیاد'], ['traffic:desc', 'ترافیک مجاز رایگان، زیاد به کم'],
+] as const
 
 function pinTariffHeader(section: HTMLElement) {
   const scroll = section.querySelector<HTMLElement>('.tariff-scroll--hetzner')
@@ -38,13 +48,13 @@ function pinTariffHeader(section: HTMLElement) {
 }
 
 export function HomeTariffs({ initialHtml, scope = 'all' }: { initialHtml?: string; scope?: TariffScope }) {
-  const locationFilterId = useId(), sortFilterId = useId()
+  const locationFilterId = useId(), sortFilterId = useId(), priceBasisId = useId()
   const [data, setData] = useState<PublicHomePrices | null>(() => embeddedPrices(initialHtml ?? ''))
   const [loading, setLoading] = useState(!initialHtml)
   const [warning, setWarning] = useState('')
   const [expired, setExpired] = useState(false)
   const [{ country, location }, setFilters] = useState({ country: '', location: '' })
-  const [sort, setSort] = useState<'hourly' | 'monthly'>('hourly')
+  const [sort, setSort] = useState<TariffSort>({ by: 'price', direction: 'asc', period: 'hourly' })
   const [retry, setRetry] = useState(0)
   const [expiresAt, setExpiresAt] = useState(() => Math.min(data ? Date.parse(data.meta.validUntil) : Infinity, Date.now() + 60_000))
   const mounted = useRef(true)
@@ -123,10 +133,21 @@ export function HomeTariffs({ initialHtml, scope = 'all' }: { initialHtml?: stri
               </select>
             </div>
             <div className="tariff-filter">
-              <label htmlFor={sortFilterId}>مقایسه از کم‌هزینه به بیشتر</label>
-              <select id={sortFilterId} value={sort} onChange={event => setSort(event.target.value === 'monthly' ? 'monthly' : 'hourly')}>
-                <option value="hourly">قیمت هر ساعت</option>
-                <option value="monthly">قیمت هر ماه</option>
+              <label htmlFor={sortFilterId}>مرتب‌سازی بر اساس</label>
+              <select id={sortFilterId} value={`${sort.by}:${sort.direction}`} onChange={event => {
+                const [by, direction] = event.target.value.split(':') as [TariffSort['by'], TariffSort['direction']]
+                setSort(current => ({ ...current, by, direction }))
+              }}>
+                {sortOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </div>
+            <div className="tariff-filter">
+              <label htmlFor={priceBasisId}>مبنای قیمت</label>
+              <select id={priceBasisId} value={sort.period} onChange={event => {
+                const period = event.target.value === 'monthly' ? 'monthly' : 'hourly'
+                setSort(current => ({ ...current, period }))
+              }}>
+                <option value="hourly">ساعتی</option><option value="monthly">ماهانه</option>
               </select>
             </div>
           </div>}

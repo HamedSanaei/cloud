@@ -1,14 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { sendParsGreenSms, sendSmsOtp } from '../../src/modules/auth/delivery.js'
+import { sendEmailOtp, sendParsGreenSms, sendSmsOtp } from '../../src/modules/auth/delivery.js'
 import { isDomainBoundLoginPattern } from '../../src/modules/auth/sms-autofill.js'
 
 const { warn, smsConfig } = vi.hoisted(() => ({ warn: vi.fn(), smsConfig: { frontend: 'https://login.example.test/login', pattern: '', primary: '9998883511', mode: 'live' as 'live' | 'log' } }))
+const { sendMail } = vi.hoisted(() => ({ sendMail: vi.fn() }))
+vi.mock('nodemailer', () => ({ default: { createTransport: () => ({ sendMail }) } }))
 vi.mock('../../src/logger.js', () => ({ createLogger: () => ({ warn, info: vi.fn() }) }))
 
 vi.mock('../../src/config.js', () => ({
   getConfig: () => ({
     NODE_ENV: 'test',
     AUTH_DELIVERY_MODE: smsConfig.mode,
+    SMTP_HOST: 'smtp.example.test',
+    SMTP_FROM: 'parserver@example.test',
     PARSGREEN_SIGNATURE: 'fixture-signature<&>',
     PARSGREEN_PRIMARY_FROM: smsConfig.primary,
     PARSGREEN_FROM: 'fixture-sender',
@@ -23,6 +27,23 @@ vi.mock('../../src/config.js', () => ({
 afterEach(() => { smsConfig.frontend = 'https://login.example.test/login'; smsConfig.pattern = ''; smsConfig.primary = '9998883511'; smsConfig.mode = 'live'; vi.unstubAllGlobals(); vi.clearAllMocks() })
 
 const accepted = '<SendGroupSMSResponse xmlns="http://ParsGreen.com/"><SendGroupSMSResult>1</SendGroupSMSResult><success>1</success><retStr><string>fixture-message-id</string></retStr></SendGroupSMSResponse>'
+
+it.each(['register', 'account', 'login', 'recovery', 'operation'] as const)('renders a single copyable code in the RTL %s email', async purpose => {
+  sendMail.mockResolvedValueOnce({})
+  await expect(sendEmailOtp('someone@example.test', '034567', purpose, 180)).resolves.toEqual({})
+  const message = sendMail.mock.calls[0]![0]
+  expect(message).toMatchObject({ to: 'someone@example.test', text: expect.stringContaining('034567') })
+  expect(message.html).toMatch(/dir="rtl"[\s\S]*max-width:440px[\s\S]*<bdo dir="ltr"[^>]*>034567<\/bdo>/)
+  expect(message.html.match(/034567/g)).toHaveLength(1)
+  expect(message.html).toContain('3 دقیقه')
+})
+
+it('skips sending to internal email addresses and surfaces SMTP failure', async () => {
+  await expect(sendEmailOtp('phone@account.invalid', '034567', 'account', 180)).rejects.toThrow('آدرس ایمیل قابل ارسال نیست')
+  expect(sendMail).not.toHaveBeenCalled()
+  sendMail.mockRejectedValueOnce(new Error('offline'))
+  await expect(sendEmailOtp('someone@example.test', '034567', 'account', 180)).rejects.toThrow('ارسال ایمیل ناموفق بود')
+})
 
 describe('dedicated service line priority', () => {
   it('sends arbitrary service SMS on the primary line and never contacts the legacy line on success', async () => {

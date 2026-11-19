@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, ArrowRight, ClipboardList, HardDrive, Search, Server, Users } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ClipboardList, HardDrive, Search, Users } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { useApiQuery } from '../hooks/useApiQuery'
-import { formatCount, formatFaNumber, formatToman } from '../lib/format'
+import { formatCount, formatFaDateTime, formatFaNumber, formatToman } from '../lib/format'
+import { useAuth } from '../auth/AuthContext'
+import { Button } from '../components/ui/Button'
+import { Input } from '../components/ui/FormControls'
+import { Modal } from '../components/ui/Modal'
 import { adminApi, userName, type AdminUser, type ListFilters, type Paged } from './api'
 import { HetznerInventoryPanel } from './HetznerInventoryPanel'
 import { LegacyPowerReview } from './LegacyPowerReview'
@@ -22,12 +26,12 @@ const timeLabel = (value?: string | null) => {
 const orderLabels: Record<string, string> = {
   draft: 'پیش‌نویس', quoted: 'پیش‌فاکتور', awaiting_payment: 'در انتظار پرداخت',
   paid: 'پرداخت‌شده', queued: 'در صف', provisioning: 'در حال ساخت',
-  active: 'فعال', failed: 'ناموفق', cancelled: 'لغوشده',
+  active: 'تحویل‌شده', failed: 'ناموفق', cancelled: 'لغوشده',
   requires_review: 'نیازمند بررسی', refunded: 'بازپرداخت‌شده',
 }
 const serverLabels: Record<string, string> = {
   active: 'فعال', provisioning: 'در حال ساخت', suspended: 'خاموش / تعلیق',
-  terminated: 'خاتمه‌یافته', failed: 'خطا',
+  terminated: 'حذف‌شده', failed: 'خطا',
 }
 const userLabels: Record<string, string> = { active: 'فعال', pending: 'در انتظار', disabled: 'غیرفعال' }
 function statusTone(status: string) {
@@ -93,24 +97,64 @@ function adminTableWrap(table: React.ReactNode) {
 
 export function AdminOverview() {
   const info = useApiQuery(adminApi.overview)
+  const { user } = useAuth()
+  const data = info.data
+  const customers = data?.accounts.filter(account => account.role === 'user') ?? []
+  const managers = data?.accounts.filter(account => account.role === 'admin') ?? []
+  const total = (counts: Record<string, number>) => Object.values(counts).reduce((sum, count) => sum + count, 0)
+  const breakdown = (counts: Record<string, number>, labels: Record<string, string>, states: string[]) =>
+    states.map(status => `${labels[status]} ${formatCount(counts[status] ?? 0)}`).join(' · ')
+  const finance = data?.finance
   return <div className="admin-page">
-    <Heading title="نمای کلی" subtitle="وضعیت کاربران، سفارش‌ها و زیرساخت در یک نگاه" />
+    <Heading title="نمای کلی" subtitle="وضعیت حساب‌ها، خریدها و سرویس‌ها"
+      actions={<Button variant="secondary" disabled={info.loading} onClick={info.refetch}>به‌روزرسانی</Button>} />
     <State loading={info.loading} error={info.error} empty={false} retry={info.refetch}>
-      {info.data ? <>
+      {data ? <>
+        <p className="admin-muted">آخرین به‌روزرسانی <time dateTime={data.checkedAt}>{formatFaDateTime(data.checkedAt, user?.timezone)}</time> · کل سوابق سایت</p>
         <div className="admin-metrics">
-          <div className="admin-metric"><span>کاربران ثبت‌شده</span><strong>{formatCount(info.data.users)}</strong><small><Users size={15} /> حساب‌های سایت</small></div>
-          <div className="admin-metric"><span>سفارش‌های ثبت‌شده</span><strong>{formatCount(info.data.orders)}</strong><small><ClipboardList size={15} /> {formatCount(info.data.ordersNeedingAttention)} نیازمند پیگیری</small></div>
-          <div className="admin-metric"><span>سرورهای فعال</span><strong>{formatCount(info.data.activeServers)}</strong><small><Server size={15} /> از {formatCount(info.data.servers)} سرور</small></div>
-          <div className="admin-metric"><span>مبلغ سفارش‌های پرداخت‌شده</span><strong>{formatFaNumber(info.data.paidOrderTotalToman)}</strong><small>تومان · بدون احتساب سفارش‌های تسویه‌نشده</small></div>
+          <div className="admin-metric"><span>مشتریان</span><strong>{formatCount(customers.reduce((sum, row) => sum + row.count, 0))}</strong>
+            <small>{breakdown(Object.fromEntries(customers.map(row => [row.status, row.count])), userLabels, ['active', 'pending', 'disabled'])}</small>
+            <small>مدیران · {breakdown(Object.fromEntries(managers.map(row => [row.status, row.count])), userLabels, ['active', 'pending', 'disabled'])}</small></div>
+          <div className="admin-metric"><span>کل تاریخی سفارش‌ها</span><strong>{formatCount(total(data.orderCounts))}</strong>
+            <small>{breakdown(data.orderCounts, orderLabels, ['awaiting_payment', 'paid', 'queued', 'provisioning', 'requires_review'])}</small>
+            <small>{breakdown(data.orderCounts, orderLabels, ['active', 'failed', 'cancelled', 'refunded', 'draft', 'quoted'])}</small></div>
+          <div className="admin-metric"><span>سرورهای فعال</span><strong>{formatCount(data.serverCounts.active ?? 0)}</strong>
+            <small>از {formatCount(total(data.serverCounts))} سرور ثبت‌شده در کل تاریخ</small>
+            <small>{breakdown(data.serverCounts, serverLabels, ['provisioning', 'suspended', 'terminated', 'failed'])}</small></div>
+          <div className="admin-metric"><span>سفارش‌های در جریان و نیازمند پیگیری عملیاتی</span><strong>{formatCount(data.ordersNeedingAttention)}</strong>
+            <small>منتظر پرداخت، پرداخت‌شده، در صف، در حال ساخت یا نیازمند بررسی</small>
+            <small>{formatCount(data.overdue)} اشتراک معوق · {formatCount(data.failedRenewals24h)} تلاش ناموفق تمدید در ۲۴ ساعت اخیر</small></div>
         </div>
+        {finance && <>
+          <Panel title="مبالغ ثبت‌شده در دفتر کیف پول" subtitle="همهٔ زمان‌ها، به تومان. خرید اولیه از سفارش‌های پرداخت‌شده، در صف، در حال ساخت یا تحویل‌شده محاسبه می‌شود.">
+            <dl className="admin-fields">
+              <Field label="خرید اولیهٔ پذیرفته‌شده، ناخالص" value={formatToman(finance.initialRial / 10)} />
+              <Field label="تمدیدهای پرداخت‌شده، ناخالص" value={formatToman(finance.renewalRial / 10)} />
+              <Field label="بازپرداخت خدمات" value={formatToman(finance.refundsRial / 10)} />
+              <Field label="خالص برداشت خدمات" value={formatToman(finance.netRial / 10)} />
+              <Field label="شارژ کیف پول (جدا از فروش)" value={formatToman(finance.depositsRial / 10)} />
+            </dl>
+            <p className="admin-muted">خالص برابر برداشت خرید و تمدید، از جمله مبالغی که هنوز باید تطبیق داده شوند، منهای بازپرداخت خدمات است. مبالغ فاکتور برای تطبیق بررسی می‌شوند.</p>
+          </Panel>
+          <Panel title="موارد نیازمند بررسی مالی" subtitle={`${formatCount(finance.exceptionCount)} سفارش دارای اختلاف · ${formatCount(finance.renewalMismatchCount)} فاکتور تمدید با مغایرت دفترکل`}>
+            {finance.exceptions.length ? adminTableWrap(<table className="admin-table"><thead><tr><th>سفارش</th><th>علت</th><th>فاکتور پرداخت‌شده</th><th>برداشت</th><th>بازپرداخت مرتبط</th></tr></thead>
+              <tbody>{finance.exceptions.map(row => <tr key={row.id}>
+                <td><Link to={`/admin/orders/${row.id}`}>{row.orderNumber}</Link></td>
+                <td>{row.unreturned ? 'سفارش ناموفق با برداشت بازنگشته' : 'مغایرت فاکتور و دفترکل'}</td>
+                <td>{formatToman(row.invoicedRial / 10)}</td><td>{formatToman(row.debitRial / 10)}</td><td>{formatToman(row.refundRial / 10)}</td>
+              </tr>)}</tbody></table>) : <p>سفارشی برای تطبیق یافت نشد.</p>}
+            {finance.exceptionCount > finance.exceptions.length && <p>۲۰ مورد با اولویت برداشت‌های بازنگشته نمایش داده شده‌اند.</p>}
+          </Panel>
+        </>}
         <div className="admin-overview-grid">
           <Panel title="آخرین سفارش‌ها" subtitle="پیگیری وضعیت سفارش‌های ثبت‌شده" action={<Link className="admin-text-link" to="/admin/orders">مشاهده همه</Link>}>
-            <div className="admin-table-scroll"><table className="admin-table"><thead><tr><th>شماره سفارش</th><th>کاربر</th><th>مبلغ</th><th>وضعیت</th></tr></thead>
-              <tbody>{info.data.recentOrders.map(o => <tr key={o.id}>
+            <div className="admin-table-scroll"><table className="admin-table"><thead><tr><th>شماره سفارش</th><th>کاربر</th><th>مبلغ</th><th>وضعیت سفارش</th><th>وضعیت سرور مرتبط</th></tr></thead>
+              <tbody>{data.recentOrders.map(o => <tr key={o.id}>
                 <td><Link to={`/admin/orders/${o.id}`}>{o.orderNumber}</Link></td><td>{o.userName}</td>
                 <td>{formatToman(o.totalToman)}</td><td><Status status={o.status} kind="order" /></td>
+                <td>{o.serverStatus ? <Status status={o.serverStatus} kind="server" /> : '—'}</td>
               </tr>)}</tbody></table></div>
-            {!info.data.recentOrders.length ? <div className="admin-state">هنوز سفارشی ثبت نشده است.</div> : null}
+            {!data.recentOrders.length ? <div className="admin-state">هنوز سفارشی ثبت نشده است.</div> : null}
           </Panel>
           <Panel title="دسترسی سریع" subtitle="کارهای روزمره مدیریت">
             <div className="admin-shortcuts">
@@ -223,10 +267,31 @@ export function AdminUserPage() {
   const { id = '' } = useParams()
   const result = useApiQuery(() => adminApi.user(id), [id])
   const info = result.data
+  const [action, setAction] = useState<'block' | 'delete_data' | null>(null)
+  const [reason, setReason] = useState('')
+  const [confirmId, setConfirmId] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [actionResult, setActionResult] = useState('')
+  const [busy, setBusy] = useState(false)
+  function openAction(next: NonNullable<typeof action>) {
+    setReason(''); setConfirmId(''); setActionError(''); setActionResult(''); setAction(next)
+  }
+  async function confirmAction() {
+    if (busy || !action || confirmId.trim() !== id || reason.trim().length < 4) return
+    setBusy(true); setActionError('')
+    try {
+      await adminApi.userAccountAction(id, action, reason.trim())
+      setActionResult(action === 'block' ? 'حساب مسدود شد و نشست‌های آن پایان یافتند.' : 'داده‌های قابل حذف پاک شدند و حساب بسته شد.')
+      setAction(null); result.refetch()
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'عملیات تکمیل نشد.')
+    } finally { setBusy(false) }
+  }
   const walletNames = new Map(info?.wallets.map(wallet => [wallet.id, wallet.name]))
   return <div className="admin-page">
     <Heading title="پروفایل کاربر" subtitle="مشاهده اطلاعات حساب، کیف پول و سرورهای متعلق به کاربر"
       actions={<ReturnLink to="/admin/users">بازگشت به کاربران</ReturnLink>} />
+    {actionResult && <p role="status">{actionResult}</p>}
     <State loading={result.loading} error={result.error} empty={!info} retry={result.refetch}>
       {info ? <div className="admin-detail-grid">
         <div className="admin-detail-content">
@@ -251,7 +316,7 @@ export function AdminUserPage() {
         <div className="admin-detail-side">
           <Panel>
             <div className="admin-profile-avatar"><Users size={29} /></div><h2 className="admin-profile-name">{userName(info.user)}</h2>
-            <div className="admin-profile-status"><Status status={info.user.status} kind="user" /></div>
+            <div className="admin-profile-status"><Status status={info.user.status} kind="user" />{info.user.dataDeleted && ' · داده‌های حساب حذف شده‌اند'}</div>
             <dl className="admin-fields">
               <Field label="ایمیل" value={info.user.email} ltr />
               <Field label="شماره همراه" value={info.user.mobile || 'ثبت نشده'} ltr />
@@ -260,9 +325,31 @@ export function AdminUserPage() {
               <Field label="تأیید موبایل" value={info.user.mobileVerifiedAt ? 'تأیید شده' : 'تأیید نشده'} />
             </dl>
           </Panel>
+          {info.actions && <Panel title="مدیریت حساب">
+            <div className="form-stack">
+              <Button variant="secondary" disabled={!info.actions.canBlock} onClick={() => openAction('block')}>مسدودسازی حساب</Button>
+              <Button variant="danger" disabled={!!info.actions.deleteBlocked} onClick={() => openAction('delete_data')}>حذف داده‌های قابل حذف</Button>
+              {info.actions.deleteBlocked && <p>{info.actions.deleteBlocked}</p>}
+            </div>
+          </Panel>}
         </div>
       </div> : null}
     </State>
+    <Modal open={!!action && info?.user.id === id} title={action === 'block' ? 'مسدودسازی حساب' : 'حذف داده‌های قابل حذف'} trapFocus onClose={() => { if (!busy) setAction(null) }}>
+      {action && info && <div className="form-stack">
+        <p>حساب هدف <bdi>{userName(info.user)}</bdi> · <bdi>{id}</bdi></p>
+        {action === 'block'
+          ? <p>ورود و نشست‌های حساب متوقف می‌شوند. داده‌ها و سرویس‌ها باقی می‌مانند و چرخهٔ صورتحساب ادامه دارد.</p>
+          : <><p>مشخصات شخصی و حقوقی، راه‌های ورود، نشست‌ها، اعلان‌ها، پیوندهای ورود و رمزهای موقت سرور پاک می‌شوند. حساب بسته می‌شود.</p>
+            <p>سوابق سفارش، صورتحساب، دفترکل، سرور و پشتیبانی برای نگه‌داری باقی می‌مانند. حساب دارای سرویس فعال یا پرداخت باز باید ابتدا تعیین تکلیف شود.</p></>}
+        <Input label="شناسهٔ حساب هدف را وارد کنید" dir="ltr" autoComplete="off" value={confirmId} onChange={event => setConfirmId(event.target.value)} />
+        <Input label="دلیل عملیات" maxLength={500} value={reason} onChange={event => setReason(event.target.value)} />
+        {actionError && <p role="alert">{actionError}</p>}
+        <Button variant="danger" disabled={busy || confirmId.trim() !== id || reason.trim().length < 4} onClick={() => void confirmAction()}>
+          {busy ? 'در حال ثبت…' : 'تأیید نهایی'}
+        </Button>
+      </div>}
+    </Modal>
   </div>
 }
 
@@ -319,6 +406,18 @@ export function AdminOrderPage() {
               <strong>{orderLabels[e.toStatus] ?? e.toStatus}</strong><time>{timeLabel(e.createdAt)}</time>{e.reason ? <p>{e.reason}</p> : null}
             </li>)}</ol> : <p className="admin-muted">تاریخچه‌ای ثبت نشده است.</p>}
           </Panel>
+          {info.financialEvidence && <Panel title="مستندات تطبیق مالی" subtitle="شناسه‌ها و مبالغ ثبت‌شده برای بررسی این سفارش">
+            <dl className="admin-fields">
+              <Field label="فاکتور پرداخت‌شده" value={formatToman(info.financialEvidence.invoicedRial / 10)} />
+              <Field label="برداشت خرید" value={formatToman(info.financialEvidence.debitRial / 10)} />
+              <Field label="بازپرداخت مرتبط" value={formatToman(info.financialEvidence.refundRial / 10)} />
+              <Field label="شناسهٔ فاکتورها" value={info.financialEvidence.invoiceIds.join(' · ') || '—'} ltr />
+              <Field label="شناسهٔ تراکنش‌های مرتبط" value={info.financialEvidence.transactionIds.join(' · ') || '—'} ltr />
+              <Field label="عملیات ارائه‌دهنده" value={info.financialEvidence.operations.map(op => <div key={op.id}><bdi>{op.id}</bdi> · <bdi>{op.kind} / {op.status}</bdi></div>)} />
+              <Field label="۲۰ تعدیل دستی اخیر حساب" value={info.financialEvidence.adjustments.map(row =>
+                <div key={row.id}><bdi>{row.id}</bdi> · {formatToman(row.amountRial / 10)} · {timeLabel(row.createdAt)}</div>)} />
+            </dl>
+          </Panel>}
         </div>
         <div className="admin-detail-side"><Panel title="اطلاعات مشتری"><Customer user={info.user} /></Panel>
           <Panel title="صورتحساب"><Field label="شماره فاکتور" value={info.invoice?.number ?? '—'} /><Field label="وضعیت" value={info.invoice?.status ?? '—'} /></Panel>

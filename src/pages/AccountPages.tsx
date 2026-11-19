@@ -13,20 +13,35 @@ import { useToast } from '../components/ui/Toast'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { isApiConfigured } from '../lib/apiClient'
 import { getProfile, listSessions, revokeOtherSessions, revokeSession, updateProfile, updateTimezone, verifyNationalCode } from '../lib/endpoints'
-import { formatCount, formatFaDateTime } from '../lib/format'
+import { formatCount, formatFaDateTime, toAsciiDigits } from '../lib/format'
 import type { Session } from '../lib/types'
 import { useAuth } from '../auth/AuthContext'
-import { EmailCode } from '../components/EmailConfirmation'
+import { EmailCode, type ActiveEmailChallenge } from '../components/EmailConfirmation'
 import { Modal } from '../components/ui/Modal'
-import { startAccountEmail, verifyAccountEmail } from '../lib/operationEmail'
+import { cancelAccountEmail, startAccountEmail, verifyAccountEmail } from '../lib/operationEmail'
+
+function savedEmailCheck(key: string | undefined): { address: string; challenge: ActiveEmailChallenge } | undefined {
+  if (!key) return
+  try {
+    const pending = JSON.parse(sessionStorage.getItem(key) ?? 'null')
+    if (typeof pending?.address === 'string' && typeof pending.challenge?.token === 'string' && pending.challenge.expires > Date.now()) return pending
+    sessionStorage.removeItem(key)
+  } catch { /* Storage is optional. */ }
+}
 
 export function ProfilePage() {
+  const { user, refresh } = useAuth()
+  const emailStorageKey = user?.id ? `account-email:${user.id}` : undefined
+  const [pendingCheck, setPendingCheck] = useState(() => savedEmailCheck(emailStorageKey))
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [mobile, setMobile] = useState('')
   const [nationalCode, setNationalCode] = useState('')
   const [email, setEmail] = useState('')
-  const [emailToVerify, setEmailToVerify] = useState('')
+  const [emailToVerify, setEmailToVerify] = useState(() => pendingCheck?.address ?? '')
+  const [changingEmail, setChangingEmail] = useState(false)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [emailTotp, setEmailTotp] = useState('')
   const [legal, setLegal] = useState(false)
   const [companyName, setCompanyName] = useState('')
   const [nationalId, setNationalId] = useState('')
@@ -36,8 +51,12 @@ export function ProfilePage() {
   const [nameErrors, setNameErrors] = useState<{ firstName?: string; lastName?: string }>({})
   const [verifying, setVerifying] = useState(false)
   const { showToast } = useToast()
-  const { refresh } = useAuth()
   const profile = useApiQuery(getProfile)
+  const closeEmail = (cancel = true) => {
+    if (cancel && pendingCheck) void cancelAccountEmail(pendingCheck.challenge.token).catch(() => undefined)
+    if (emailStorageKey) try { sessionStorage.removeItem(emailStorageKey) } catch { /* Storage is optional. */ }
+    setPendingCheck(undefined); setEmailToVerify(''); setCurrentPassword(''); setEmailTotp('')
+  }
 
   useEffect(() => {
     if (profile.data) {
@@ -119,10 +138,13 @@ export function ProfilePage() {
                 <Button variant="secondary" size="sm" type="button" disabled={verifying} onClick={verify}>{verifying ? 'در حال بررسی...' : 'احراز هویت'}</Button>
               </div>
               <div className="form-stack">
-                <Input label="ایمیل" type="email" placeholder="example@email.com" value={email} readOnly={profile.data?.emailVerified}
+                <Input label={changingEmail ? 'ایمیل جدید' : 'ایمیل'} type="email" placeholder="example@email.com" value={email} readOnly={profile.data?.emailVerified && !changingEmail}
                   onChange={(event) => setEmail(event.target.value)} />
-                {profile.data?.emailVerified ? <p>ایمیل تأیید شده است.</p> : <Button type="button" variant="secondary"
-                  disabled={!email.includes('@')} onClick={() => setEmailToVerify(email.trim())}>تأیید ایمیل حساب</Button>}
+                <p role="status">{pendingCheck ? 'ایمیل در انتظار تأیید است.' : profile.data?.emailVerified ? 'ایمیل تأیید شده است.' : 'ایمیل تأیید نشده است.'}</p>
+                {profile.data?.emailVerified && !changingEmail
+                  ? <Button type="button" variant="secondary" onClick={() => { setChangingEmail(true); setEmail('') }}>تغییر ایمیل</Button>
+                  : <Button type="button" variant="secondary" disabled={!email.includes('@')}
+                    onClick={() => setEmailToVerify(email.trim())}>تأیید ایمیل حساب</Button>}
               </div>
             </div>
           </Card>
@@ -143,9 +165,27 @@ export function ProfilePage() {
         </>
       )}
       <div className="page-footer-actions"><Button type="submit" icon={<Save size={18} />} disabled={saving || profile.loading || !!profile.error}>{saving ? 'در حال ذخیره...' : 'ذخیره تغییرات'}</Button></div>
-      <Modal open={!!emailToVerify} title="تأیید ایمیل حساب" trapFocus onClose={() => setEmailToVerify('')}>
-        {emailToVerify && <EmailCode start={() => startAccountEmail(emailToVerify)} cancel={() => setEmailToVerify('')}
-          submit={async proof => { await verifyAccountEmail(proof); setEmailToVerify(''); profile.refetch(); showToast('ایمیل حساب تأیید شد.') }} />}
+      <Modal open={!!emailToVerify && !!profile.data} title="تأیید ایمیل حساب" trapFocus onClose={() => closeEmail()}>
+        {emailToVerify && <EmailCode
+          initialChallenge={pendingCheck?.address === emailToVerify ? pendingCheck.challenge : undefined}
+          start={token => startAccountEmail(emailToVerify, token ? { token } : {
+            ...(currentPassword ? { password: currentPassword } : {}), ...(emailTotp ? { totp: emailTotp } : {}),
+          })} cancel={() => closeEmail()} onChallenge={challenge => {
+            const check = { address: emailToVerify, challenge }
+            if (emailStorageKey) try { sessionStorage.setItem(emailStorageKey, JSON.stringify(check)) } catch { /* Storage is optional. */ }
+            setPendingCheck(check); setCurrentPassword(''); setEmailTotp('')
+          }}
+          submit={async proof => {
+            await verifyAccountEmail(proof)
+            setEmail(emailToVerify); closeEmail(false); setChangingEmail(false); profile.refetch(); await refresh(); showToast('ایمیل حساب تأیید شد.')
+          }}>
+          {profile.data?.emailVerified && <>
+            <p>ایمیل فعلی تا تأیید آدرس جدید معتبر می‌ماند. پس از تغییر، سایر نشست‌ها پایان می‌یابند.</p>
+            <Input label="رمز فعلی حساب" type="password" autoComplete="current-password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} />
+            {profile.data.emailChangeTotp && <Input label="کد برنامهٔ دومرحله‌ای" inputMode="numeric" dir="ltr" maxLength={6}
+              value={emailTotp} onChange={event => setEmailTotp(toAsciiDigits(event.target.value).replace(/\D/g, ''))} />}
+          </>}
+        </EmailCode>}
       </Modal>
     </form>
   )

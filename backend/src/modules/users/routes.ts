@@ -9,6 +9,7 @@ import { listSessionsForUser, revokeOtherSessions } from '../auth/service.js'
 import { writeAudit } from '../audit/service.js'
 import { NotFoundError, ValidationError } from '../../lib/errors.js'
 import { normalizeIranMobile } from '../../contracts/iran-mobile.js'
+import { internalEmail } from '../auth/email-address.js'
 
 const profileSchema = z.object({
   firstName: z.string().max(100, 'نام حداکثر ۱۰۰ نویسه است.').optional().nullable(),
@@ -101,8 +102,9 @@ function profileDto(row: typeof users.$inferSelect) {
     lastName: row.lastName ?? '',
     mobile: row.mobile ?? '',
     nationalCode: row.nationalCode ?? '',
-    email: row.email,
-    emailVerified: Boolean(row.emailVerifiedAt),
+    email: internalEmail(row.email) ? '' : row.email,
+    emailVerified: !internalEmail(row.email) && Boolean(row.emailVerifiedAt),
+    emailChangeTotp: row.twoFactorEnabled,
     legalEnabled: false,
     ...row.legalProfile,
     timezone: row.timezone ?? 'Asia/Tehran',

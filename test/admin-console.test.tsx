@@ -40,14 +40,17 @@ describe('Penpot admin console access and real API states', () => {
   it('renders website overview for an authenticated admin without sample data', () => {
     getAuth.mockReturnValue({ user: { id: 'a1', email: 'admin@example.test', role: 'admin', status: 'active' }, loading: false })
     query.mockReturnValue({ data: {
-      source: 'website', users: 7, orders: 3, servers: 4, activeServers: 2,
-      ordersNeedingAttention: 1, paidOrderTotalRial: 1200000, paidOrderTotalToman: 120000,
-      recentOrders: [],
+      source: 'website', accounts: [{ role: 'user', status: 'active', count: 6 }, { role: 'admin', status: 'active', count: 1 }],
+      orderCounts: { active: 3 }, serverCounts: { active: 2, terminated: 2 },
+      checkedAt: '2026-11-19T14:13:00Z', overdue: 0, failedRenewals24h: 1, ordersNeedingAttention: 1,
+      finance: { initialRial: 1200000, renewalRial: 50000, refundsRial: 0, netRial: 1250000, depositsRial: 1500000, exceptionCount: 0, renewalMismatchCount: 0, exceptions: [] },
+      recentOrders: [{ id: 'o1', orderNumber: 'ORD-1', userName: 'آزمایشی', totalToman: 120000, status: 'active', serverStatus: 'terminated' }],
     }, loading: false, error: null, refetch: vi.fn() })
     renderAdmin()
-    expect(screen.getByText('مبلغ سفارش‌های پرداخت‌شده')).toBeTruthy()
-    expect(screen.getByText('۱۲۰,۰۰۰')).toBeTruthy()
-    expect(screen.getByText('هنوز سفارشی ثبت نشده است.')).toBeTruthy()
+    expect(screen.getByText('خرید اولیهٔ پذیرفته‌شده، ناخالص')).toBeTruthy()
+    const row = within(screen.getByRole('link', { name: 'ORD-1' }).closest('tr')!)
+    expect(row.getByText('تحویل‌شده')).toBeTruthy()
+    expect(row.getByText('حذف‌شده')).toBeTruthy()
   })
 
   it('uses the same credit and debit columns in a user’s read-only ledger', () => {

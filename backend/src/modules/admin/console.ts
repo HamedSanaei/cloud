@@ -21,6 +21,10 @@ import { writeAudit } from '../audit/service.js'
 import { listProviders } from '../providers/registry.js'
 import { findBlockingManagementOperation, isOrphanedPowerOperation, managementDto } from '../servers/management.js'
 import { inspectLegacyPowerOperation, resolveLegacyPowerOperation } from '../servers/power-reconciliation.js'
+import { isErasedAccount, manageUserData, userDataActions } from './user-data.js'
+import { internalEmail } from '../auth/email-address.js'
+import { isPricingSuperAdmin } from '../system/security.js'
+import { pendingOrderStatuses, readAdminOverview, readOrderFinancialEvidence } from './overview.js'
 
 const paging = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),
@@ -35,9 +39,10 @@ function ensureSiteAuthority() {
 }
 function userDto(u: typeof users.$inferSelect) {
   return {
-    id: u.id, email: u.email, firstName: u.firstName, lastName: u.lastName,
+    id: u.id, email: internalEmail(u.email) ? '' : u.email, firstName: u.firstName, lastName: u.lastName,
     mobile: u.mobile, role: u.role, status: u.status,
-    emailVerifiedAt: u.emailVerifiedAt?.toISOString() ?? null,
+    emailVerifiedAt: internalEmail(u.email) ? null : u.emailVerifiedAt?.toISOString() ?? null,
+    dataDeleted: isErasedAccount(u.email),
     mobileVerifiedAt: u.mobileVerifiedAt?.toISOString() ?? null,
     createdAt: u.createdAt.toISOString(),
   }
@@ -78,8 +83,8 @@ async function userNames(ctx: AppContext, ids: string[]) {
     id: users.id, email: users.email, firstName: users.firstName, lastName: users.lastName,
   }).from(users).where(inArray(users.id, [...new Set(ids)])) : []
   return new Map(rows.map(u => [u.id, {
-    name: [u.firstName, u.lastName].filter(Boolean).join(' ') || u.email,
-    email: u.email,
+    name: [u.firstName, u.lastName].filter(Boolean).join(' ') || (internalEmail(u.email) ? '—' : u.email),
+    email: internalEmail(u.email) ? '' : u.email,
   }]))
 }
 
@@ -131,27 +136,15 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
     return { data: { id, enabled } }
   })
 
-  app.get('/overview', async () => {
-    const [userCount, orderCount, serverCount, activeCount, pendingCount, recent, paidTotal] = await Promise.all([
-      ctx.db.select({ n: sql<number>`count(*)::int` }).from(users),
-      ctx.db.select({ n: sql<number>`count(*)::int` }).from(orders),
-      ctx.db.select({ n: sql<number>`count(*)::int` }).from(servers),
-      ctx.db.select({ n: sql<number>`count(*)::int` }).from(servers).where(eq(servers.status, 'active')),
-      ctx.db.select({ n: sql<number>`count(*)::int` }).from(orders).where(inArray(orders.status, ['awaiting_payment', 'requires_review', 'provisioning'])),
-      ctx.db.select().from(orders).orderBy(desc(orders.createdAt)).limit(5),
-      ctx.db.select({ amount: sql<string>`coalesce(sum(${orders.totalRial}), 0)::text` }).from(orders)
-        .where(inArray(orders.status, ['paid', 'queued', 'provisioning', 'active'])),
-    ])
-    const names = await userNames(ctx, recent.map(o => o.userId))
-    const paid = Number(paidTotal[0]?.amount ?? 0)
-    const total = money(paid)
+  app.get('/overview', async (request, reply) => {
+    const { recentOrders, ...overview } = await readAdminOverview(ctx.db, isPricingSuperAdmin(requireAdmin(request)))
+    const names = await userNames(ctx, recentOrders.map(({ order }) => order.userId))
+    reply.header('Cache-Control', 'private, no-store')
     return { data: {
       source: 'website' as const,
-      users: userCount[0]?.n ?? 0, orders: orderCount[0]?.n ?? 0,
-      servers: serverCount[0]?.n ?? 0, activeServers: activeCount[0]?.n ?? 0,
-      ordersNeedingAttention: pendingCount[0]?.n ?? 0,
-      paidOrderTotalRial: total.balanceRial, paidOrderTotalToman: total.balanceToman,
-      recentOrders: recent.map(o => ({ ...orderDto(o), userName: names.get(o.userId)?.name ?? '—' })),
+      ...overview,
+      ordersNeedingAttention: pendingOrderStatuses.reduce((total, status) => total + (overview.orderCounts[status] ?? 0), 0),
+      recentOrders: recentOrders.map(({ order, serverStatus }) => ({ ...orderDto(order), serverStatus, userName: names.get(order.userId)?.name ?? '—' })),
     } }
   })
 
@@ -188,18 +181,21 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
   })
 
   app.get('/users/:id', async request => {
+    const actor = requireAdmin(request)
     const { id } = parse(idParam, request.params)
     const user = await ctx.db.query.users.findFirst({ where: t => eq(t.id, id) })
     if (!user) throw new NotFoundError('کاربر یافت نشد')
-    const [userWallets, txs, ownedServers, userOrders] = await Promise.all([
+    const [userWallets, txs, ownedServers, userOrders, actions] = await Promise.all([
       ctx.db.query.wallets.findMany({ where: t => eq(t.userId, id), orderBy: t => [desc(t.isDefault), desc(t.createdAt)] }),
       ctx.db.query.walletTransactions.findMany({ where: t => eq(t.userId, id), orderBy: t => [desc(t.createdAt)], limit: 20 }),
       ctx.db.query.servers.findMany({ where: t => eq(t.userId, id), orderBy: t => [desc(t.createdAt)], limit: 20 }),
       ctx.db.query.orders.findMany({ where: t => eq(t.userId, id), orderBy: t => [desc(t.createdAt)], limit: 10 }),
+      userDataActions(ctx.db, actor, user),
     ])
     const total = userWallets.reduce((n, w) => n + w.balanceRial, 0)
     return { data: {
       user: userDto(user),
+      actions,
       ...money(total),
       wallets: userWallets.filter(w => !w.mergedInto).map(w => ({ id: w.id, name: w.name, currency: w.currency, isDefault: w.isDefault, ...money(w.balanceRial) })),
       transactions: txs.map(t => ({
@@ -210,6 +206,15 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
       servers: ownedServers.map(serverDto),
       orders: userOrders.map(orderDto),
     } }
+  })
+
+  app.post('/users/:id/account-action', async request => {
+    const actor = requireAdmin(request), { id } = parse(idParam, request.params)
+    const { action, confirm, reason } = parse(z.object({
+      action: z.enum(['block', 'delete_data']), confirm: z.uuid(), reason: z.string().trim().min(4).max(500),
+    }).strict(), request.body)
+    if (confirm !== id) throw new ConflictError('شناسهٔ تأیید با حساب هدف مطابقت ندارد')
+    return { data: await manageUserData(ctx.db, actor, id, action, reason) }
   })
 
   app.get('/users/:id/servers', async request => {
@@ -254,17 +259,19 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
     const { id } = parse(idParam, request.params)
     const order = await ctx.db.query.orders.findFirst({ where: t => eq(t.id, id) })
     if (!order) throw new NotFoundError('سفارش یافت نشد')
-    const [user, items, events, invoice] = await Promise.all([
+    const [user, items, events, invoice, financialEvidence] = await Promise.all([
       ctx.db.query.users.findFirst({ where: t => eq(t.id, order.userId) }),
       ctx.db.query.orderItems.findMany({ where: t => eq(t.orderId, id) }),
       ctx.db.query.orderEvents.findMany({ where: t => eq(t.orderId, id), orderBy: t => [desc(t.createdAt)] }),
       ctx.db.query.invoices.findFirst({ where: t => eq(t.orderId, id) }),
+      isPricingSuperAdmin(requireAdmin(request)) ? readOrderFinancialEvidence(ctx.db, id) : null,
     ])
     return { data: {
       order: orderDto(order), user: user ? userDto(user) : null,
       items: items.map(i => ({ id: i.id, description: i.description, quantity: i.quantity, totalRial: i.totalRial, totalToman: rialToToman(i.totalRial) })),
       events: events.map(e => ({ fromStatus: e.fromStatus, toStatus: e.toStatus, reason: e.reason, createdAt: e.createdAt.toISOString() })),
       invoice: invoice ? { id: invoice.id, number: invoice.invoiceNumber, status: invoice.status, totalRial: invoice.totalRial } : null,
+      financialEvidence,
     } }
   })
 

@@ -47,24 +47,23 @@ export interface SessionUser {
 export async function createSession(
   db: DbOrTx,
   userId: string,
-  meta: { userAgent?: string; ip?: string },
+  meta: { userAgent?: string; ip?: string; expectedEmail?: string },
 ): Promise<{ token: string; sessionId: string; expiresAt: Date }> {
   const token = generateSessionToken()
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS)
   return db.transaction(async tx => {
-  const [session] = await tx
-    .insert(sessions)
-    .values({
+    const [account] = await tx.select({ status: users.status, email: users.email }).from(users).where(eq(users.id, userId)).for('share')
+    if (account?.status !== 'active' || meta.expectedEmail !== undefined && account.email !== meta.expectedEmail) throw new UnauthorizedError('وضعیت حساب تغییر کرده است')
+    const [session] = await tx.insert(sessions).values({
       userId,
       tokenHash: hashToken(token),
       userAgent: meta.userAgent ?? null,
       ip: meta.ip ?? null,
       expiresAt,
-    })
-    .returning({ id: sessions.id })
-  if (!session) throw new Error('failed to create session')
-  await enqueueSms(tx, 'newLogin', userId, `session:${session.id}:login`, { ip: meta.ip ?? 'نامشخص' })
-  return { token, sessionId: session.id, expiresAt }
+    }).returning({ id: sessions.id })
+    if (!session) throw new Error('failed to create session')
+    await enqueueSms(tx, 'newLogin', userId, `session:${session.id}:login`, { ip: meta.ip ?? 'نامشخص' })
+    return { token, sessionId: session.id, expiresAt }
   })
 }
 
@@ -97,7 +96,7 @@ export async function login(
   meta: { userAgent?: string; ip?: string },
 ): Promise<{ user: SessionUser; token: string; sessionId: string }> {
   const user = await verifyPrimaryCredentials(db, input)
-  const session = await createSession(db, user.id, meta)
+  const session = await createSession(db, user.id, { ...meta, expectedEmail: user.email })
   await writeAudit(db, { actorId: user.id, action: 'user.login', metadata: { ip: meta.ip } })
   return { user: toSessionUser(user, session.sessionId), token: session.token, sessionId: session.sessionId }
 }
@@ -162,9 +161,12 @@ export async function rotateSession(
 
   const newToken = generateSessionToken()
   const newExpiry = new Date(Date.now() + SESSION_TTL_MS)
-  const [created] = await db.transaction(async (tx) => {
-    await tx.update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.id, session.id))
-    return tx
+  const created = await db.transaction(async (tx) => {
+    const [account] = await tx.select({ status: users.status }).from(users).where(eq(users.id, user.id)).for('share')
+    if (account?.status !== 'active') return null
+    const [revoked] = await tx.update(sessions).set({ revokedAt: new Date() }).where(and(eq(sessions.id, session.id), isNull(sessions.revokedAt))).returning({ id: sessions.id })
+    if (!revoked) return null
+    const [replacement] = await tx
       .insert(sessions)
       .values({
         userId: user.id,
@@ -174,9 +176,11 @@ export async function rotateSession(
         expiresAt: newExpiry,
       })
       .returning({ id: sessions.id })
+    return replacement
   })
+  if (!created) return null
   await writeAudit(db, { actorId: user.id, action: 'user.session_refresh' })
-  return { token: newToken, user: toSessionUser(user, created?.id ?? session.id) }
+  return { token: newToken, user: toSessionUser(user, created.id) }
 }
 
 export async function listSessionsForUser(db: DbClient, userId: string, currentSessionId?: string) {

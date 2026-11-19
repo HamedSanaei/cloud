@@ -16,7 +16,7 @@ try {
     diskGb: 40, diskType: 'Local', trafficGb: null, hourly: 123450 + index, monthly: 800000 + group,
   }))).flat()
 
-  for (const width of [320, 390, 1440]) {
+  for (const width of [320, 390, 768, 1024, 1440]) {
     const page = await browser.newPage({ viewport: { width, height: 760 }, hasTouch: width < 1024 })
     const visit = async control => width < 1024 ? control.tap() : control.click()
     let refreshed = false
@@ -35,12 +35,17 @@ try {
     for (const path of ['/', '/hetzner']) {
       refreshed = false
       await page.goto(origin + path)
+      if (path === '/') assert.ok(await page.locator('.hero-tagline').evaluate(tagline => {
+        const title = tagline.previousElementSibling
+        return title.tagName === 'H1' && parseFloat(getComputedStyle(tagline).fontSize) < parseFloat(getComputedStyle(title).fontSize)
+          && tagline.getBoundingClientRect().width >= tagline.scrollWidth
+      }))
       const frame = page.locator('.tariff-scroll--hetzner')
       const head = frame.locator('thead'), table = frame.locator('table')
       const filters = page.getByRole('group', { name: 'کشور دیتاسنتر' })
       const germany = filters.getByRole('button', { name: 'آلمان' })
       await head.waitFor()
-      if (width < 1024) await page.locator('.tariff-scroll--hetzner[data-page-sticky]').waitFor()
+      if (width <= 1024) await page.locator('.tariff-scroll--hetzner[data-page-sticky]').waitFor()
       assert.equal(await table.locator('tbody tr').count(), 70)
       assert.equal(await table.locator('thead').count(), 1)
       assert.equal(await head.getByRole('columnheader', { name: 'لوکیشن' }).count(), 1)
@@ -64,7 +69,8 @@ try {
       await visit(rowFlag)
       assert.equal(new URL(page.url()).pathname, path)
       assert.equal(await rowFlag.locator('.tariff-country-tip').evaluate(tip => getComputedStyle(tip).visibility), 'visible')
-      await page.getByLabel('مقایسه از کم‌هزینه به بیشتر').selectOption('monthly')
+      await page.getByLabel('مبنای قیمت').selectOption('monthly')
+      await page.getByLabel('مرتب‌سازی بر اساس').selectOption('name:desc')
 
       const scrollWithinTable = async () => {
         const top = await head.evaluate(row => row.getBoundingClientRect().top + window.scrollY)
@@ -76,7 +82,7 @@ try {
         })
       }
       await scrollWithinTable()
-      if (width < 1024) {
+      if (width <= 1024) {
         const shifted = await frame.evaluate(element => {
           element.scrollLeft = -180
           const headers = [...element.querySelectorAll('thead th')]

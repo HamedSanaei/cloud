@@ -77,6 +77,24 @@ provider_base_cost (cents)
 - Unpaid orders can be paid later from any wallet
   (`POST /api/v1/orders/:id/pay`) — idempotent.
 
+### Admin overview reconciliation
+
+Issue [#158](https://github.com/HamedSanaei/cloud/issues/158) records the production
+snapshot at 2026-11-19 14:13 UTC. The legacy queries counted 7 accounts (6 customers
+and 1 administrator), 7 orders (5 active, 1 failed, and 1 refunded), and 1 active
+server out of 5 historical records. Summing `orders.total_rial` for `paid`,
+`queued`, `provisioning`, and `active` yielded 171,000 IRR (17,100 toman).
+Four historical paid orders pointed to terminated servers. The snapshot also
+found a failed order with a 39,000 IRR debit and no linked wallet refund.
+
+The overview uses all-time IRR wallet postings. It shows gross initial charges
+for the accepted order states above, gross renewal charges, service refunds,
+net service debits after linked refunds, and wallet deposits separately. Net
+includes outstanding debits on failed orders. Invoices are evidence for
+reconciliation and are excluded from the sum of wallet postings. The financial
+review queue flags mismatches and failed orders with an outstanding debit. The
+order detail links the evidence needed to review the case. The report is read-only.
+
 ## Subscriptions & renewal (HOURLY / DAILY / MONTHLY)
 
 - A subscription begins only after the provider reports the server running.

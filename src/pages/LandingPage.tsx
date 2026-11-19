@@ -39,7 +39,8 @@ export function LandingPage({ initialTariffs }: { initialTariffs?: string } = {}
         <section className="landing-hero public-container">
           <div className="hero-copy">
             <span className="eyebrow">ایران • اروپا</span>
-            <h1>سرور ابری ایران و هتزنر<br /><em>با پرداخت ریالی و امکان خرید به صورت ساعتی</em></h1>
+            <h1>سرور ابری ایران و هتزنر</h1>
+            <p className="hero-tagline">با پرداخت ریالی و امکان خرید به صورت ساعتی</p>
             <p>مشخصات و قیمت پلن‌های قابل سفارش هتزنر را مقایسه کنید و وضعیت عرضه و تعرفهٔ سرور ایران را ببینید.</p>
             <div className="hero-actions"><Link className="button primary large" to={user ? '/servers/create' : '/register'}>شروع ساخت سرور</Link><Link className="button dark large" to={user ? '/dashboard' : '/login'}>{user ? 'پنل مدیریت' : 'ورود به حساب'}</Link></div>
             <ul className="hero-trust"><li><Check /> مقایسهٔ دوره‌های پرداخت</li><li><Check /> مشخصات شبکهٔ هر پلن</li><li><Check /> موقعیت‌های متنوع</li></ul>
