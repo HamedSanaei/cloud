@@ -5,7 +5,7 @@ import type { DbOrTx } from '../../db/index.js'
 import { authChallenges } from '../../db/schema.js'
 import { AppError, BadRequestError, ForbiddenError } from '../../lib/errors.js'
 
-export type ChallengeKind = 'email_login' | 'email_register' | 'phone_login' | 'phone_register' | 'phone_recovery' | 'phone_operation' | 'password_recovery' | 'totp' | 'google_oauth'
+export type ChallengeKind = 'email_login' | 'email_register' | 'phone_login' | 'phone_register' | 'phone_recovery' | 'phone_operation' | 'password_recovery' | 'totp' | 'google_oauth' | 'server_operation_email' | 'account_email'
 
 // SMS has a separate fixed security policy; email/TOTP keep their configuration.
 const SMS_MAX_ATTEMPTS = 3
@@ -38,6 +38,8 @@ export async function issueChallenge(
     resendCount?: number
     code?: string
     resendToken?: string
+    attempts?: number
+    expiresAt?: Date
   },
 ) {
   const config = getConfig()
@@ -89,15 +91,16 @@ export async function issueChallenge(
     userId: input.userId ?? null,
     payload: input.payload,
     maxAttempts: config.AUTH_OTP_MAX_ATTEMPTS,
+    attempts: input.attempts ?? 0,
     resendCount: input.resendCount ?? 0,
-    expiresAt: new Date(now + config.AUTH_OTP_TTL_SECONDS * 1000),
+    expiresAt: input.expiresAt ?? new Date(now + config.AUTH_OTP_TTL_SECONDS * 1000),
     resendAfter: new Date(now + config.AUTH_OTP_RESEND_SECONDS * 1000),
   })
 
   return {
     token,
     code,
-    expiresIn: config.AUTH_OTP_TTL_SECONDS,
+    expiresIn: input.expiresAt ? Math.max(0, Math.floor((input.expiresAt.getTime() - Date.now()) / 1000)) : config.AUTH_OTP_TTL_SECONDS,
     resendAfter: config.AUTH_OTP_RESEND_SECONDS,
   }
 }
@@ -115,7 +118,7 @@ export async function findChallenge(db: DbOrTx, token: string, kind?: ChallengeK
   return row
 }
 
-export async function verifyChallengeCode(db: DbOrTx, token: string, code: string, kind?: ChallengeKind) {
+export async function verifyChallengeCode(db: DbOrTx, token: string, code: string, kind?: ChallengeKind, deferConsumption = false) {
   const row = await findChallenge(db, token, kind)
   if (!codeMatches(row.id, row.codeHash, code)) {
     const [updated] = await db
@@ -129,20 +132,18 @@ export async function verifyChallengeCode(db: DbOrTx, token: string, code: strin
     }
     throw new BadRequestError('کد تأیید نامعتبر است', { attemptsRemaining: row.maxAttempts - updated.attempts })
   }
-  const [consumed] = await db
-    .update(authChallenges)
-    .set({ consumedAt: new Date() })
-    .where(and(eq(authChallenges.id, row.id), isNull(authChallenges.consumedAt), gt(authChallenges.expiresAt, new Date()), sql`${authChallenges.attempts} < ${row.maxAttempts}`))
-    .returning({ id: authChallenges.id })
+  if (deferConsumption) return row
+  const consumed = await consumeChallenge(db, row.id, row.maxAttempts)
   if (!consumed) throw new BadRequestError('کد تأیید قبلاً استفاده شده یا منقضی شده است')
   return row
 }
 
-export async function consumeChallenge(db: DbOrTx, challengeId: string): Promise<boolean> {
+export async function consumeChallenge(db: DbOrTx, challengeId: string, maxAttempts?: number): Promise<boolean> {
   const [consumed] = await db
     .update(authChallenges)
     .set({ consumedAt: new Date() })
-    .where(and(eq(authChallenges.id, challengeId), isNull(authChallenges.consumedAt), gt(authChallenges.expiresAt, new Date())))
+    .where(and(eq(authChallenges.id, challengeId), isNull(authChallenges.consumedAt), gt(authChallenges.expiresAt, new Date()),
+      maxAttempts === undefined ? undefined : sql`${authChallenges.attempts} < ${maxAttempts}`))
     .returning({ id: authChallenges.id })
   return Boolean(consumed)
 }

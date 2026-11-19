@@ -1,4 +1,5 @@
 import { apiDelete, apiGet, apiPost } from './apiClient'
+import { operationHeaders, type EmailProof } from './operationEmail'
 import type { Server, ServerLifecycle } from './types'
 import type { IndicativeTrafficTariff } from '../../backend/src/contracts/home-tariffs'
 export type { ManagementAction } from '../../backend/src/modules/providers/customer.interface'
@@ -42,8 +43,8 @@ export const getServerMetrics = async (id: string, window: string) => (await api
 export const getResizeOptions = async (id: string) => (await apiGet<{ data: ResizeOption[] }>(`/servers/${encodeURIComponent(id)}/resize-options`)).data
 export const getServerImages = async (id: string) => (await apiGet<{ data: Array<{ id: string; name: string }> }>(`/servers/${encodeURIComponent(id)}/images`)).data
 export const previewResize = async (id: string, offerId: string, upgradeDisk: boolean) => (await apiPost<{ data: ResizePreview }>(`/servers/${encodeURIComponent(id)}/resize-preview`, { offerId, upgradeDisk })).data
-export const submitServerAction = async (id: string, hostname: string, action: ManagementAction, input: Record<string, unknown>, key: string) =>
-  (await apiPost<{ data: ServerOperation }>(`/servers/${encodeURIComponent(id)}/management/actions`, { ...input, action, hostname, confirm: true }, { headers: { 'idempotency-key': key } })).data
+export const submitServerAction = async (id: string, hostname: string, action: ManagementAction, input: Record<string, unknown>, key: string, proof?: EmailProof) =>
+  (await apiPost<{ data: ServerOperation }>(`/servers/${encodeURIComponent(id)}/management/actions`, { ...input, action, hostname, confirm: true }, { headers: { 'idempotency-key': key, ...operationHeaders(proof) } })).data
 export const submitPrimaryIpv4 = async (id: string, hostname: string, quote: PrimaryIpv4Quote, key: string) =>
   (await apiPost<{ data: ServerOperation }>(`/servers/${encodeURIComponent(id)}/primary-ipv4`, {
     hostname, currentIp: quote.currentIp, version: quote.version, feeRial: quote.feeRial, confirm: true,

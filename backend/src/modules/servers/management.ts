@@ -95,7 +95,8 @@ export const managementConflict = {
   server_deleted: 'سرور حذف شده است', deletion_pending: 'عملیات حذف این سرور هنوز نهایی نشده است',
   server_not_ready: 'سرور هنوز آمادهٔ مدیریت نیست', operation_pending: 'ابتدا نتیجهٔ عملیات قبلی سرور را پیگیری کنید',
 } as const
-export async function requestManagement(db: DbClient, user: SessionUser, serverId: string, action: ManagementAction, input: Record<string, unknown>, key: string) {
+export async function requestManagement(db: DbClient, user: SessionUser, serverId: string, action: ManagementAction, input: Record<string, unknown>, key: string,
+  authorize?: import('../auth/operation-email.js').OperationAuthorization) {
   await getServerForUser(db, user.id, serverId)
   return db.transaction(async tx => {
     await tx.select({ id: users.id }).from(users).where(eq(users.id, user.id)).for('no key update')
@@ -107,11 +108,13 @@ export async function requestManagement(db: DbClient, user: SessionUser, serverI
     const hash = inputHash({ serverId, action, input })
     if (previous) {
       if ((previous.requestMetadata as { hash?: string })?.hash !== hash) throw new ConflictError('این کلید برای درخواست دیگری استفاده شده است')
+      await authorize?.(tx)
       return previous
     }
     const block = managementBlock(server, !!await findBlockingManagementOperation(tx, server.id))
     if (block) throw new ConflictError(managementConflict[block])
     if (['power_on', 'reboot', 'reset'].includes(action)) await assertPowerOnFunding(tx, server)
+    await authorize?.(tx)
     const [op] = await tx.insert(providerOperations).values({ provider: server.provider, kind: 'server_management', action, referenceType: 'server', referenceId: server.id,
       businessKey, status: 'pending', requestMetadata: { input, hash, actorId: user.id, sessionId: user.sessionId, providerServerId: server.providerServerId } }).returning()
     if (action === 'delete') await tx.update(servers).set({ terminationState: 'deletion_requested', terminationRequestedAt: new Date() }).where(eq(servers.id, server.id))

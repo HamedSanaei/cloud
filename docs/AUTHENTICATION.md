@@ -51,6 +51,12 @@ delivery.
 Email requires `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`,
 `SMTP_PASSWORD`, and `SMTP_FROM`.
 
+For ParsServer, use the Stalwart submission service (`SMTP_HOST=mail.parserver.ir`,
+`SMTP_PORT=587`, `SMTP_SECURE=false` for STARTTLS) and set `SMTP_USER` and
+`SMTP_FROM` to `info@parserver.ir`. Set `SMTP_PASSWORD` in the deployment
+secret store. This sender also delivers codes for server creation, deletion
+and root password reset.
+
 ParsGreen requires `PARSGREEN_SIGNATURE` and the existing `PARSGREEN_FROM` for
 fallback. `PARSGREEN_PRIMARY_FROM` defaults to the purchased service line
 `9998883511`; direct SMS first uses that line, with one legacy attempt only on

@@ -4,6 +4,7 @@ import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import type { AppContext } from '../../app.js'
 import { idempotencyKeys, serverSecrets } from '../../db/schema.js'
+import { authorizeOperation } from '../auth/operation-email.js'
 import { parse } from '../../http/validate.js'
 import { hasBrowserSession, requireUser } from '../../http/auth.js'
 import { ConflictError, NotFoundError, ProviderPermanentError, ProviderRetryableError, ProviderUnknownError, ValidationError } from '../../lib/errors.js'
@@ -207,7 +208,9 @@ export const registerCustomerServerRoutes: FastifyPluginAsync<{ ctx: AppContext 
       }
     }
     if (input.action === 'attach_iso') throw new ValidationError('انتخاب و مالکیت ISO در این پروژه هنوز پشتیبانی نمی‌شود')
-    const operation = await requestManagement(db, user, id, input.action, payload, key)
+    const authorize = input.action === 'delete' || input.action === 'reset_password'
+      ? await authorizeOperation(db, user, request.headers, { action: input.action, key, payload: { serverId: id, hostname: input.hostname } }) : undefined
+    const operation = await requestManagement(db, user, id, input.action, payload, key, authorize)
     await queues.addServerAction({ operationId: operation.id, serverId: server.id, action: input.action })
     return reply.status(202).send({ data: managementDto(operation) })
   })

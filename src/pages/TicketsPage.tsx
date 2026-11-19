@@ -104,7 +104,7 @@ export function TicketsPage() {
           <option value="all">همه وضعیت‌ها</option><option value="pending">در انتظار</option><option value="review">در حال بررسی</option><option value="answered">پاسخ داده شده</option><option value="closed">بسته شده</option>
         </Select>
         <Select aria-label="بخش" value={department} onChange={(event) => setDepartment(event.target.value)}>
-          <option value="all">همه بخش‌ها</option><option value="technical">فنی</option><option value="finance">مالی</option>
+          <option value="all">همه بخش‌ها</option><option value="technical">فنی</option><option value="finance">مالی</option><option value="sales">فروش</option>
         </Select>
       </FilterPanel>
 

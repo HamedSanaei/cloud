@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { EmailCode } from '../EmailConfirmation'
+import { cancelOperationEmail, startOperationEmail, type EmailProof } from '../../lib/operationEmail'
 import { platformGet, platformPost } from '../../lib/platformClient'
 import { Button } from './Button'
 import { CopyableIp } from './CopyableIp'
@@ -23,6 +25,7 @@ export function ServerManagement({ serverId, onClose }: { serverId: string; onCl
   const [image, setImage] = useState('')
   const [port, setPort] = useState('')
   const [pending, setPending] = useState<Pending | null>(null)
+  const [emailToken, setEmailToken] = useState<string>()
   const [secret, setSecret] = useState<{ claimId: string; username: string; password: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -73,6 +76,7 @@ export function ServerManagement({ serverId, onClose }: { serverId: string; onCl
   }, [refresh])
   const prepare = (action: string) => perform(async () => {
     const key = crypto.randomUUID()
+    setEmailToken(undefined)
     const body: Record<string, unknown> = action === 'reinstall' ? { image } : action === 'ssh-port' ? { port: Number(port) } : {}
     if (['power-off', 'reinstall', 'reset-password', 'delete', 'ssh-port'].includes(action)) {
       const confirmation = await platformPost<{ confirmationToken: string }>(`/servers/${serverId}/confirmations/${action}`, body, key)
@@ -80,9 +84,9 @@ export function ServerManagement({ serverId, onClose }: { serverId: string; onCl
     }
     setPending({ action, body, key })
   })
-  const execute = () => perform(async () => {
+  const execute = (proof?: EmailProof) => perform(async () => {
     if (!pending) return
-    const outcome = await platformPost<{ replayed: boolean; outcome_unknown: boolean }>(`/servers/${serverId}/actions/${pending.action}`, pending.body, pending.key)
+    const outcome = await platformPost<{ replayed: boolean; outcome_unknown: boolean }>(`/servers/${serverId}/actions/${pending.action}`, pending.body, pending.key, proof)
     setResult(outcome.outcome_unknown ? 'نتیجه هنوز قطعی نیست؛ وضعیت را بررسی کنید و عملیات را تکرار نکنید.' : outcome.replayed ? 'این درخواست قبلاً ثبت شده است.' : 'درخواست پذیرفته شد؛ نتیجه نهایی پس از تأیید ارائه‌دهنده در سابقه نمایش داده می‌شود.')
     setPending(null); await refresh()
   })
@@ -100,8 +104,18 @@ export function ServerManagement({ serverId, onClose }: { serverId: string; onCl
         {secret && <div className="platform-result"><p>رمز فقط در حافظه صفحه است؛ آن را در محل امن ذخیره کنید.</p><p dir="ltr">{secret.username}: <code>{secret.password}</code></p><Button disabled={busy} onClick={() => void perform(async () => { await platformPost(`/servers/${serverId}/credentials/ack`, { claimId: secret.claimId }); setSecret(null) })}>ذخیره کردم؛ پاک کردن رمز</Button></div>}
         {pending && <section className="server-confirmation" aria-label="تأیید عملیات سرور">
           <h3>تأیید {labels[pending.action]}</h3><p>نصب مجدد و حذف، داده‌های سرور را پاک می‌کنند. پورت جدید، پورت قبلی را حذف نمی‌کند.</p>
-          <div><CopyableIp value={server?.ip} /><span dir="ltr">{pending.body.image ? String(pending.body.image) : ''} {pending.body.port ? `SSH: ${String(pending.body.port)}` : ''}</span></div>
-          <div className="platform-inline"><Button variant="secondary" disabled={busy} onClick={() => setPending(null)}>انصراف</Button><Button variant="danger" disabled={busy} onClick={() => void execute()}>تأیید اجرای عملیات</Button></div>
+          <div>
+            <CopyableIp value={server?.ip} />
+            {pending.action === 'reinstall' && <p>سیستم‌عامل مقصد <bdi>{images.find(item => item.ref === pending.body.image)?.name}</bdi></p>}
+            {pending.body.port ? <span dir="ltr">SSH: {String(pending.body.port)}</span> : null}
+          </div>
+          {pending.action === 'delete' || pending.action === 'reset-password' ? <EmailCode
+            start={() => startOperationEmail({ action: pending.action === 'delete' ? 'platform_delete' : 'platform_reset_password', key: pending.key,
+              payload: { path: `/servers/${serverId}/actions/${pending.action}`, method: 'POST', body: pending.body } })}
+            submit={execute} onToken={setEmailToken} cancel={() => {
+              if (emailToken) void cancelOperationEmail(emailToken).catch(() => undefined)
+              setPending(null)
+            }} /> : <div className="platform-inline"><Button variant="secondary" disabled={busy} onClick={() => setPending(null)}>انصراف</Button><Button variant="danger" disabled={busy} onClick={() => void execute()}>تأیید اجرای عملیات</Button></div>}
         </section>}
         <h3>سابقه و نتیجه عملیات</h3><p className="muted-copy">پذیرش درخواست به معنی موفقیت نهایی نیست. نتیجه واقعی و مجوزهای سرور خودکار تازه می‌شوند.</p>
         <Button variant="secondary" disabled={busy} onClick={() => void perform(refresh)}>تازه‌سازی وضعیت</Button>

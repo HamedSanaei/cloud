@@ -20,11 +20,13 @@ import { useToast } from '../components/ui/Toast'
 import { ApiError, isApiConfigured } from '../lib/apiClient'
 import { hetznerTrafficQuota } from '../../backend/src/contracts/home-tariffs'
 import { HetznerTraffic } from '../components/servers/HetznerTraffic'
-import { checkDomainAvailability, createServer, getOfferImages, getStorefrontCatalog, listWallets, registerDomain } from '../lib/endpoints'
+import { checkDomainAvailability, createServer, getOfferImages, getStorefrontCatalog, listWallets, registerDomain, serverCreateIntent } from '../lib/endpoints'
+import { OperationEmail } from '../components/EmailConfirmation'
+import type { EmailProof } from '../lib/operationEmail'
 import { claimLifecycleNotice, rememberAcceptedServer } from '../lib/serverLifecycle'
 import { formatFaNumber } from '../lib/format'
 import { useApiQuery } from '../hooks/useApiQuery'
-import type { BillingPeriod, DomainAvailability } from '../lib/types'
+import type { BillingPeriod, CreateServerPayload, DomainAvailability } from '../lib/types'
 import { useAuth } from '../auth/AuthContext'
 import { LocationCards } from '../components/ui/LocationCards'
 import { checkoutFailure, clearCheckoutDraft, minimumCreationBalance, readCheckoutDraft, saveCheckoutDraft } from '../lib/serverCheckout'
@@ -49,6 +51,7 @@ export function CreateServerPage() {
   const [name, setName] = useState(draft?.name ?? '')
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod | ''>(draft?.billingPeriod ?? '')
   const [submitting, setSubmitting] = useState(false)
+  const [emailOrder, setEmailOrder] = useState<(CreateServerPayload & { idempotencyKey: string; expectedTotalRial: number }) | null>(null)
   const [submitError, setSubmitError] = useState<ReturnType<typeof checkoutFailure> | null>(null)
   const purchaseKey = useRef(draft?.purchaseKey || crypto.randomUUID())
   const submitLock = useRef(false)
@@ -114,17 +117,22 @@ export function CreateServerPage() {
   const reloadCatalog = () => {
     setProviderId(''); setLocation(''); setBillingPeriod(''); resetOffer(); setStep(0); catalog.refetch()
   }
-  const next = async () => {
-    if (submitLock.current || submitting || !canContinue) return
+  const next = () => {
+    if (submitLock.current || !canContinue) return
     if (step < serverSteps.length - 1) { setStep((value) => value + 1); return }
     if (!allValid || !billingPeriod || !offer || !selectedOs || !wallet || !price) return
+    setEmailOrder({ name: name.trim(), offerId: offer.id, os: selectedOs.id, billingPeriod, pricing: offer.canonicalPricing,
+      expectedTotalRial: price.totalRial, idempotencyKey: purchaseKey.current })
+  }
+  const submitOrder = async (proof: EmailProof) => {
+    if (submitLock.current || !emailOrder) return
     setSubmitting(true)
     submitLock.current = true
     setSubmitError(null)
     try {
-      const result = await createServer({ name: name.trim(), offerId: offer.id, os: selectedOs.id, billingPeriod, pricing: offer.canonicalPricing,
-        ...(!shared && offer.provider === 'hetzner' ? { expectedTotalRial: price.totalRial } : {}), idempotencyKey: purchaseKey.current })
-      const accepted = { ...result, name: result.name || name.trim(), datacenter: result.datacenter || location, os: result.os || selectedOs.label || selectedOs.id, serverType: result.serverType || offer.name }
+      const result = await createServer(emailOrder, proof)
+      setEmailOrder(null)
+      const accepted = { ...result, name: result.name || emailOrder.name, datacenter: result.datacenter || location, os: result.os || selectedOs?.label || emailOrder.os, serverType: result.serverType || offer?.name || '' }
       rememberAcceptedServer(user?.id ?? '', accepted)
       if (accepted.tracking?.source === 'platform') {
         await claimLifecycleNotice(user?.id ?? '', { ...accepted, tracking: { ...accepted.tracking, state: 'queued' } })
@@ -133,8 +141,12 @@ export function CreateServerPage() {
       clearCheckoutDraft(user?.id)
       navigate('/servers')
     } catch (error) {
-      setSubmitError(checkoutFailure(error))
-      if (error instanceof ApiError && (error.body as { error?: string } | null)?.error === 'server_price_changed') catalog.refetch()
+      const problem = checkoutFailure(error)
+      const changed = error instanceof ApiError && (error.body as { error?: string } | null)?.error === 'server_price_changed'
+      if (!changed && !problem.funding) throw error
+      setSubmitError(problem)
+      setEmailOrder(null)
+      if (changed) catalog.refetch()
     } finally {
       setSubmitting(false)
       submitLock.current = false
@@ -145,6 +157,10 @@ export function CreateServerPage() {
 
   return (
     <div className="page-stack wizard-page server-storefront" dir="rtl">
+      {emailOrder && <OperationEmail intent={serverCreateIntent(emailOrder)} execute={submitOrder} close={() => setEmailOrder(null)}>
+        <p>ساخت سرور <bdi>{emailOrder.name || offer?.name}</bdi> · {locationLabel} · {periodLabels[emailOrder.billingPeriod]} · {priceLabel(emailOrder.expectedTotalRial)}</p>
+        <p>{offer?.name} · <bdi>{selectedOs?.label || emailOrder.os}</bdi></p>
+      </OperationEmail>}
       {linkUnavailable && <p className="info-box" role="status">پلن لینک‌شده دیگر برای این دوره در دسترس نیست. از فهرست فعلی انتخاب کنید.</p>}
       <PageHeader title="ایجاد سرور جدید" subtitle="دیتاسنتر، دوره پرداخت و منابع را از کاتالوگ زنده انتخاب کنید." icon={<Server />}
         actions={<LinkButton to="/servers" variant="secondary" icon={<ArrowLeft size={18} />}>بازگشت</LinkButton>} />

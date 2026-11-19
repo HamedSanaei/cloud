@@ -13,6 +13,7 @@ import { transactionDirection } from '../../lib/dto.js'
 import { storefrontProjection, type ConsoleOffer } from './storefront.js'
 import { listNotifications, publishNotification } from '../notifications/service.js'
 import { isPlatformAuthority } from './authority.js'
+import { authorizeOperation, type OperationIntent } from '../auth/operation-email.js'
 
 export function platformEnabled(): boolean { return isPlatformAuthority() }
 
@@ -209,6 +210,16 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
       const supplied = request.headers['idempotency-key']
       if (request.method !== 'GET' && (typeof supplied !== 'string' || supplied.length < 8 || supplied.length > 128)) throw new BadRequestError('کلید یکتای درخواست الزامی است')
       if (request.method !== 'GET') assertSafeFinancialInput(path, request.body)
+      const serverResource = /^\/servers\/[a-f0-9-]{36}$/.test(path)
+      const kind: OperationIntent['action'] | undefined = request.method === 'GET' ? undefined
+        : path === '/orders' || path === '/servers' ? 'platform_order'
+          : /\/actions\/(reset-password|password-reset)$/.test(path) ? 'platform_reset_password'
+            : serverResource || /\/actions\/(delete|terminate)$/.test(path) ? 'platform_delete' : undefined
+      if (kind) {
+        const authorize = await authorizeOperation(ctx.db, requireUser(request), request.headers, { action: kind, key: String(supplied),
+          payload: { path, method: request.method, body: request.body ?? {} } })
+        await ctx.db.transaction(authorize)
+      }
       if (request.method === 'POST' && path === '/recharge') {
         const wallet = await platformRequest<{ data: { balance: { currency: string; balance_minor: number } } }>(token, '/wallet')
         requireToman(wallet.data.balance)

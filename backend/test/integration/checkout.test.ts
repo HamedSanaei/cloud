@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../../src/app.js'
 import * as configuration from '../../src/config.js'
-import { providerProducts, providers, settings, users } from '../../src/db/schema.js'
+import { authChallenges, providerProducts, providers, settings, users } from '../../src/db/schema.js'
 import { createSession, registerUser } from '../../src/modules/auth/service.js'
 import { minimumCreationBalanceRial } from '../../src/modules/billing/creation-funding.js'
 import { enableAllOffersForSale, findOfferByProductAndLocation, syncProviderCatalog } from '../../src/modules/catalog/service.js'
@@ -16,6 +16,7 @@ import { setFxRate, updatePricingRules } from '../../src/modules/pricing/service
 import { hetznerPrepaidMonth } from '../../src/modules/pricing/periods.js'
 import { creditWallet, ensureDefaultWallet } from '../../src/modules/wallets/service.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
+import { operationEmailHeaders } from '../operation-email-fixture.js'
 
 describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3', () => {
   let ctx: Awaited<ReturnType<typeof getTestContext>>
@@ -56,6 +57,53 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
   }
   const quoteFor = (userId: string) => createQuote(ctx.db, { userId, offerId: offer.id, locationCode: 'FRA-01', billingOption: { billingCycle: 'hourly' }, billingPeriod: 'hourly', operatingSystem: 'ubuntu-24.04' })
   const body = (walletId: string) => ({ name: 'checkout-server', walletId, offerId: offer.id, os: 'ubuntu-24.04', billingPeriod: 'hourly' })
+
+  it('requires a verified account and a single valid code bound to the exact checkout and session', async () => {
+    const a = await account(), quote = await quoteFor(a.user.id)
+    await creditWallet(ctx.db, a.user.id, a.wallet.id, minimumCreationBalanceRial(quote.totalRial, 'HOURLY'), { type: 'manual_credit' })
+    const key = 'email-checkout', payload = { ...body(a.wallet.id), expectedTotalRial: quote.totalRial }
+    const intent = { action: 'create' as const, key, payload }
+    const invoke = (headers: Record<string, string>, data = payload) => app.inject({ method: 'POST', url: '/api/v1/servers', headers, payload: data })
+    const start = () => app.inject({ method: 'POST', url: '/api/auth/operation-email/start', headers: a.headers, payload: intent })
+    expect((await invoke({ ...a.headers, 'idempotency-key': key })).json().error).toBe('operation_email_required')
+    expect((await start()).json().error).toBe('verified_email_required')
+    const email = await app.inject({ method: 'POST', url: '/api/auth/account-email/start', headers: a.headers, payload: { email: a.user.email } })
+    expect(email.statusCode).toBe(202)
+    const { token, developmentCode: code } = email.json().data
+    expect((await app.inject({ method: 'POST', url: '/api/auth/account-email/verify', headers: a.headers, payload: { token, code } })).statusCode).toBe(200)
+
+    const config = configuration.getConfig()
+    vi.mocked(configuration.getConfig).mockReturnValue({ ...config, AUTH_DELIVERY_MODE: 'live', SMTP_HOST: '' })
+    try { expect((await start()).statusCode).toBeGreaterThanOrEqual(500) }
+    finally { vi.mocked(configuration.getConfig).mockReturnValue(config) }
+
+    const issue = () => operationEmailHeaders(app, ctx.db, a.user.id, a.headers, intent)
+    const first = await issue()
+    expect((await start()).statusCode).toBe(429)
+    const anotherSession = await createSession(ctx.db, a.user.id, {})
+    expect((await invoke({ ...first, authorization: `Bearer ${anotherSession.token}` })).statusCode).toBe(403)
+    expect((await invoke(first, { ...payload, name: 'changed-hostname' })).statusCode).toBe(403)
+    const wrong = first['x-operation-code'] === '000000' ? '000001' : '000000'
+    expect((await invoke({ ...first, 'x-operation-code': wrong })).json().details.attemptsRemaining).toBe(config.AUTH_OTP_MAX_ATTEMPTS - 1)
+    const replacement = await issue()
+    expect((await invoke(first)).statusCode).toBe(400)
+    expect((await app.inject({ method: 'POST', url: '/api/auth/operation-email/cancel', headers: a.headers, payload: { token: replacement['x-operation-token'] } })).json().data.cancelled).toBe(true)
+    expect((await invoke(replacement)).statusCode).toBe(400)
+
+    const expired = await issue()
+    await ctx.db.update(authChallenges).set({ expiresAt: new Date(0) }).where(and(eq(authChallenges.userId, a.user.id),
+      eq(authChallenges.kind, 'server_operation_email'), isNull(authChallenges.consumedAt)))
+    expect((await invoke(expired)).statusCode).toBe(410)
+    expect(await ctx.db.query.orders.findMany({ where: t => eq(t.userId, a.user.id) })).toHaveLength(0)
+    expect(await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.userId, a.user.id) })).toHaveLength(1)
+
+    const valid = await issue()
+    const results = await Promise.all([invoke(valid), invoke(valid)])
+    expect(results.map(response => response.statusCode).sort()).toEqual([201, 400])
+    expect((await invoke(valid)).statusCode).toBe(400)
+    expect(await ctx.db.query.orders.findMany({ where: t => eq(t.userId, a.user.id) })).toHaveLength(1)
+    expect(await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.userId, a.user.id) })).toHaveLength(2)
+  })
 
   it('syncs real-shaped fallback evidence through storage, public HTML and monthly quotes', async () => {
     const included = 2 ** 39
@@ -220,7 +268,10 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
     const q = await quoteFor(a.user.id)
     const required = minimumCreationBalanceRial(q.totalRial, 'HOURLY')
     await creditWallet(ctx.db, a.user.id, a.wallet.id, required - 1, { type: 'manual_credit' })
-    const response = await app.inject({ method: 'POST', url: '/api/servers', headers: { ...a.headers, 'idempotency-key': 'underfunded' }, payload: body(a.wallet.id) })
+    const payload = { ...body(a.wallet.id), expectedTotalRial: q.totalRial }
+    const headers = await operationEmailHeaders(app, ctx.db, a.user.id, a.headers, { action: 'create', key: 'underfunded', payload })
+    const request = { method: 'POST' as const, url: '/api/servers', headers, payload }
+    const response = await app.inject(request)
     expect(response.statusCode).toBe(422)
     expect(response.json()).toMatchObject({ error: 'insufficient_funds', message: 'موجودی کیف پول شما کافی نیست.', details: { requiredBalanceRial: required, shortfallRial: 1 } })
     expect(await ctx.db.query.orders.findMany({ where: t => eq(t.userId, a.user.id) })).toHaveLength(0)
@@ -230,7 +281,7 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
     expect(await ctx.db.query.providerOperations.findMany()).toHaveLength(0)
     // Same failed command can succeed after funding, without consuming its key.
     await creditWallet(ctx.db, a.user.id, a.wallet.id, 1, { type: 'manual_credit' })
-    const success = await app.inject({ method: 'POST', url: '/api/servers', headers: { ...a.headers, 'idempotency-key': 'underfunded' }, payload: body(a.wallet.id) })
+    const success = await app.inject(request)
     expect(success.statusCode).toBe(201)
     const balance = (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, a.wallet.id) }))!.balanceRial
     expect(balance).toBe(required - q.totalRial)
@@ -255,9 +306,12 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
     await creditWallet(ctx.db, a.user.id, a.wallet.id, q.totalRial * 168, { type: 'manual_credit' })
     const enqueue = vi.spyOn(ctx.queues, 'addProvision').mockRejectedValueOnce(new Error('fixture queue unavailable'))
     try {
-      const request = { method: 'POST' as const, url: '/api/servers', headers: { ...a.headers, 'idempotency-key': 'queue-recovery' }, payload: body(a.wallet.id) }
+      const payload = { ...body(a.wallet.id), expectedTotalRial: q.totalRial }
+      const verified = () => operationEmailHeaders(app, ctx.db, a.user.id, a.headers, { action: 'create', key: 'queue-recovery', payload })
+      const request = { method: 'POST' as const, url: '/api/servers', headers: await verified(), payload }
       expect((await app.inject(request)).statusCode).toBe(500)
-      const replay = await app.inject(request)
+      expect((await app.inject(request)).statusCode).toBe(400)
+      const replay = await app.inject({ ...request, headers: await verified() })
       expect(replay.statusCode).toBe(200)
       expect(enqueue).toHaveBeenCalledTimes(2)
       expect(enqueue.mock.calls[0]).toEqual(enqueue.mock.calls[1])

@@ -184,8 +184,9 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
 
   app.post('/auth/challenge/verify', { config: { rateLimit: authLimiter } }, async (request, reply) => {
     const input = parse(verifySchema, request.body)
-    const challenge = await verifyChallengeCode(db, input.token, input.code)
-    if (!['email_login', 'email_register', 'phone_login', 'phone_register'].includes(challenge.kind)) throw new BadRequestError('نوع درخواست تأیید معتبر نیست')
+    const { kind } = await findChallenge(db, input.token)
+    if (kind !== 'email_login' && kind !== 'email_register' && kind !== 'phone_login' && kind !== 'phone_register') throw new BadRequestError('نوع درخواست تأیید معتبر نیست')
+    const challenge = await verifyChallengeCode(db, input.token, input.code, kind)
     if (!challenge.userId) throw new BadRequestError('حساب کاربری یافت نشد')
     if (challenge.kind === 'email_register') {
       await db.update(users).set({ status: 'active', emailVerifiedAt: new Date(), updatedAt: new Date() }).where(eq(users.id, challenge.userId))

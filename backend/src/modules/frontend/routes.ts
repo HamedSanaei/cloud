@@ -148,6 +148,7 @@ export const registerFrontendCompatRoutes: FastifyPluginAsync<{ ctx: AppContext 
         mobile: row.mobile ?? '',
         nationalCode: row.nationalCode ?? '',
         email: row.email,
+        emailVerified: Boolean(row.emailVerifiedAt),
         legalEnabled: false,
         timezone: row.timezone ?? 'Asia/Tehran',
       },

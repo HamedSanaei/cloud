@@ -8,6 +8,10 @@ import type { FastifyInstance } from 'fastify'
 import { eq } from 'drizzle-orm'
 import { ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/service.js'
 import { handleProvision } from '../../src/modules/provisioning/handlers.js'
+import { createQuote } from '../../src/modules/quotes/service.js'
+import { operationEmailHeaders } from '../operation-email-fixture.js'
+import { retailBilling } from '../../src/modules/pricing/periods.js'
+import type { ProviderBillingOption } from '../../src/modules/providers/provider.interface.js'
 
 const skip = !dbAvailable
 
@@ -103,11 +107,14 @@ describe.skipIf(skip)('auth + permissions (integration)', () => {
     const owner = await ctx.db.query.users.findFirst({ where: (t) => eq(t.email, 'bob@test.local') })
     const wallet = await ensureDefaultWallet(ctx.db, owner!.id)
     await creditWallet(ctx.db, owner!.id, wallet.id, 50000000, { type: 'manual_credit' })
+    const native = retailBilling(offer!.billingOptions as ProviderBillingOption[], 'monthly').native
+    const quote = await createQuote(ctx.db, { userId: owner!.id, offerId: offer!.id, locationCode: 'FRA-01', billingOption: native, billingPeriod: 'monthly', operatingSystem: 'ubuntu-24.04' })
+    const payload = { name: 'a-vps', offerId: offer!.id, os: 'ubuntu-24.04', billingPeriod: 'monthly', expectedTotalRial: quote.totalRial }
     const create = await app.inject({
       method: 'POST',
       url: '/api/v1/servers',
-      headers: { authorization: `Bearer ${aToken}`, 'idempotency-key': 'perm-a-1' },
-      payload: { name: 'a-vps', offerId: offer!.id, os: 'ubuntu-24.04', billingPeriod: 'monthly' },
+      headers: await operationEmailHeaders(app, ctx.db, owner!.id, { authorization: `Bearer ${aToken}` }, { action: 'create', key: 'perm-a-1', payload }),
+      payload,
     })
     expect(create.statusCode).toBe(201)
     const creation = create.json<{ data: { id: string; tracking: { orderId: string; serverId: null } } }>()

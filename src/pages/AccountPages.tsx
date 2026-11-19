@@ -15,6 +15,9 @@ import { isApiConfigured } from '../lib/apiClient'
 import { getProfile, listSessions, revokeOtherSessions, updateProfile, updateTimezone, verifyNationalCode } from '../lib/endpoints'
 import { formatCount } from '../lib/format'
 import { useAuth } from '../auth/AuthContext'
+import { EmailCode } from '../components/EmailConfirmation'
+import { Modal } from '../components/ui/Modal'
+import { startAccountEmail, verifyAccountEmail } from '../lib/operationEmail'
 
 export function ProfilePage() {
   const [firstName, setFirstName] = useState('')
@@ -22,6 +25,7 @@ export function ProfilePage() {
   const [mobile, setMobile] = useState('')
   const [nationalCode, setNationalCode] = useState('')
   const [email, setEmail] = useState('')
+  const [emailToVerify, setEmailToVerify] = useState('')
   const [legal, setLegal] = useState(false)
   const [companyName, setCompanyName] = useState('')
   const [nationalId, setNationalId] = useState('')
@@ -104,7 +108,12 @@ export function ProfilePage() {
                 <Input label="کد ملی" inputMode="numeric" placeholder="کد ملی خود را وارد کنید" hint="کد ملی باید متعلق به صاحب شماره همراه باشد." value={nationalCode} onChange={(event) => setNationalCode(event.target.value)} />
                 <Button variant="secondary" size="sm" type="button" disabled={verifying} onClick={verify}>{verifying ? 'در حال بررسی...' : 'احراز هویت'}</Button>
               </div>
-              <Input label="ایمیل" type="email" placeholder="example@email.com" value={email} onChange={(event) => setEmail(event.target.value)} />
+              <div className="form-stack">
+                <Input label="ایمیل" type="email" placeholder="example@email.com" value={email} readOnly={profile.data?.emailVerified}
+                  onChange={(event) => setEmail(event.target.value)} />
+                {profile.data?.emailVerified ? <p>ایمیل تأیید شده است.</p> : <Button type="button" variant="secondary"
+                  disabled={!email.includes('@')} onClick={() => setEmailToVerify(email.trim())}>تأیید ایمیل حساب</Button>}
+              </div>
             </div>
           </Card>
           <Card>
@@ -124,6 +133,10 @@ export function ProfilePage() {
         </>
       )}
       <div className="page-footer-actions"><Button type="submit" icon={<Save size={18} />} disabled={saving}>{saving ? 'در حال ذخیره...' : 'ذخیره تغییرات'}</Button></div>
+      <Modal open={!!emailToVerify} title="تأیید ایمیل حساب" trapFocus onClose={() => setEmailToVerify('')}>
+        {emailToVerify && <EmailCode start={() => startAccountEmail(emailToVerify)} cancel={() => setEmailToVerify('')}
+          submit={async proof => { await verifyAccountEmail(proof); setEmailToVerify(''); profile.refetch(); showToast('ایمیل حساب تأیید شد.') }} />}
+      </Modal>
     </form>
   )
 }

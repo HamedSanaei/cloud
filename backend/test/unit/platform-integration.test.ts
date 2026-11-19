@@ -252,6 +252,21 @@ describe('platform bridge', () => {
     await linked.app.close()
   })
 
+  it('requires email confirmation before forwarding server purchases, deletions or password resets', async () => {
+    const upstream = vi.fn()
+    vi.stubGlobal('fetch', upstream)
+    const { app } = await harness()
+    const server = '/api/platform/servers/f07b9500-414e-4000-8000-000000000002'
+    for (const url of ['/api/platform/orders', `${server}/actions/delete`, `${server}/actions/reset-password`]) {
+      const payload = url.endsWith('/orders') ? { expectedMinor: 400 } : {}
+      const response = await app.inject({ method: 'POST', url, headers: { 'idempotency-key': 'fixture-operation' }, payload })
+      expect(response.statusCode).toBe(403)
+      expect(response.json().code).toBe('operation_email_required')
+    }
+    expect(upstream).not.toHaveBeenCalled()
+    await app.close()
+  })
+
   it('forwards only allowlisted routes using the server-side linked identity', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { balance: 123 } }), { headers: { 'X-Platform-Contract': '1' } }))
     vi.stubGlobal('fetch', fetchMock)

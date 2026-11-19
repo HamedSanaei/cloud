@@ -65,7 +65,7 @@ export function DashboardPage() {
 
       <div className="metrics-grid metrics-grid--six">
         {metrics.map((metric) => (
-          <Link to={metric.path} key={metric.label} className="metric-link">
+          <Link to={metric.path} key={metric.label} className="metric-link" aria-label={metric.label}>
             <MetricCard {...metric} value={summary.loading ? '…' : summary.error ? '—' : metric.value} />
           </Link>
         ))}

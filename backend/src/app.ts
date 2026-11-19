@@ -19,6 +19,7 @@ import type { SessionUser } from './modules/auth/service.js'
 import { AUTH_COOKIE } from './http/auth.js'
 import { registerHealthRoutes } from './modules/health/routes.js'
 import { registerAuthRoutes } from './modules/auth/routes.js'
+import { registerOperationEmail } from './modules/auth/operation-email.js'
 import { installPlatformIntegration } from './modules/integration/platform.js'
 import { registerUserRoutes } from './modules/users/routes.js'
 import { registerWalletRoutes } from './modules/wallets/routes.js'
@@ -161,6 +162,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   }
   await app.register(registerHealthRoutes, { prefix: '/api', ctx })
   await app.register(registerAuthRoutes, v1)
+  await app.register(registerOperationEmail, v1)
   await app.register(registerUserRoutes, v1)
   await app.register(registerWalletRoutes, v1)
   await app.register(registerPaymentRoutes, v1)
@@ -177,6 +179,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   // Unversioned alias for the current SPA API layer (same handlers).
   const compat = { prefix: '/api', ctx }
   await app.register(registerAuthRoutes, compat)
+  await app.register(registerOperationEmail, compat)
   await app.register(registerUserRoutes, compat)
   await app.register(registerWalletRoutes, compat)
   await app.register(registerPaymentRoutes, compat)

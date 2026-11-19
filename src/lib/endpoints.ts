@@ -1,5 +1,6 @@
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut, isApiConfigured } from './apiClient'
 import { platformGet, platformPost } from './platformClient'
+import { operationHeaders, type EmailProof, type OperationIntent } from './operationEmail'
 import type {
   AppNotification,
   ChargeRequest,
@@ -117,21 +118,30 @@ export async function getStorefrontCatalog(): Promise<StorefrontCatalog> {
   return payload.data
 }
 
-export async function createServer(payload: CreateServerPayload): Promise<Server> {
+function serverCreationBody(payload: CreateServerPayload) {
+  const { idempotencyKey: _key, pricing, ...body } = payload
+  return pricing ? { offerId: payload.offerId, image: payload.os, ...pricing } : body
+}
+
+export function serverCreateIntent(payload: CreateServerPayload & { idempotencyKey: string }): OperationIntent {
+  const body = serverCreationBody(payload)
+  return { key: payload.idempotencyKey, action: payload.pricing ? 'platform_order' : 'create',
+    payload: payload.pricing ? { path: '/orders', method: 'POST', body } : body }
+}
+
+export async function createServer(payload: CreateServerPayload, proof?: EmailProof): Promise<Server> {
   if (noApi()) throw new Error('اتصال به سرویس ایجاد سرور پیکربندی نشده است.')
+  const body = serverCreationBody(payload)
   if (payload.pricing) {
-    const result = await platformPost<{ serverId: string }>('/orders', {
-      offerId: payload.offerId, image: payload.os, ...payload.pricing,
-    }, payload.idempotencyKey)
+    const result = await platformPost<{ serverId: string }>('/orders', body, payload.idempotencyKey, proof)
     if (!result.serverId) throw new Error('پاسخ ثبت سفارش معتبر نیست؛ پیش از تکرار، وضعیت سرورها را بررسی کنید.')
     return { id: result.serverId, platformServerId: result.serverId, name: payload.name, status: 'building', datacenter: '', cpu: '', ram: '', disk: '', os: payload.os,
       lifecycle: 'queued', tracking: { source: 'platform', reference: result.serverId, serverId: result.serverId, orderId: null, operationId: null,
         state: 'queued', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
       power: { canPowerOn: false, canPowerOff: false, canReboot: false, billingBlocked: false, requiredBalanceToman: null, pendingAction: null } }
   }
-  const { idempotencyKey, pricing: _pricing, ...body } = payload
   const created = await apiPost<Server | { data: Server }>('/servers', body, {
-    headers: idempotencyKey ? { 'idempotency-key': idempotencyKey } : undefined,
+    headers: { ...(payload.idempotencyKey ? { 'idempotency-key': payload.idempotencyKey } : {}), ...operationHeaders(proof) },
   })
   const server = 'data' in created ? created.data : created
   if (!server?.id) throw new Error('پاسخ سرویس ایجاد سرور معتبر نیست.')

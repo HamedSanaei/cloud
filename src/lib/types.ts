@@ -221,6 +221,7 @@ export interface Profile {
   mobile: string
   nationalCode: string
   email: string
+  emailVerified?: boolean
   legalEnabled: boolean
   companyName?: string
   nationalId?: string
