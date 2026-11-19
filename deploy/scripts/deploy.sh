@@ -154,6 +154,10 @@ backup_database() {
 # ---------------------------------------------------------------------------
 pull_image() {
   local img="$1"
+  if [[ "$img" =~ ^parserver-web-licensed:sha-[0-9a-f]{40}$ ]]; then
+    docker image inspect "$img" >/dev/null 2>&1
+    return
+  fi
   if docker pull "$img" >/dev/null 2>&1; then
     return 0
   fi
@@ -170,6 +174,20 @@ pull_image() {
     fi
   fi
   return 1
+}
+
+verify_kalameh_http() {
+  local base="$1" digest="$2" root css type actual home
+  for root in /kalameh "/kalameh/$digest"; do
+    css="$(curl --max-time 15 -fsS "${base}${root}/home.css?release=$RELEASE_SHA")" || return 1
+    type="$(curl --max-time 15 -fsS -o /dev/null -w '%{content_type}' "${base}${root}/home.css?release=$RELEASE_SHA")" || return 1
+    [[ "$type" == text/css* && "$css" == *"@font-face"* && "$css" == *"/kalameh/$digest/kalameh-bold.woff2"* ]] || return 1
+    type="$(curl --max-time 15 -fsS -o /dev/null -w '%{content_type}' "${base}${root}/kalameh-bold.woff2?release=$RELEASE_SHA")" || return 1
+    actual="$(curl --max-time 15 -fsS "${base}${root}/kalameh-bold.woff2?release=$RELEASE_SHA" | sha256sum)" || return 1
+    [[ "$type" == font/woff2* && "${actual%% *}" == "$digest" ]] || return 1
+  done
+  home="$(curl --max-time 15 -fsS "$base/?release=$RELEASE_SHA")" || return 1
+  [[ "$home" == *"/kalameh/$digest/home.css"* && "$home" == *"rel=\"preload\" href=\"/kalameh/$digest/kalameh-bold.woff2\""* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -644,6 +662,12 @@ for candidate_image in "$IMAGE" "$API_IMAGE"; do
     die "Image revision/contract does not match the approved release"; exit 1;
   }
 done
+KALAMEH_DIGEST=''
+if [[ "$IMAGE" == "parserver-web-licensed:sha-$RELEASE_SHA" ]]; then
+  font_sum="$(docker run --rm --entrypoint sha256sum "$IMAGE" /usr/share/nginx/html/kalameh/kalameh-bold.woff2)"
+  KALAMEH_DIGEST="${font_sum%% *}"
+  [[ "$KALAMEH_DIGEST" =~ ^[0-9a-f]{64}$ ]] || { die "Licensed web image is missing Kalameh"; exit 1; }
+fi
 EXPECTED_DB_HEAD="$(docker run --rm "$API_IMAGE" node --input-type=module -e \
   "import {readFileSync} from 'node:fs'; console.log(JSON.parse(readFileSync('drizzle/meta/_journal.json','utf8')).entries.at(-1).when)")"
 [[ "$EXPECTED_DB_HEAD" =~ ^[0-9]+$ ]] || { die "Image has no valid migration head"; exit 1; }
@@ -786,6 +810,10 @@ else
   rollback "local SPA route /dashboard failed for ${IMAGE}" || exit 1
   exit 2
 fi
+if [[ -n "$KALAMEH_DIGEST" ]] && ! verify_kalameh_http "${HEALTH%/healthz}" "$KALAMEH_DIGEST"; then
+  rollback "local homepage Kalameh verification failed" || exit 1
+  exit 2
+fi
 
 # Site worker owns billing/provisioning; platform worker is intentionally idle.
 # Both modes require the process to stay alive without restart churn.
@@ -820,6 +848,10 @@ else
   else
     warn "public /dashboard FAILED -> rollback"
     rollback "public /dashboard failed at ${PUBLIC_URL}/dashboard" || exit 1
+    exit 2
+  fi
+  if [[ -n "$KALAMEH_DIGEST" ]] && ! verify_kalameh_http "${PUBLIC_URL%/}" "$KALAMEH_DIGEST"; then
+    rollback "public homepage Kalameh verification failed" || exit 1
     exit 2
   fi
 fi

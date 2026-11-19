@@ -36,8 +36,11 @@ async function main() {
     await retryStartup('cutover', async () => {
       await assertUnifiedCutoverReady(dbHandle.db)
       await assertSiteAuthorityReady(dbHandle.db)
-      if (!isPlatformAuthority() && !(await listAdminRoles(dbHandle.db)).some(account => account.role === 'super_admin')) {
-        logger.warn({ event: 'super_admin_missing' }, 'Protected settings are unavailable. Follow the Super Admin bootstrap runbook.')
+      if (!isPlatformAuthority()) {
+        const admins = await listAdminRoles(dbHandle.db)
+        if (!admins.some(account => account.role === 'super_admin')) {
+          logger.warn({ event: 'super_admin_missing', activeAdmins: admins.length }, 'Protected settings need an active Super Admin. See the recovery runbook.')
+        }
       }
     }, logger)
     await retryStartup('api-queues', async () => {

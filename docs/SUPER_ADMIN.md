@@ -1,16 +1,21 @@
 # Super Admin rollout
 
-1. Take a verified backup and apply the committed migrations in each environment.
-2. Verify the existing owner's identity and confirm their active `admin` account
-   UUID against the target environment. From the site's API container, run
-   `node dist/scripts/bootstrap-super-admin.js <verified-admin-uuid>` once.
-   The command requires database operator access and records an audit event.
-   It refuses to run when an active Super Admin exists. The API logs
-   `super_admin_missing` when protected settings have no active owner.
-3. Sign in as that account and check `/api/admin/settings/capabilities` and
-   `/admin/settings/hetzner-margin`. Verify that the margin is readable and
-   unchanged. Check that ordinary admins retain their console and receive 403
-   from protected settings. Review both the web and API deployed SHA.
+1. Take a verified backup and apply the committed migrations through the normal
+   release pipeline. Migration 0017 promotes the sole active legacy `admin`
+   when there is no active `super_admin`, and records the promotion in Audit.
+2. Refresh the owner's existing session. Check that the settings menu appears
+   on desktop and mobile and that `/api/admin/settings/capabilities` reports
+   `allowed: true`. Open TabaPay, proxy settings, and Hetzner margin without
+   changing their values. Confirm the deployed web and API SHA.
+
+Installations with multiple active legacy admins and no active Super Admin
+require independent owner verification. The migration grants no access in this
+case. Use the `super_admin_missing` event and its active-admin count to identify
+the state. From the API container, a verified database operator can run
+`node dist/scripts/bootstrap-super-admin.js` in an interactive terminal and
+select the verified active administrator by email. The command records the
+promotion in Audit and refuses to run when an active Super Admin exists.
+Installations with no active admin must first recover an authorized admin account.
 
 An active Super Admin can grant or revoke the role under **تنظیمات فروشگاه → نقش
 مدیران** with their current password, TOTP if enrolled, and explicit confirmation.

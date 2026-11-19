@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Input } from '../components/ui/FormControls'
@@ -34,12 +33,6 @@ const describeMargin = (rule: Margin) => `${percent(rule.markupPercent)} + ${tom
 const load = async () => (await apiGet<{ data: Settings }>(path)).data
 
 export function SystemHetznerMargin() {
-  const { hetznerMargin } = useOutletContext<{ hetznerMargin?: boolean }>()
-  if (!hetznerMargin) return <p role="alert">تنظیم سود هتزنر فقط برای سوپرادمین مجاز است.</p>
-  return <HetznerMarginSettings />
-}
-
-function HetznerMarginSettings() {
   const query = useApiQuery(load)
   const [saved, setSaved] = useState(false)
   return <Card>

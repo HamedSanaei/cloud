@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { createServer } from 'vite'
+import { checkoutFixture } from '../fixtures.mjs'
 
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright-core')
 const server = await createServer({ server: { host: '127.0.0.1', port: 0 }, define: { 'import.meta.env.VITE_API_BASE_URL': '"/api"' } })
@@ -14,11 +15,15 @@ try {
     const page = await browser.newPage({ viewport: { width, height: 820 } })
     let checkedAt = '2026-11-19T14:13:00.000Z'
     let responseState = 'populated'
+    let role = 'admin'
     await page.addInitScript(() => localStorage.setItem('cloud-server-theme', 'light'))
     await page.route('**/*', route => {
       const url = new URL(route.request().url())
       if (url.origin !== origin) return route.abort()
-      if (url.pathname === '/api/auth/me') return route.fulfill({ json: { data: { id: 'admin-fixture', role: 'admin', status: 'active' } } })
+      if (url.pathname === '/api/auth/me') return route.fulfill({ json: { data: { id: 'admin-fixture', role, status: 'active' } } })
+      if (url.pathname === '/api/admin/settings/capabilities') return route.fulfill({ json: { data: { allowed: role === 'super_admin', encryptionReady: false } } })
+      if (url.pathname === '/api/admin/settings/gateway') return route.fulfill({ json: checkoutFixture('/admin/settings/gateway') })
+      if (url.pathname === '/api/admin/settings/outbound') return route.fulfill({ json: { data: { revision: 'fixture', profiles: [], integrations: [] } } })
       if (url.pathname === '/api/admin/console/overview' && responseState === 'error') return route.fulfill({ status: 503, json: { error: { message: 'گزارش در دسترس نیست' } } })
       if (url.pathname === '/api/admin/console/overview') return route.fulfill({ json: { data: {
         source: 'website', checkedAt, overdue: 1, failedRenewals24h: 1, ordersNeedingAttention: 0,
@@ -48,6 +53,16 @@ try {
     responseState = 'empty'
     await page.getByRole('button', { name: 'تلاش دوباره' }).click()
     await page.getByText('هنوز سفارشی ثبت نشده است.').waitFor()
+    await page.goto(origin + '/admin/settings/gateway')
+    await page.getByRole('heading', { name: 'دسترسی مدیریت مجاز نیست' }).waitFor()
+    role = 'super_admin'
+    await page.reload()
+    await page.getByRole('heading', { name: 'درگاه تاباپی' }).waitFor()
+    await page.locator(width === 390 ? '.admin-bottom-nav' : '.admin-sidebar').getByRole('link', { name: 'تنظیمات فروشگاه' }).waitFor()
+    const tabs = page.getByRole('navigation', { name: 'بخش‌های تنظیمات فروشگاه' })
+    assert.equal(await tabs.getByRole('link').count(), 10)
+    await tabs.getByRole('link', { name: 'شبکه و پراکسی خروجی' }).click()
+    await page.getByRole('heading', { name: 'پراکسی جدید' }).waitFor()
     await page.close()
     console.log(`Admin overview passed at ${width}px, light and dark`)
   }

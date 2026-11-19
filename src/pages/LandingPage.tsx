@@ -8,6 +8,8 @@ import { ParserverTabaPaySeal } from '../components/ParserverTabaPaySeal'
 import { HomeTariffs } from '../components/HomeTariffs'
 
 const HETZNER_ACCOUNT_URL = 'https://pluspremium.ir/'
+const kalamehVersion = import.meta.env.VITE_KALAMEH_VERSION
+const kalamehStylesheet = /^[a-f0-9]{64}$/.test(kalamehVersion ?? '') ? `/kalameh/${kalamehVersion}/home.css` : '/kalameh/home.css'
 
 const providers = [
   { id: 'asiatech', name: 'آسیاتک', logo: '/providers/asiatech.svg', region: 'ایران', title: 'خرید سرور ایران', tone: 'blue', link: '#iran-server', action: 'وضعیت عرضه و تعرفهٔ ایران', bullets: ['میزبانی در ایران برای مخاطبان داخل کشور', 'تعرفهٔ ماهانهٔ منابع پس از تأیید منتشر می‌شود'] },
@@ -24,7 +26,7 @@ export function LandingPage({ initialTariffs }: { initialTariffs?: string } = {}
   const { user } = useAuth()
   return (
     <div className="landing-page landing-home" dir="rtl">
-      <link rel="stylesheet" href="/kalameh/home.css" precedence="default" />
+      <link rel="stylesheet" href={kalamehStylesheet} precedence="default" />
       <header className="landing-header">
         <nav className="landing-nav" aria-label="ناوبری اصلی">
           <Link className="public-logo" to="/"><BrandMark /><strong>{BRAND_NAME}</strong></Link>

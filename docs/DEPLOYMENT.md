@@ -34,6 +34,30 @@ use Linux with ShellCheck installed; Windows-only actionlint can otherwise omit
 the runner's shell diagnostics. Remote credential expansion must remain remote,
 and the wrapper smoke checks cleanup on login/deployment success and failure.
 
+### Licensed homepage font
+
+For each Environment that deploys `parserver.ir`, verify that the Kalameh Web
+Bold license covers this site and private build processing. Keep any required
+license notice according to the publisher terms. Put the base64 of the licensed
+WOFF2 in the Environment secret `KALAMEH_WEB_BOLD_WOFF2_B64` and set the
+Environment variable `KALAMEH_WEB_FONT_REQUIRED` to `true`. For a base64 value
+larger than the GitHub secret limit, put the first half in the first secret and
+the remainder in `KALAMEH_WEB_BOLD_WOFF2_B64_TAIL`.
+
+The normal CI and GHCR images keep the Vazirmatn fallback. The approved release
+job passes the font through a BuildKit secret, validates the generated WOFF2,
+stylesheet and homepage-only preload, then transfers the private image to the
+host over the deployment SSH connection. A required licensed build fails if
+the input is absent or invalid. The licensed image stays on
+the private release runner and origin. Its cache stays on the runner. Keep the host's previous image
+for rollback. The deployment checks origin and HTTPS ingress content types and
+the font digest. The homepage references versioned URLs to avoid stale CDN assets.
+
+After rollout, use a fresh Chrome context with caching disabled at 390px and
+1440px. Verify the WOFF2 request and inspect rendered fonts for the hero title,
+tagline and landing CTAs. Check that direct loads of `/hetzner`, `/login`,
+`/dashboard` and `/admin` do not fetch Kalameh.
+
 ## Shared target and private connectivity
 
 `staging` is a fast release branch, **not an isolated runtime**. By operator policy,

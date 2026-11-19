@@ -22,7 +22,17 @@ COPY . .
 RUN npm run typecheck
 
 # Production Vite build -> /app/dist
-RUN npm run build
+ARG KALAMEH_FONT_REQUIRED=0
+RUN --mount=type=secret,id=kalameh_font \
+    set -eu; \
+    if [ "$KALAMEH_FONT_REQUIRED" = 1 ]; then \
+      export KALAMEH_FONT_FILE=/run/secrets/kalameh_font; \
+      test -s "$KALAMEH_FONT_FILE" || { echo 'Licensed homepage release needs the Kalameh build secret' >&2; exit 1; }; \
+      font_sum="$(sha256sum "$KALAMEH_FONT_FILE")"; \
+      export VITE_KALAMEH_VERSION="${font_sum%% *}"; \
+    fi; \
+    npm run build; \
+    if [ "$KALAMEH_FONT_REQUIRED" = 1 ]; then node build-tools/kalameh.mjs; fi
 
 # ---------------------------------------------------------------------------
 # Stage 2: Runtime — minimal nginx serving only the compiled static assets
