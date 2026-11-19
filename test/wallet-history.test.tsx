@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WalletPage } from '../src/pages/FinancePages'
@@ -119,7 +119,9 @@ describe('wallet transaction columns', () => {
       return Response.json({ data: { enabled: false, totalBalance: 0 } })
     }))
     render(<MemoryRouter><ToastProvider><WalletPage /></ToastProvider></MemoryRouter>)
-    fireEvent.click(await screen.findByRole('button', { name: 'شارژ کیف پول' }))
+    const open = await screen.findByRole<HTMLButtonElement>('button', { name: 'شارژ کیف پول' })
+    await waitFor(() => expect(open.disabled).toBe(false))
+    fireEvent.click(open)
     await screen.findByRole('option', { name: 'تاباپی' })
     const amount = screen.getByRole('textbox', { name: 'مبلغ (تومان)' })
     const submit = screen.getByRole('button', { name: 'دریافت لینک پرداخت امن' })
@@ -128,6 +130,7 @@ describe('wallet transaction columns', () => {
       fireEvent.click(submit)
       expect(await screen.findByText(/باید بین ۱۰٬۰۰۰/)).toBeTruthy()
       expect(amount.getAttribute('aria-invalid')).toBe('true')
+      await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(false))
     }
     expect(attempts).toEqual([])
     fireEvent.change(amount, { target: { value: '۱۰٠۰۰' } })
