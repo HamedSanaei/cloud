@@ -158,9 +158,7 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
 
   it('limits Hetzner margin to the existing superadmin and persists a versioned change across retail periods', async () => {
     const owner = await account(true), admin = await account(true), customer = await account()
-    const config = configuration.getConfig()
-    const previousAdmins = config.PRIMARY_IPV4_SUPER_ADMIN_IDS
-    config.PRIMARY_IPV4_SUPER_ADMIN_IDS = [owner.user.id]
+    await ctx.db.update(users).set({ role: 'super_admin' }).where(eq(users.id, owner.user.id))
     const path = '/api/admin/settings/hetzner-margin'
     const oldOptions = offer.billingOptions ?? []
     const monthly = { billingCycle: hetznerPrepaidMonth, amount: '10', amountCents: 1000 }
@@ -213,7 +211,7 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
       expect(catalog).not.toHaveProperty('billingOptions')
       expect(catalog).not.toHaveProperty('providerPriceCents')
     } finally {
-      config.PRIMARY_IPV4_SUPER_ADMIN_IDS = previousAdmins
+      await ctx.db.update(users).set({ role: 'admin' }).where(eq(users.id, owner.user.id))
       await ctx.db.update(providerProducts).set({ billingOptions: oldOptions }).where(eq(providerProducts.id, offer.id))
       await updatePricingRules(ctx.db, 'hetzner', { markupPercent: configuration.getConfig().STOREFRONT_PRICING.hetzner?.markupPercent ?? 25, markupFixedRial: 0 })
     }
@@ -221,6 +219,7 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
 
   it('publishes only current retail offers and approved independent Iran rates', async () => {
     const admin = await account(true), customer = await account()
+    await ctx.db.update(users).set({ role: 'super_admin' }).where(eq(users.id, admin.user.id))
     const read = async () => (await app.inject('/api/public/home-prices')).json().data
     const iran = { rates: { outbound: 123450, inbound: 0, cpu: 250000, ram: null }, trafficUnit: 'TiB', tax: 'included', published: false }
     const update = (headers: Record<string, string>, value: unknown) => app.inject({ method: 'POST', url: '/api/admin/settings/iran-tariffs', headers, payload: value as object })
@@ -362,6 +361,7 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
 
   it('keeps sales changes admin-only, audited, sync-stable and enforced on stale quotes while allowing admin purchases', async () => {
     const admin = await account(true)
+    await ctx.db.update(users).set({ role: 'super_admin' }).where(eq(users.id, admin.user.id))
     const customer = await account()
     const stale = await quoteFor(customer.user.id)
     const awaitingQuote = await quoteFor(customer.user.id)

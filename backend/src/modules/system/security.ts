@@ -1,5 +1,6 @@
+import { isSuperAdmin } from '../../contracts/account-role.js'
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
-import { eq } from 'drizzle-orm'
+import { and, eq, gt, isNull } from 'drizzle-orm'
 import type { DbClient, DbOrTx } from '../../db/index.js'
 import { adminAuthorizations, users } from '../../db/schema.js'
 import { getConfig } from '../../config.js'
@@ -15,12 +16,9 @@ export function canonical(value: unknown): string {
 }
 const authorizationDigest = (payload: unknown, account: { passwordHash: string; totpSecretEncrypted: string | null }) => digest(canonical(payload) + ':' + digest(account.passwordHash + ':' + account.totpSecretEncrypted))
 export function systemAdmin(user: SessionUser) {
-  if (user.role !== 'admin' || user.status !== 'active') {
+  if (!isSuperAdmin(user)) {
     throw new ForbiddenError('این عملیات فقط برای مدیران فعال فروشگاه مجاز است.')
   }
-}
-export function isPricingSuperAdmin(user: SessionUser) {
-  return user.role === 'admin' && user.status === 'active' && getConfig().PRIMARY_IPV4_SUPER_ADMIN_IDS.includes(user.id)
 }
 export function secretKey(value = getConfig().STORE_SECRET_KEY) {
   if (!/^[a-f0-9]{64}$/i.test(value)) throw new ValidationError('کلید مستقل رمزگذاری سیستم پیکربندی نشده است.')
@@ -39,7 +37,7 @@ export function unseal(value: Buffer, aad: string, key = secretKey()): Buffer {
 export async function issueAuthorization(db: DbClient, user: SessionUser, action: string, payload: unknown) {
   systemAdmin(user)
   const row = await db.query.users.findFirst({ where: t => eq(t.id, user.id) })
-  if (!row || row.role !== 'admin' || row.status !== 'active') throw new ForbiddenError('دسترسی مدیر فعال لازم است.')
+  if (!row || !isSuperAdmin(row)) throw new ForbiddenError('دسترسی مدیر فعال لازم است.')
   const [grant] = await db.insert(adminAuthorizations).values({ actorId: user.id, sessionId: user.sessionId, action,
     payloadHash: authorizationDigest(payload, row), expiresAt: new Date(Date.now() + (action === 'backup.download' ? 60000 : 5 * 60000)) }).returning()
   await writeAudit(db, { actorId: user.id, action: 'system.action_granted', targetType: 'authorization', targetId: grant!.id, metadata: { operation: action } })
@@ -48,7 +46,9 @@ export async function issueAuthorization(db: DbClient, user: SessionUser, action
 export async function consumeAuthorization(tx: DbOrTx, user: SessionUser, proof: string, action: string, payload: unknown) {
   systemAdmin(user)
   const [account] = await tx.select().from(users).where(eq(users.id, user.id)).for('share')
-  if (!account || account.role !== 'admin' || account.status !== 'active') throw new ForbiddenError('دسترسی یا تأیید امنیتی مدیر تغییر کرده است.')
+  if (!account || !isSuperAdmin(account)) throw new ForbiddenError('دسترسی یا تأیید امنیتی مدیر تغییر کرده است.')
+  const session = await tx.query.sessions.findFirst({ columns: { id: true }, where: t => and(eq(t.id, user.sessionId), eq(t.userId, user.id), isNull(t.revokedAt), gt(t.expiresAt, new Date())) })
+  if (!session) throw new ForbiddenError('نشست مدیر دیگر معتبر نیست.')
   const [grant] = await tx.select().from(adminAuthorizations).where(eq(adminAuthorizations.id, proof)).for('update')
   if (!grant || grant.actorId !== user.id || grant.sessionId !== user.sessionId || grant.action !== action || grant.payloadHash !== authorizationDigest(payload, account) || grant.consumedAt || grant.expiresAt.getTime() < Date.now()) {
     throw new ForbiddenError('تأیید امنیتی منقضی شده، مصرف شده یا با این عملیات مطابقت ندارد.')

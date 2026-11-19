@@ -4,9 +4,8 @@
 
 UI: `/admin/settings/{gateway,logs,backups,finance}`. API: identical routes under
 `/api/admin/settings` and `/api/v1/admin/settings`. Requires site authority.
-All active admins can access store settings. The API verifies active admin status
-rather than a fixed UUID allowlist. The current active admin session grants access
-with no second password or TOTP challenge.
+Store settings require an active `super_admin` account. The API checks the saved
+role on every request. See the [Super Admin rollout](SUPER_ADMIN.md).
 
 Set secrets through the protected host environment/secret manager, never Git or
 `VITE_*`. Migration **0009** adds four tables; no balances or existing data are
@@ -29,9 +28,9 @@ environment fallback and a compatible release independently backed up off-host.
 Changing external keys/configuration can make old backups unusable. No real
 keys, host settings, customer data or Production runtime were changed for this PR.
 
-Store settings require an authenticated active admin session but no additional
-password prompt or TOTP enrollment. Sensitive action proofs are issued automatically
-per requested action and remain bound to the current session and exact payload.
+Sensitive action proofs are issued for the current Super Admin session and exact
+payload. Changing an administrator's role requires the current password and a
+TOTP code when enrolled.
 Each sensitive action uses a short-lived single-use grant bound to actor, current
 admin session, action, canonical payload and current account credential version;
 it expires after five minutes and is consumed transactionally once.

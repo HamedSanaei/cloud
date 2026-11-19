@@ -195,9 +195,8 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     const session = await createSession(ctx.db, admin.id, {}), headers = { authorization: `Bearer ${session.token}` }
     const pricing = '/api/admin/settings/primary-ipv4-pricing/hetzner'
     expect((await app.inject({ method: 'POST', url: pricing, headers, payload: { confirm: true, feeRial: 2000000 } })).statusCode).toBe(403)
-    const allowlist = getConfig().PRIMARY_IPV4_SUPER_ADMIN_IDS
-    allowlist.push(admin.id)
     try {
+      await ctx.db.update(users).set({ role: 'super_admin' }).where(eq(users.id, admin.id))
       expect((await app.inject({ method: 'POST', url: pricing, headers, payload: { confirm: true, feeRial: 0 } })).statusCode).toBe(422)
       expect((await app.inject({ method: 'POST', url: pricing, headers, payload: { confirm: true, feeRial: 2000000 } })).statusCode).toBe(200)
       const result = (await app.inject({ url: pricing, headers })).json().data
@@ -215,7 +214,6 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
       expect((await requestIp(p, quote, key)).json().data.id).toBe(id)
       expect((await requestIp(p, { ...quote, currentIp: (operation.responseMetadata as Json).newIp as string })).statusCode).toBe(409)
     } finally {
-      allowlist.pop()
       await ctx.db.delete(settings).where(eq(settings.key, 'primary_ipv4.fee.hetzner'))
     }
   })
@@ -277,9 +275,8 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     const submit = () => app.inject({ method: 'POST', url: `/api/admin/settings/primary-ipv4-operations/${id}/confirm-rollback`,
       headers: { authorization: `Bearer ${session.token}` }, payload: { note: 'Reviewed project history', confirm: true } })
     expect((await submit()).statusCode).toBe(403)
-    const allowlist = getConfig().PRIMARY_IPV4_SUPER_ADMIN_IDS
-    allowlist.push(admin.id)
     try {
+      await ctx.db.update(users).set({ role: 'super_admin' }).where(eq(users.id, admin.id))
       await ctx.db.update(providerOperations).set({ updatedAt: new Date(0) }).where(eq(providerOperations.id, id))
       expect((await submit()).statusCode).toBe(409)
       machines.get(p.providerId)!.status = 'running'
@@ -287,7 +284,7 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
       expect((await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.id, id) }))?.status).toBe('failed')
       expect(await ipLedger(p)).toHaveLength(2)
       expect((await ipQuote(p)).reason).toBeNull()
-    } finally { allowlist.pop() }
+    } finally { await ctx.db.update(users).set({ role: 'admin' }).where(eq(users.id, admin.id)) }
   })
   it('recovers one owned pending row and never labels an accepted create as ready', async () => {
     const p = await buy()
@@ -607,7 +604,7 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
   it('keeps receipt-less legacy shutdown locked until an admin verifies terminal evidence, then allows safe owner deletion', async () => {
     const p = await buy(); await activate(p)
     const admin = await registerUser(ctx.db, { email: `operator-${randomUUID()}@fixture.test`, password: 'Fixture-customer-123!' })
-    await ctx.db.update(users).set({ role: 'admin' }).where(eq(users.id, admin.id))
+    await ctx.db.update(users).set({ role: 'super_admin' }).where(eq(users.id, admin.id))
     const adminSession = await createSession(ctx.db, admin.id, {})
     const adminHeaders = { authorization: `Bearer ${adminSession.token}` }
     const started = new Date(Date.now() - 3_600_000)

@@ -4,8 +4,11 @@ import { adminApi } from './api'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import { isSuperAdmin } from '../../backend/src/contracts/account-role'
+import { useAuth } from '../auth/AuthContext'
 
 export function AdminDatacenters() {
+  const { user } = useAuth()
   const providers = useApiQuery(adminApi.providers)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -16,8 +19,7 @@ export function AdminDatacenters() {
     finally { setBusy('') }
   }
   return <div className="page-stack admin-datacenters">
-    <header><h1>مدیریت فروش دیتاسنترها</h1><p>فعال یا غیرفعال کردن خرید برای کاربران؛ مدیر همچنان می‌تواند از دیتاسنتر آمادهٔ سفارش خرید کند.</p></header>
-    <p>این تنظیم روی سرورهای موجود، صورتحساب آن‌ها یا اعتبارنامه‌های ارائه‌دهنده تغییری ایجاد نمی‌کند.</p>
+    <header><h1>فروش دیتاسنترها</h1><p>وضعیت فروش به کاربران و دسترسی خرید مدیران</p></header>
     {error || providers.error ? <p role="alert">{error || 'دریافت وضعیت دیتاسنترها ناموفق بود.'}</p> : null}
     {providers.loading ? <p role="status">در حال دریافت وضعیت…</p> : null}
     <div className="datacenter-admin-grid">{providers.data?.map(provider => <Card key={provider.id}>
@@ -25,10 +27,10 @@ export function AdminDatacenters() {
       <h2>{provider.name}</h2>
       <p>{provider.enabled ? 'خرید کاربران فعال است' : 'خرید کاربران غیرفعال است؛ فقط مدیر'}</p>
       {!provider.configured ? <p>اتصال و کاتالوگ عملیاتی باید روی سرور آماده شود؛ این کلید محدودیت فنی را دور نمی‌زند.</p> : null}
-      <Button variant={provider.enabled ? 'secondary' : 'primary'} disabled={!!busy || providers.loading}
+      {isSuperAdmin(user) && <Button variant={provider.enabled ? 'secondary' : 'primary'} disabled={!!busy || providers.loading}
         aria-pressed={provider.enabled} onClick={() => void change(provider.id, !provider.enabled)}>
         {busy === provider.id ? 'در حال ذخیره…' : provider.enabled ? `غیرفعال کردن خرید ${provider.name}` : `فعال کردن خرید ${provider.name}`}
-      </Button>
+      </Button>}
     </Card>)}</div>
     <Link to="/servers/create">خرید سرور با حساب مدیر</Link>
   </div>

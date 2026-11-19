@@ -13,6 +13,12 @@ const evidence = z.object({
 type TrafficProduct = { provider: string; providerCurrency: string; raw: unknown }
 type TrafficData = { includedTrafficBytes?: unknown; trafficTariff?: { source?: unknown; location?: unknown; currency?: unknown; includedTrafficBytes?: unknown } }
 
+export function hetznerTrafficTariff(product: TrafficProduct, location: string) {
+  if (product.provider !== 'hetzner') return null
+  const result = evidence.safeParse((product.raw as TrafficData | null)?.trafficTariff)
+  return result.success && result.data.location === location && result.data.currency === product.providerCurrency ? result.data : null
+}
+
 export function hetznerIncludedTraffic(product: TrafficProduct, location: string): number | null {
   if (product.provider !== 'hetzner') return null
   const raw = product.raw as TrafficData | null
@@ -28,10 +34,8 @@ export function indicativeHetznerTraffic(
   rules: PricingRuleValues & { updatedAt: Date },
   fx: { rate: string; createdAt: Date },
 ): IndicativeTrafficTariff | null {
-  if (product.provider !== 'hetzner') return null
-  const result = evidence.safeParse((product.raw as TrafficData | null)?.trafficTariff)
-  if (!result.success || result.data.location !== location || result.data.currency !== product.providerCurrency) return null
-  const data = result.data
+  const data = hetznerTrafficTariff(product, location)
+  if (!data) return null
   try {
     const price = computePriceFromRules({
       providerCurrency: data.currency,

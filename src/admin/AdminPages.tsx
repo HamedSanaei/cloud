@@ -100,7 +100,7 @@ export function AdminOverview() {
   const { user } = useAuth()
   const data = info.data
   const customers = data?.accounts.filter(account => account.role === 'user') ?? []
-  const managers = data?.accounts.filter(account => account.role === 'admin') ?? []
+  const managers = data?.accounts.filter(account => account.role !== 'user') ?? []
   const total = (counts: Record<string, number>) => Object.values(counts).reduce((sum, count) => sum + count, 0)
   const breakdown = (counts: Record<string, number>, labels: Record<string, string>, states: string[]) =>
     states.map(status => `${labels[status]} ${formatCount(counts[status] ?? 0)}`).join(' · ')
@@ -114,7 +114,10 @@ export function AdminOverview() {
         <div className="admin-metrics">
           <div className="admin-metric"><span>مشتریان</span><strong>{formatCount(customers.reduce((sum, row) => sum + row.count, 0))}</strong>
             <small>{breakdown(Object.fromEntries(customers.map(row => [row.status, row.count])), userLabels, ['active', 'pending', 'disabled'])}</small>
-            <small>مدیران · {breakdown(Object.fromEntries(managers.map(row => [row.status, row.count])), userLabels, ['active', 'pending', 'disabled'])}</small></div>
+            <small>مدیران · {breakdown(managers.reduce<Record<string, number>>((counts, row) => {
+              counts[row.status] = (counts[row.status] ?? 0) + row.count
+              return counts
+            }, {}), userLabels, ['active', 'pending', 'disabled'])}</small></div>
           <div className="admin-metric"><span>کل تاریخی سفارش‌ها</span><strong>{formatCount(total(data.orderCounts))}</strong>
             <small>{breakdown(data.orderCounts, orderLabels, ['awaiting_payment', 'paid', 'queued', 'provisioning', 'requires_review'])}</small>
             <small>{breakdown(data.orderCounts, orderLabels, ['active', 'failed', 'cancelled', 'refunded', 'draft', 'quoted'])}</small></div>
@@ -130,11 +133,12 @@ export function AdminOverview() {
             <dl className="admin-fields">
               <Field label="خرید اولیهٔ پذیرفته‌شده، ناخالص" value={formatToman(finance.initialRial / 10)} />
               <Field label="تمدیدهای پرداخت‌شده، ناخالص" value={formatToman(finance.renewalRial / 10)} />
+              <Field label="هزینهٔ ترافیک مازاد" value={formatToman((finance.trafficRial ?? 0) / 10)} />
               <Field label="بازپرداخت خدمات" value={formatToman(finance.refundsRial / 10)} />
               <Field label="خالص برداشت خدمات" value={formatToman(finance.netRial / 10)} />
               <Field label="شارژ کیف پول (جدا از فروش)" value={formatToman(finance.depositsRial / 10)} />
             </dl>
-            <p className="admin-muted">خالص برابر برداشت خرید و تمدید، از جمله مبالغی که هنوز باید تطبیق داده شوند، منهای بازپرداخت خدمات است. مبالغ فاکتور برای تطبیق بررسی می‌شوند.</p>
+            <p className="admin-muted">خالص برابر برداشت خرید، تمدید و ترافیک مازاد، از جمله مبالغی که هنوز باید تطبیق داده شوند، منهای بازپرداخت خدمات است. مبالغ فاکتور برای تطبیق بررسی می‌شوند.</p>
           </Panel>
           <Panel title="موارد نیازمند بررسی مالی" subtitle={`${formatCount(finance.exceptionCount)} سفارش دارای اختلاف · ${formatCount(finance.renewalMismatchCount)} فاکتور تمدید با مغایرت دفترکل`}>
             {finance.exceptions.length ? adminTableWrap(<table className="admin-table"><thead><tr><th>سفارش</th><th>علت</th><th>فاکتور پرداخت‌شده</th><th>برداشت</th><th>بازپرداخت مرتبط</th></tr></thead>

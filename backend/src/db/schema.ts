@@ -1,3 +1,4 @@
+import { accountRoles } from '../contracts/account-role.js'
 /**
  * Cloud Server platform — database schema.
  *
@@ -35,13 +36,14 @@ import {
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
-export const userRoleEnum = pgEnum('user_role', ['user', 'admin'])
+export const userRoleEnum = pgEnum('user_role', accountRoles)
 export const userStatusEnum = pgEnum('user_status', ['active', 'pending', 'disabled'])
 
 export const walletTxTypeEnum = pgEnum('wallet_tx_type', [
   'deposit',
   'purchase',
   'renewal',
+  'traffic_overage',
   'refund',
   'manual_credit',
   'manual_debit',
@@ -707,6 +709,23 @@ export const servers = pgTable(
     index('servers_provider_idx').on(t.provider, t.status),
   ],
 )
+
+export const hetznerTrafficPeriods = pgTable('hetzner_traffic_periods', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  serverId: uuid('server_id').notNull().references(() => servers.id, { onDelete: 'restrict' }),
+  subscriptionId: uuid('subscription_id').notNull().references(() => subscriptions.id, { onDelete: 'restrict' }),
+  month: varchar('month', { length: 7 }).notNull(),
+  providerServerId: text('provider_server_id').notNull(),
+  serverType: text('server_type').notNull(),
+  location: text('location').notNull(),
+  previousOutgoingBytes: bigint('previous_outgoing_bytes', { mode: 'number' }).notNull(),
+  outgoingBytes: bigint('outgoing_bytes', { mode: 'number' }).notNull(),
+  includedBytes: bigint('included_bytes', { mode: 'number' }).notNull(),
+  excludedBlocks: bigint('excluded_blocks', { mode: 'number' }).notNull().default(0),
+  paidBlocks: bigint('paid_blocks', { mode: 'number' }).notNull().default(0),
+  observedAt: timestamp('observed_at', { withTimezone: true }).notNull(),
+  settledAt: timestamp('settled_at', { withTimezone: true }),
+}, t => [uniqueIndex('hetzner_traffic_server_month_idx').on(t.serverId, t.month)])
 
 // ---------------------------------------------------------------------------
 // Provider operations (idempotent provider call tracking)

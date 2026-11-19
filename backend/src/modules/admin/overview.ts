@@ -72,12 +72,13 @@ export function readAdminOverview(db: DbClient, financialAccess: boolean) {
     const statuses = (rows: { status: string; count: number }[]) => Object.fromEntries(rows.map(row => [row.status, row.count]))
     let finance
     if (financialAccess) {
-      const totals = await tx.execute<{ initial: string; renewals: string; refunds: string; net: string; deposits: string }>(sql`
+      const totals = await tx.execute<{ initial: string; renewals: string; traffic: string; refunds: string; net: string; deposits: string }>(sql`
           select coalesce(sum(-w.amount_rial) filter (where w.type = 'purchase' and w.amount_rial < 0
             and w.reference_type = 'order' and o.status in ${acceptableOrders}),0)::text as initial,
             coalesce(sum(-w.amount_rial) filter (where w.type = 'renewal' and w.amount_rial < 0),0)::text as renewals,
+            coalesce(sum(-w.amount_rial) filter (where w.type = 'traffic_overage' and w.amount_rial < 0),0)::text as traffic,
             coalesce(sum(w.amount_rial) filter (where w.type = 'refund' and w.amount_rial > 0 and w.reference_type in ('order','subscription','invoice')),0)::text as refunds,
-            coalesce(sum(-w.amount_rial) filter (where (w.type in ('purchase','renewal') and w.amount_rial < 0)
+            coalesce(sum(-w.amount_rial) filter (where (w.type in ('purchase','renewal','traffic_overage') and w.amount_rial < 0)
               or (w.type = 'refund' and w.amount_rial > 0 and w.reference_type in ('order','subscription','invoice'))),0)::text as net,
             coalesce(sum(w.amount_rial) filter (where w.type = 'deposit' and w.amount_rial > 0),0)::text as deposits
           from wallet_transactions w left join orders o on w.reference_type = 'order' and o.id = w.reference_id and o.user_id = w.user_id
@@ -86,9 +87,10 @@ export function readAdminOverview(db: DbClient, financialAccess: boolean) {
           select *, count(*) over()::int as total from evidence where unreturned or mismatch order by unreturned desc, created_at desc, id limit 20`)
       const renewalMismatch = await tx.execute<{ total: number }>(sql`select count(*)::int as total from invoices i where i.subscription_id is not null and i.status = 'paid'
           and i.total_rial <> coalesce((select sum(-w.amount_rial) from wallet_transactions w where w.user_id = i.user_id
-            and w.type = 'renewal' and w.idempotency_key = 'renewal:' || i.id::text),0)`)
+            and ((w.type = 'renewal' and w.idempotency_key = 'renewal:' || i.id::text)
+              or (w.type = 'traffic_overage' and w.reference_type = 'invoice' and w.reference_id = i.id))),0)`)
       const t = totals.rows[0]!
-      finance = { initialRial: rial(t.initial), renewalRial: rial(t.renewals), refundsRial: rial(t.refunds), netRial: rial(t.net), depositsRial: rial(t.deposits),
+      finance = { initialRial: rial(t.initial), renewalRial: rial(t.renewals), trafficRial: rial(t.traffic), refundsRial: rial(t.refunds), netRial: rial(t.net), depositsRial: rial(t.deposits),
         exceptionCount: exceptions.rows[0]?.total ?? 0, renewalMismatchCount: renewalMismatch.rows[0]?.total ?? 0,
         exceptions: exceptions.rows.map(row => ({ id: row.id, orderNumber: row.order_number, debitRial: rial(row.debit), refundRial: rial(row.refund),
           invoicedRial: rial(row.invoiced), unreturned: row.unreturned, mismatch: row.mismatch })),

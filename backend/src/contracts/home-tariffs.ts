@@ -23,7 +23,7 @@ export interface IndicativeTrafficTariff {
   ruleVersion: string
 }
 export const isTrafficByteCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
-export const indicativeOverageNotice = 'سهمیه با واحد کنسول هتزنر (۲ به توان ۴۰ بایت) نمایش داده می‌شود. قیمت ترافیک مازاد به ازای هر TB ده‌دهی (۱٬۰۰۰ گیگابایت) است. هزینهٔ مازاد فعلاً به‌صورت خودکار محاسبه یا از کیف پول کسر نمی‌شود.'
+export const indicativeOverageNotice = 'سهمیه با واحد کنسول هتزنر (۲ به توان ۴۰ بایت) نمایش داده می‌شود. قیمت ترافیک مازاد به ازای هر TB ده‌دهی (۱٬۰۰۰ گیگابایت) است. هزینهٔ مازاد ساعتی محاسبه می‌شود و بر اساس مصرف ثبت‌شده در کیف پول و فاکتور درج می‌شود.'
 export interface PublicTariffMeta {
   checkedAt: string; validUntil: string; catalogUpdatedAt: string | null; fxUpdatedAt: string | null
   status: 'available' | 'unavailable' | 'not_published' | 'pricing_unavailable' | 'temporarily_unavailable'
@@ -56,11 +56,12 @@ export function embeddedPrices(html: string): PublicHomePrices | null {
 }
 export type TariffPeriod = 'hourly' | 'monthly'
 export type TariffSort = { by: 'name' | 'location' | 'price' | 'vcpu' | 'memoryMb' | 'diskGb' | 'traffic'; direction: 'asc' | 'desc'; period: TariffPeriod }
+export const defaultTariffSort: TariffSort = { by: 'price', direction: 'asc', period: 'monthly' }
 const natural = new Intl.Collator('en', { numeric: true, sensitivity: 'base' })
 const compareLocation = (a: PublicHetznerOffer, b: PublicHetznerOffer) =>
   natural.compare(tariffCountryCode(a.country) || 'ZZ', tariffCountryCode(b.country) || 'ZZ')
   || natural.compare(a.city ?? '', b.city ?? '') || natural.compare(a.location, b.location)
-export function sortHetznerOffers(offers: PublicHetznerOffer[], sort: TariffSort | TariffPeriod = 'hourly') {
+export function sortHetznerOffers(offers: PublicHetznerOffer[], sort: TariffSort | TariffPeriod = defaultTariffSort) {
   const { by, direction, period }: TariffSort = typeof sort === 'string' ? { by: 'price', direction: 'asc', period: sort } : sort
   function value(offer: PublicHetznerOffer) {
     if (by === 'price') return offer[period]
@@ -125,7 +126,7 @@ const wrapTable = (caption: string, headings: string[], body: string, hetzner = 
 
 export const hetznerTariffHeading = 'تعرفه سرور هتزنر'
 
-export function renderTariffSections(iran: IranTariffs | null, hetzner: PublicHetznerOffer[] | null, meta?: PublicTariffMeta, scope: TariffScope = 'all', sort: TariffSort | TariffPeriod = 'hourly', countryFiltered = false) {
+export function renderTariffSections(iran: IranTariffs | null, hetzner: PublicHetznerOffer[] | null, meta?: PublicTariffMeta, scope: TariffScope = 'all', sort: TariffSort | TariffPeriod = defaultTariffSort, countryFiltered = false) {
   const iranRows = (Object.keys(iranResources) as IranResource[]).map(key => {
     const rate = iran?.rates[key]
     const unit = key === 'cpu' ? '۱ هسته vCPU' : key === 'ram' ? '۱ گیگابایت RAM' : iran ? `۱ ${escapeHtml(iran.trafficUnit)}` : 'واحد پس از تأیید قرارداد'

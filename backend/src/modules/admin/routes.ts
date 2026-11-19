@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { and, eq, isNull } from 'drizzle-orm'
 import type { AppContext } from '../../app.js'
 import { parse } from '../../http/validate.js'
-import { requireAdmin } from '../../http/auth.js'
+import { requireAdmin, requireSuperAdmin } from '../../http/auth.js'
 import { listAudit, writeAudit } from '../audit/service.js'
 import { listWallets } from '../wallets/service.js'
 import { adjustmentSchema, requestAdjustment } from '../system/finance.js'
@@ -13,7 +13,6 @@ import { getProvider } from '../providers/registry.js'
 import { orders, providerProducts, providerOperations } from '../../db/schema.js'
 import { ConflictError, ForbiddenError, NotFoundError } from '../../lib/errors.js'
 import { requireHetznerPricingAdmin } from '../pricing/hetzner-margin.js'
-import { isPricingSuperAdmin } from '../system/security.js'
 import { rialToToman } from '../../lib/money.js'
 import { resolveOperationByAdmin } from '../provisioning/handlers.js'
 
@@ -42,27 +41,27 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
   // Legacy URLs use the exact same authorization, ledger and approval controls;
   // no timestamp-based key or weaker alternate financial mutation remains.
   for (const direction of ['credit', 'debit'] as const) app.post(`/admin/wallets/:walletId/${direction}`, async request => {
-    const admin = requireAdmin(request), { walletId } = parse(z.object({ walletId: z.string().uuid() }), request.params)
+    const admin = requireSuperAdmin(request), { walletId } = parse(z.object({ walletId: z.string().uuid() }), request.params)
     const { proof, ...body } = parse(adjustmentSchema.omit({ direction: true, walletId: true }).extend({ proof: z.string().uuid() }), request.body)
     const key = parse(z.string().min(8).max(200), request.headers['idempotency-key'])
     return { data: await requestAdjustment(db, admin, { ...body, direction, walletId }, key, proof) }
   })
 
   app.get('/admin/fx-rates', async (request) => {
-    requireAdmin(request)
+    requireSuperAdmin(request)
     const query = parse(z.object({ currency: z.string().regex(/^(?:[A-Z]{3}|USDT)$/).default('EUR') }), request.query)
     return { data: await listFxRateHistory(db, 20, query.currency) }
   })
 
   app.post('/admin/fx-rates', async (request) => {
-    const admin = requireAdmin(request)
+    const admin = requireSuperAdmin(request)
     const input = parse(z.object({ rate: z.string().min(1), currency: z.string().regex(/^(?:[A-Z]{3}|USDT)$/).default('EUR'), note: z.string().max(300).optional() }), request.body)
     const row = await setFxRate(db, input.rate, { actorId: admin.id, note: input.note, currency: input.currency })
     return { data: { id: row.id, currency: row.fromCurrency, rate: row.rate, createdAt: row.createdAt } }
   })
 
   app.get('/admin/pricing', async (request, reply) => {
-    const admin = requireAdmin(request)
+    const admin = requireSuperAdmin(request)
     const query = parse(z.object({ provider: z.string().default('leaseweb') }), request.query)
     if (query.provider === 'hetzner') requireHetznerPricingAdmin(admin)
     reply.header('Cache-Control', 'private, no-store')
@@ -71,7 +70,7 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
   })
 
   app.put('/admin/pricing', async (request) => {
-    const admin = requireAdmin(request)
+    const admin = requireSuperAdmin(request)
     const input = parse(
       z.object({
         provider: z.string().default('leaseweb'),
@@ -90,7 +89,7 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
   })
 
   app.post('/admin/providers/:providerId/catalog/sync', async (request) => {
-    const admin = requireAdmin(request)
+    const admin = requireSuperAdmin(request)
     const { providerId } = parse(z.object({ providerId: z.string() }), request.params)
     const provider = getProvider(providerId)
     // Run inline for admin UX; also queued to keep catalog fresh.
@@ -100,13 +99,13 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
   })
 
   app.get('/admin/offers', async (request) => {
-    requireAdmin(request)
+    requireSuperAdmin(request)
     const rows = await listOffers(db, { provider: 'leaseweb', enabledOnly: false })
     return { data: rows.map((r) => ({ id: r.id, providerProductId: r.providerProductId, name: r.name, locationId: r.locationId, vcpu: r.vcpu, memoryMb: r.memoryMb, diskGb: r.diskGb, available: r.available, enabled: r.enabled, providerPriceCents: r.providerPriceCents, providerCurrency: r.providerCurrency })) }
   })
 
   app.patch('/admin/offers/:id', async (request) => {
-    const admin = requireAdmin(request)
+    const admin = requireSuperAdmin(request)
     const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
     const input = parse(z.object({ enabled: z.boolean().optional(), available: z.boolean().optional() }), request.body)
     if (input.enabled !== undefined) await setOfferEnabled(db, id, input.enabled, admin.id)
@@ -117,14 +116,14 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
   })
 
   app.get('/admin/locations', async (request) => {
-    requireAdmin(request)
+    requireSuperAdmin(request)
     const query = parse(z.object({ provider: z.string().default('leaseweb') }), request.query)
     const all = await db.query.providerLocations.findMany({ where: (t) => eq(t.provider, query.provider) })
     return { data: all.map((l) => ({ id: l.id, code: l.code, country: l.country, city: l.city, available: l.available })) }
   })
 
   app.patch('/admin/locations/:code', async (request) => {
-    const admin = requireAdmin(request)
+    const admin = requireSuperAdmin(request)
     const { code } = parse(z.object({ code: z.string().min(1) }), request.params)
     const input = parse(z.object({ available: z.boolean() }), request.body)
     await setLocationAvailability(db, 'leaseweb', code, input.available, admin.id)
@@ -132,7 +131,7 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
   })
 
   app.get('/admin/provider-operations', async (request) => {
-    requireAdmin(request)
+    requireSuperAdmin(request)
     const query = parse(z.object({ status: z.string().optional(), limit: z.coerce.number().int().positive().max(200).optional() }), request.query)
     const rows = await db.query.providerOperations.findMany({
       where: (t, { and, eq: e }) => (query.status ? and(e(t.status, query.status as never)) : undefined),
@@ -148,7 +147,7 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
    * deterministically. Audited. Never accepts "a candidate" without an id.
    */
   app.post('/admin/provider-operations/:id/mark-match', async (request) => {
-    const admin = requireAdmin(request)
+    const admin = requireSuperAdmin(request)
     const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
     const input = parse(z.object({ providerServerId: z.string().min(1).max(200), note: z.string().max(500).optional() }), request.body)
     await resolveOperationByAdmin(db, id, {
@@ -162,7 +161,7 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
 
   /** Manual reconciliation — mark the operation rejected (no server). */
   app.post('/admin/provider-operations/:id/mark-rejected', async (request) => {
-    const admin = requireAdmin(request)
+    const admin = requireSuperAdmin(request)
     const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
     const input = parse(z.object({ note: z.string().max(500).optional() }), request.body)
     await resolveOperationByAdmin(db, id, { actorId: admin.id, action: 'mark-rejected', note: input.note })
@@ -171,7 +170,7 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
 
   /** Manual reconciliation — reopen ONLY a proven-failed operation for retry. */
   app.post('/admin/provider-operations/:id/reopen-for-retry', async (request) => {
-    const admin = requireAdmin(request)
+    const admin = requireSuperAdmin(request)
     const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
     const body = parse(z.object({ note: z.string().max(500).optional() }), request.body)
     const op = await db.query.providerOperations.findFirst({ where: (t) => eq(t.id, id) })
@@ -205,7 +204,7 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
   })
 
   app.post('/admin/provider-operations/:id/reconcile', async (request) => {
-    requireAdmin(request)
+    requireSuperAdmin(request)
     const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
     const op = await db.query.providerOperations.findFirst({ where: t => eq(t.id, id) })
     if (!op) throw new NotFoundError('عملیات سرویس‌دهنده یافت نشد')
@@ -215,7 +214,7 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
   })
 
   app.post('/admin/provider-operations/:id/retry', async (request) => {
-    const admin = requireAdmin(request)
+    const admin = requireSuperAdmin(request)
     const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
     const op = await db.query.providerOperations.findFirst({ where: (t) => eq(t.id, id) })
     if (!op) throw new NotFoundError('عملیات سرویس‌دهنده یافت نشد')
@@ -244,7 +243,7 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
   })
 
   app.get('/admin/sync-runs', async (request) => {
-    requireAdmin(request)
+    requireSuperAdmin(request)
     return { data: await listSyncRuns(db, 'leaseweb') }
   })
 
@@ -261,10 +260,8 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
   })
 
   app.get('/admin/audit', async (request) => {
-    const admin = requireAdmin(request)
+    requireSuperAdmin(request)
     const query = parse(z.object({ action: z.string().optional(), limit: z.coerce.number().int().positive().max(200).optional() }), request.query)
-    const rows = await listAudit(db, { action: query.action, limit: query.limit ?? 50 })
-    return { data: isPricingSuperAdmin(admin) ? rows : rows.filter(row => !(row.metadata as { alertId?: string } | null)?.alertId).map(row => row.action === 'admin.price_rule.changed' &&
-      (row.metadata as { provider?: string } | null)?.provider === 'hetzner' ? { ...row, metadata: null } : row) }
+    return { data: await listAudit(db, { action: query.action, limit: query.limit ?? 50 }) }
   })
 }

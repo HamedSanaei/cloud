@@ -1,5 +1,6 @@
 import { createContext, useContext, useRef, useState, type ReactNode } from 'react'
-import { NavLink, Outlet, useLocation, useOutletContext } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate, useOutletContext } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
 import { CreditCard, Database, FileClock, Settings2, WalletCards } from 'lucide-react'
 import { apiGet, apiPost, systemBinary } from '../lib/apiClient'
 import { useApiQuery } from '../hooks/useApiQuery'
@@ -47,19 +48,58 @@ function SimpleAdminActions({ children }: { children: ReactNode }) {
   </ActionContext.Provider>
 }
 export function SystemSettingsLayout() {
-  const capabilities = useApiQuery(() => get<Capabilities>('/capabilities'))
-  const isOutbound = useLocation().pathname.replace(/\/$/, '').endsWith('/outbound')
+  const { pathname } = useLocation()
+  const capabilities = useApiQuery(() => get<Capabilities>('/capabilities'), [pathname])
+  const isOutbound = pathname.replace(/\/$/, '').endsWith('/outbound')
   return <div className="page-stack system-settings"><header><h1><Settings2 /> تنظیمات فروشگاه</h1><p>درگاه، رویدادها، پشتیبان‌گیری و عملیات مالی امن</p></header>
-    <nav className="system-tabs" aria-label="بخش‌های تنظیمات فروشگاه">{[
+    {capabilities.data?.allowed && <nav className="system-tabs" aria-label="بخش‌های تنظیمات فروشگاه">{[
       { to: 'sms', label: 'پیامک‌های پارس‌گرین', icon: Settings2 }, { to: 'gateway', label: 'درگاه‌ها', icon: CreditCard }, { to: 'logs', label: 'لاگ‌ها', icon: FileClock },
       { to: 'backups', label: 'پشتیبان‌گیری و بازیابی', icon: Database }, { to: 'finance', label: 'عملیات مالی کاربران', icon: WalletCards },
       { to: 'iran-tariffs', label: 'تعرفهٔ سرور ایران', icon: Settings2 },
       ...(capabilities.data?.primaryIpv4Pricing ? [{ to: 'primary-ipv4', label: 'تعرفهٔ تعویض IPv4', icon: Settings2 }] : []),
       ...(capabilities.data?.hetznerMargin ? [{ to: 'hetzner-margin', label: 'تنظیم سود سرورهای هتزنر', icon: Settings2 }] : []),
       { to: 'outbound', label: 'شبکه و پراکسی خروجی', icon: Settings2 },
-    ].map(({ to, label, icon: Icon }) => <NavLink key={to} to={to}><Icon size={19} />{label}</NavLink>)}</nav>
-    {capabilities.loading ? <p role="status">در حال بررسی دسترسی…</p> : capabilities.error ? <p role="alert">{capabilities.error}</p> : !capabilities.data?.allowed ? <Card><h2>دسترسی مدیریت مجاز نیست</h2><p>این بخش فقط برای حساب‌های مدیر فعال فروشگاه قابل استفاده است.</p></Card> : <SimpleAdminActions>{!capabilities.data.encryptionReady && !isOutbound ? <Card><h2>کلید رمزگذاری آماده نیست</h2><p>برای تغییر مرچنت TabaPay باید STORE_SECRET_KEY مستقل و پایدار در تنظیمات محافظت‌شده سرور ثبت شود. سایر بخش‌های مدیریتی قابل مشاهده و استفاده هستند و عملیات Backup نیز به تنظیمات مستقل خود نیاز دارد.</p></Card> : null}<Outlet context={capabilities.data} /></SimpleAdminActions>}
+      { to: 'admin-roles', label: 'نقش مدیران', icon: Settings2 },
+    ].map(({ to, label, icon: Icon }) => <NavLink key={to} to={to}><Icon size={19} />{label}</NavLink>)}</nav>}
+    {capabilities.loading ? <p role="status">در حال بررسی دسترسی…</p> : capabilities.error ? <p role="alert">{capabilities.error}</p> : !capabilities.data?.allowed ? <Card><h2>دسترسی مدیریت مجاز نیست</h2><p>این بخش فقط برای سوپرادمین فعال قابل استفاده است.</p></Card> : <SimpleAdminActions>{!capabilities.data.encryptionReady && !isOutbound ? <Card><h2>کلید رمزگذاری آماده نیست</h2><p>برای تغییر مرچنت TabaPay باید STORE_SECRET_KEY مستقل و پایدار در تنظیمات محافظت‌شده سرور ثبت شود. سایر بخش‌های مدیریتی قابل مشاهده و استفاده هستند و عملیات Backup نیز به تنظیمات مستقل خود نیاز دارد.</p></Card> : null}<Outlet context={capabilities.data} /></SimpleAdminActions>}
   </div>
+}
+export function SystemAdminRoles() {
+  const { user, refresh } = useAuth()
+  const navigate = useNavigate()
+  const accounts = useApiQuery(() => get<Array<{ id: string; email: string; role: 'admin' | 'super_admin' }>>('/admin-roles'))
+  const [id, setId] = useState(''), [password, setPassword] = useState(''), [totp, setTotp] = useState('')
+  const [confirmed, setConfirmed] = useState(false), [saving, setSaving] = useState(false)
+  const [notice, setNotice] = useState(''), [error, setError] = useState('')
+  const target = accounts.data?.find(account => account.id === id)
+  const role = target?.role === 'super_admin' ? 'admin' : 'super_admin'
+  return <Card><h2>نقش مدیران فعال</h2>
+    {accounts.loading && <p role="status">در حال دریافت مدیران…</p>}
+    {accounts.error && <p role="alert">{accounts.error}</p>}
+    <form className="form-stack" onSubmit={async event => {
+      event.preventDefault()
+      if (saving || !target || !confirmed) return
+      setSaving(true); setError(''); setNotice('')
+      try {
+        await post('/admin-roles', { id, role, password, totp: totp || undefined, confirm: true })
+        if (id === user?.id) { await refresh(); navigate('/admin', { replace: true }); return }
+        setId(''); setNotice('نقش مدیر به‌روزرسانی شد.'); accounts.refetch()
+      } catch (failure) { setError(errorText(failure)) }
+      finally { setPassword(''); setTotp(''); setConfirmed(false); setSaving(false) }
+    }}>
+      <Select label="حساب مدیر" value={id} onChange={event => { setId(event.target.value); setConfirmed(false) }} required>
+        <option value="">انتخاب حساب</option>
+        {accounts.data?.map(account => <option key={account.id} value={account.id}>{account.email} ({account.role === 'super_admin' ? 'سوپرادمین' : 'ادمین'})</option>)}
+      </Select>
+      {target && <>
+        <Input label="رمز فعلی خودتان" type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} required />
+        <Input label="کد دومرحله‌ای خودتان (اگر فعال است)" dir="ltr" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" value={totp} onChange={event => setTotp(event.target.value)} />
+        <Toggle label={role === 'super_admin' ? 'اعطای نقش سوپرادمین را تأیید می‌کنم' : 'لغو نقش سوپرادمین را تأیید می‌کنم'} checked={confirmed} onChange={setConfirmed} />
+        <Button type="submit" disabled={saving || !confirmed}>ثبت تغییر نقش</Button>
+      </>}
+    </form>
+    {notice && <p role="status">{notice}</p>}{error && <p role="alert">{error}</p>}
+  </Card>
 }
 type IranTariffSettings = IranTariffs & { published: boolean }
 const resources = Object.keys(iranResources) as IranResource[]

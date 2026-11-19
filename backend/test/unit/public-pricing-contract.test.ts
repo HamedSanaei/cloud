@@ -13,7 +13,7 @@ it('includes all prices in SSR and keeps the extra TB rate indicative', () => {
   expect(html).toContain('۳۳٬۳۴۵ تومان')
   expect(html).toContain('۰٫۵ TB')
   expect(html).toContain('period=hourly&amp;location=hel1')
-  expect(html).toContain('هزینهٔ مازاد فعلاً به‌صورت خودکار')
+  expect(html).toContain('هزینهٔ مازاد ساعتی محاسبه می‌شود')
   expect(html).not.toContain('استعلامی')
   expect(html).not.toContain('انتخاب ماهانه')
   expect(html).toContain('<td><bdi>۶۷۸٬۹۰۰ تومان</bdi></td>')

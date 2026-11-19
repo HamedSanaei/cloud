@@ -1,3 +1,4 @@
+import { isSuperAdmin } from '../../contracts/account-role.js'
 import { hkdfSync, randomUUID } from 'node:crypto'
 import { and, eq, sql } from 'drizzle-orm'
 import { z } from 'zod'
@@ -31,7 +32,7 @@ export const routeInput = z.object({ revision, integration: integrationSchema, e
 export const deleteInput = z.object({ revision, id: z.uuid(), confirm: z.literal(true) }).strict()
 export const testInput = z.object({ revision, integration: integrationSchema, profileId: z.uuid().optional(), confirm: z.literal(true) }).strict()
   .refine(v => v.integration !== 'abantether' || !v.profileId, 'آزمون آبان‌تتر فقط مستقیم انجام می‌شود.')
-export const canManageOutbound = (user: SessionUser) => user.role === 'admin' && user.status === 'active'
+export const canManageOutbound = (user: SessionUser) => isSuperAdmin(user)
 export function requireOutboundAdmin(user: SessionUser) {
   if (!canManageOutbound(user)) throw new ForbiddenError('تنظیمات شبکه فقط برای مدیر فعال پنل در دسترس است.')
 }

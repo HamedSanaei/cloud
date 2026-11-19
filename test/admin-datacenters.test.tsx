@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { AdminDatacenters } from '../src/admin/AdminDatacenters'
 
+vi.mock('../src/auth/AuthContext', () => ({ useAuth: () => ({ user: { role: 'super_admin', status: 'active' } }) }))
+
 describe('admin datacenter controls', () => {
   it('persists the selected sales switch and refreshes its status', async () => {
     let enabled = true

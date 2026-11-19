@@ -4,7 +4,6 @@ import { eq } from 'drizzle-orm'
 import { buildApp } from '../../src/app.js'
 import { invoices, notifications, orders, providerOperations, servers, sessions, users, walletTransactions } from '../../src/db/schema.js'
 import { registerUser, login, createSession } from '../../src/modules/auth/service.js'
-import { getConfig } from '../../src/config.js'
 import { applyWalletTransaction, ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/service.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 
@@ -73,8 +72,7 @@ describe.skipIf(!dbAvailable)('admin console / site database (integration)', () 
     const submit = (id: string, action: string, confirm = id) => app.inject({ method: 'POST',
       url: `/api/admin/console/users/${id}/account-action`, headers, payload: { action, confirm, reason: 'fixture case' } })
     expect((await submit(customer.id, 'block')).statusCode).toBe(403)
-    const allowlist = getConfig().PRIMARY_IPV4_SUPER_ADMIN_IDS
-    allowlist.push(adminId)
+    await ctx.db.update(users).set({ role: 'super_admin' }).where(eq(users.id, adminId))
     try {
       expect((await submit(customer.id, 'block', adminId)).statusCode).toBe(409)
       expect((await submit(adminId, 'delete_data')).statusCode).toBe(403)
@@ -91,7 +89,7 @@ describe.skipIf(!dbAvailable)('admin console / site database (integration)', () 
       expect(detail.user).toMatchObject({ email: '', firstName: null, status: 'disabled', dataDeleted: true })
       expect(detail.transactions).toHaveLength(2)
       expect(await ctx.db.query.notifications.findFirst({ where: t => eq(t.userId, customer.id) })).toBeUndefined()
-    } finally { allowlist.splice(allowlist.lastIndexOf(adminId), 1) }
+    } finally { await ctx.db.update(users).set({ role: 'admin' }).where(eq(users.id, adminId)) }
   })
 
   it('reports ledger totals, independent service status and read-only reconciliation', async () => {
@@ -125,13 +123,12 @@ describe.skipIf(!dbAvailable)('admin console / site database (integration)', () 
     const headers = { authorization: `Bearer ${adminToken}` }
     const overview = () => app.inject({ url: '/api/admin/console/overview', headers })
     expect((await overview()).json().data.finance).toBeUndefined()
-    const allowlist = getConfig().PRIMARY_IPV4_SUPER_ADMIN_IDS
-    allowlist.push(adminId)
+    await ctx.db.update(users).set({ role: 'super_admin' }).where(eq(users.id, adminId))
     try {
       const response = await overview()
       expect(response.statusCode, response.body).toBe(200)
       const { data } = response.json()
-      expect(data.accounts).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'admin', count: 1 }), expect.objectContaining({ role: 'user' })]))
+      expect(data.accounts).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'super_admin', count: 1 }), expect.objectContaining({ role: 'user' })]))
       expect(data.serverCounts).toEqual({ active: 1, terminated: 1 })
       expect(data.recentOrders).toEqual(expect.arrayContaining([expect.objectContaining({ orderNumber: 'OV-A', status: 'active', serverStatus: 'terminated' })]))
       expect(data.finance).toMatchObject({ initialRial: 171000, renewalRial: 1000, refundsRial: 5000, netRial: 211000, depositsRial: 350000,
@@ -143,6 +140,6 @@ describe.skipIf(!dbAvailable)('admin console / site database (integration)', () 
       await ctx.db.update(invoices).set({ totalRial: 162000 }).where(eq(invoices.orderId, active!.id))
       expect((await overview()).json().data.finance).toMatchObject({ initialRial: 171000, exceptionCount: 2,
         exceptions: [expect.objectContaining({ id: failed!.id }), expect.objectContaining({ id: active!.id, invoicedRial: 162000, debitRial: 161000, mismatch: true })] })
-    } finally { allowlist.splice(allowlist.lastIndexOf(adminId), 1) }
+    } finally { await ctx.db.update(users).set({ role: 'admin' }).where(eq(users.id, adminId)) }
   })
 })

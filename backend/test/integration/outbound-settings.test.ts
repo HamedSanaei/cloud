@@ -28,7 +28,7 @@ describe.skipIf(!dbAvailable)('admin outbound settings and shared runtime policy
     if (ctx) { await ctx.db.delete(settings).where(eq(settings.key, outboundKey)); await ctx.db.delete(settings).where(eq(settings.key, healthKey)); await ctx.close() }
     vi.restoreAllMocks()
   })
-  async function account(role: 'admin' | 'user' = 'admin') {
+  async function account(role: 'super_admin' | 'user' = 'super_admin') {
     const user = await registerUser(ctx.db, { email: `outbound-${++n}@fixture.test`, password: 'Fixture-network-123!' })
     await ctx.db.update(users).set({ role }).where(eq(users.id, user.id))
     const session = await createSession(ctx.db, user.id, {})

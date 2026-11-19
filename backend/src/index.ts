@@ -12,6 +12,7 @@ import { assertAuthenticationReady } from './modules/auth/readiness.js'
 import { retryStartup, startupFailure, waitForStartupDependencies } from './lib/startup.js'
 import { installOutboundClient, OutboundHttp } from './modules/outbound/client.js'
 import { readOutbound } from './modules/outbound/settings.js'
+import { listAdminRoles } from './modules/system/super-admin.js'
 
 async function main() {
   loadConfig()
@@ -35,6 +36,9 @@ async function main() {
     await retryStartup('cutover', async () => {
       await assertUnifiedCutoverReady(dbHandle.db)
       await assertSiteAuthorityReady(dbHandle.db)
+      if (!isPlatformAuthority() && !(await listAdminRoles(dbHandle.db)).some(account => account.role === 'super_admin')) {
+        logger.warn({ event: 'super_admin_missing' }, 'Protected settings are unavailable. Follow the Super Admin bootstrap runbook.')
+      }
     }, logger)
     await retryStartup('api-queues', async () => {
       queues = createCloudQueues()

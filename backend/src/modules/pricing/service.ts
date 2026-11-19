@@ -224,6 +224,7 @@ export function computePriceFromRules(input: {
   providerAmountCents: number
   fxRate: string
   rules: PricingRuleValues
+  units?: { numerator: number; denominator: number }
 }): PriceSnapshot {
   const { rules } = input
   if (!rules.enabled) throw new ValidationError('قیمت‌گذاری این سرویس‌دهنده غیرفعال است')
@@ -232,8 +233,10 @@ export function computePriceFromRules(input: {
   }
 
   if (!Number.isSafeInteger(rules.markupFixedRial) || rules.markupFixedRial < 0) throw new ValidationError('قاعده قیمت نامعتبر است')
-  const cost = scaledDecimal(String(input.providerAmountCents), 6) * scaledDecimal(input.fxRate, 6)
-  const denominator = 100_000_000_000_000n
+  const units = input.units ?? { numerator: 1, denominator: 1 }
+  if (![units.numerator, units.denominator].every(value => Number.isSafeInteger(value) && value > 0)) throw new ValidationError('تعداد واحد قیمت نامعتبر است')
+  const cost = scaledDecimal(String(input.providerAmountCents), 6) * scaledDecimal(input.fxRate, 6) * BigInt(units.numerator)
+  const denominator = 100_000_000_000_000n * BigInt(units.denominator)
   const percentScale = 1_000_000n // four percentage decimals / 100
   const subtotalNumerator = (cost + BigInt(rules.markupFixedRial) * denominator) * (percentScale + scaledDecimal(rules.markupPercent, 4))
   const subtotal = Number(subtotalNumerator / (denominator * percentScale))

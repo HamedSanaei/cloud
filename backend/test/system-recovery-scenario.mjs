@@ -26,10 +26,10 @@ const handle = createDb(), db = handle.db, config = getConfig(), password = 'Smo
 const accounts = []
 for (let index = 0; index < 3; index++) {
   const id = randomUUID(), secret = createTotpSecret(), email = `fixture-${index}@example.test`
-  await db.insert(users).values({ id, email, passwordHash: await hashPassword(password), role: index < 2 ? 'admin' : 'user', status: 'active',
+  await db.insert(users).values({ id, email, passwordHash: await hashPassword(password), role: index < 2 ? 'super_admin' : 'user', status: 'active',
     twoFactorEnabled: true, totpSecretEncrypted: encryptTotpSecret(secret) })
   const session = await createSession(db, id, {})
-  accounts.push({ id, secret, sessionId: session.sessionId, token: session.token, email, role: index < 2 ? 'admin' : 'user', status: 'active' })
+  accounts.push({ id, secret, sessionId: session.sessionId, token: session.token, email, role: index < 2 ? 'super_admin' : 'user', status: 'active' })
 }
 let [a, b, customer] = accounts
 const wallet = await ensureDefaultWallet(db, customer.id)
@@ -85,6 +85,20 @@ try {
     const job = await requestRestore(db, a, rehearsal.id, await authorize(a, 'backup.restore', { rehearsalId: rehearsal.id, confirm: 'RESTORE DATABASE' }))
     return jobDone(job.id)
   }
+  // A queued restore must recheck the requester after draining writers.
+  const roleGate = coordinationPool(1)
+  const releaseRoleGate = await sharedWriter(roleGate)
+  let queuedRestore
+  try {
+    queuedRestore = await requestRestore(db, a, rehearsal.id, await authorize(a, 'backup.restore', { rehearsalId: rehearsal.id, confirm: 'RESTORE DATABASE' }))
+    await db.update(users).set({ role: 'admin' }).where(eq(users.id, a.id))
+  } finally { releaseRoleGate(); await roleGate.end() }
+  const revokedRestore = await jobDone(queuedRestore.id)
+  await waitBackupJobs()
+  assert.equal(revokedRestore.status, 'failed')
+  assert.match(revokedRestore.message, /سوپرادمین درخواست‌کننده/)
+  assert.equal(revokedRestore.preBackupId, undefined)
+  await db.update(users).set({ role: 'super_admin' }).where(eq(users.id, a.id))
   // A real sending receipt must block rewind even when its template is now off.
   // This is a synthetic receipt inside the disposable DB; no SMS is transmitted.
   const [receipt] = await db.insert(smsOutbox).values({ key: 'newLogin', userId: customer.id, eventId: 'fixture-accepted-login',

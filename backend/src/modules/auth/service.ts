@@ -1,3 +1,4 @@
+import { type AccountRole } from '../../contracts/account-role.js'
 import { enqueueSms } from '../notifications/sms.js'
 import { createHash, randomBytes } from 'node:crypto'
 import argon2 from 'argon2'
@@ -39,7 +40,7 @@ const REFRESH_TTL_MS = 24 * 60 * 60 * 1000 // session usable for 24h before rota
 export interface SessionUser {
   id: string
   email: string
-  role: 'user' | 'admin'
+  role: AccountRole
   status: 'active' | 'pending' | 'disabled'
   sessionId: string
 }
@@ -212,7 +213,7 @@ export async function revokeOtherSessions(db: DbClient, userId: string, keepSess
   return count
 }
 
-function toSessionUser(user: { id: string; email: string; role: 'user' | 'admin'; status: 'active' | 'pending' | 'disabled' }, sessionId: string): SessionUser {
+function toSessionUser(user: { id: string; email: string; role: AccountRole; status: 'active' | 'pending' | 'disabled' }, sessionId: string): SessionUser {
   return { id: user.id, email: user.email, role: user.role, status: user.status, sessionId }
 }
 

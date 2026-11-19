@@ -1,3 +1,5 @@
+import { isSuperAdmin } from '../../contracts/account-role.js'
+import { changeSuperAdmin, listAdminRoles, roleChangeInput } from './super-admin.js'
 import { registerSmsAdmin } from '../notifications/admin.js'
 import { createReadStream } from 'node:fs'
 import type { FastifyPluginAsync } from 'fastify'
@@ -12,7 +14,7 @@ import { ForbiddenError, NotFoundError, UnauthorizedError } from '../../lib/erro
 import { iranTariffsKey, iranTariffSettings, iranTariffsSchema } from '../catalog/home-tariffs.js'
 import { isSiteAuthority } from '../integration/authority.js'
 import { writeAudit } from '../audit/service.js'
-import { issueAuthorization, consumeAuthorization, isPricingSuperAdmin, systemAdmin } from './security.js'
+import { issueAuthorization, consumeAuthorization, systemAdmin } from './security.js'
 import { confirmedMargin, getHetznerMargin, marginAction, marginInput, previewHetznerMargin, requireHetznerPricingAdmin, updateHetznerMargin } from '../pricing/hetzner-margin.js'
 import { authenticateToken } from '../auth/service.js'
 import { safeMetadata } from './events.js'
@@ -23,8 +25,6 @@ import { approveRestore, backupFile, getBackupJob, importBackup, listBackupJobs,
 import { maxPrimaryIpv4FeeRial, primaryIpv4Pricing, setPrimaryIpv4Fee } from '../servers/primary-ip-pricing.js'
 import { confirmPrimaryIpv4Rollback } from '../servers/primary-ip-operation.js'
 import { requireOutboundAdmin, outboundStatus, profileInput, routeInput, deleteInput, testInput, saveProfile, saveRoute, deleteProfile, testConnection } from '../outbound/settings.js'
-
-const canManagePrimaryIpv4Pricing = isPricingSuperAdmin
 
 const idParam = z.object({ id: z.string().uuid() })
 const proofSchema = z.string().uuid()
@@ -38,9 +38,8 @@ const publicJob = (job: Awaited<ReturnType<typeof getBackupJob>>) => {
   const summary = (snapshot: typeof job.snapshot) => snapshot ? { pgMajor: snapshot.pgMajor, schemaHead: snapshot.schemaHead, counts: snapshot.counts } : undefined
   return { ...job, snapshot: summary(job.snapshot), restored: summary(job.restored) }
 }
-async function logs(db: AppContext['db'], input: z.infer<typeof logsQuery>, includeRenewalAlerts: boolean, limit = input.limit) {
+async function logs(db: AppContext['db'], input: z.infer<typeof logsQuery>, limit = input.limit) {
   const where = and(input.level ? sql`e.level=${input.level}` : undefined, input.service ? sql`e.service=${input.service}` : undefined,
-    includeRenewalAlerts ? undefined : sql`e.metadata->>'alertId' is null`,
     input.actorId ? sql`e.actor_id::text=${input.actorId}` : undefined, input.event ? sql`e.event=${input.event}` : undefined,
     input.search ? sql`(e.event ilike ${'%' + input.search + '%'} or e.request_id ilike ${'%' + input.search + '%'})` : undefined,
     input.from ? sql`e.created_at>=${input.from}::timestamptz` : undefined, input.to ? sql`e.created_at<=${input.to}::timestamptz` : undefined) ?? sql`true`
@@ -71,11 +70,15 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
   registerSmsAdmin(app, db)
   app.get('/capabilities', async request => {
     const c = getConfig(), user = requireAdmin(request)
-    let allowed = true
-    try { systemAdmin(user) } catch { allowed = false }
-    return { data: { allowed, primaryIpv4Pricing: canManagePrimaryIpv4Pricing(user), hetznerMargin: isPricingSuperAdmin(user), encryptionReady: /^[a-f0-9]{64}$/i.test(c.STORE_SECRET_KEY), backupsEnabled: c.SYSTEM_BACKUP_ENABLED,
+    const allowed = isSuperAdmin(user)
+    return { data: { allowed, primaryIpv4Pricing: allowed, hetznerMargin: allowed, encryptionReady: allowed && /^[a-f0-9]{64}$/i.test(c.STORE_SECRET_KEY), backupsEnabled: allowed && c.SYSTEM_BACKUP_ENABLED,
       restoreEnabled: c.SYSTEM_RESTORE_ENABLED, maxUploadBytes: max, dualApprovalRial: c.SYSTEM_DUAL_APPROVAL_RIAL,
       requirements: ['STORE_SECRET_KEY', 'SYSTEM_BACKUP_KEY', 'SYSTEM_INSTANCE_ID', 'SYSTEM_BACKUP_ENABLED'] } }
+  })
+  app.get('/admin-roles', async () => ({ data: await listAdminRoles(db) }))
+  app.post('/admin-roles', { config: { rateLimit: { max: 5, timeWindow: '10 minutes' } } }, async request => {
+    await changeSuperAdmin(db, requireAdmin(request), parse(roleChangeInput, request.body))
+    return { data: { saved: true } }
   })
   app.get('/hetzner-margin', async request => {
     requireHetznerPricingAdmin(requireAdmin(request))
@@ -94,20 +97,17 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
   })
   const pricingParams = z.object({ provider: z.literal('hetzner') })
   app.get('/primary-ipv4-pricing/:provider', async request => {
-    if (!canManagePrimaryIpv4Pricing(requireAdmin(request))) throw new ForbiddenError('این تنظیم فقط برای سوپرادمین مجاز است.')
     const { provider } = parse(pricingParams, request.params)
     return { data: await primaryIpv4Pricing(db, provider) }
   })
   app.post('/primary-ipv4-pricing/:provider', async request => {
     const admin = requireAdmin(request)
-    if (!canManagePrimaryIpv4Pricing(admin)) throw new ForbiddenError('این تنظیم فقط برای سوپرادمین مجاز است.')
     const { provider } = parse(pricingParams, request.params)
     const { feeRial } = parse(z.object({ feeRial: z.number().int().positive().max(maxPrimaryIpv4FeeRial).multipleOf(10), confirm: z.literal(true) }).strict(), request.body)
     return { data: await setPrimaryIpv4Fee(db, admin.id, provider, feeRial) }
   })
   app.post('/primary-ipv4-operations/:id/confirm-rollback', async request => {
     const admin = requireAdmin(request)
-    if (!canManagePrimaryIpv4Pricing(admin)) throw new ForbiddenError('این عملیات فقط برای سوپرادمین مجاز است.')
     const { id } = parse(idParam, request.params)
     const { note } = parse(z.object({ note: z.string().trim().min(1).max(500), confirm: z.literal(true) }).strict(), request.body)
     const operation = await db.query.providerOperations.findFirst({ where: t => and(eq(t.id, id), eq(t.action, 'replace_primary_ipv4')) })
@@ -175,23 +175,21 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     const admin = requireAdmin(request)
     const input = parse(logsQuery, request.query)
     await writeAudit(db, { actorId: admin.id, action: 'system.logs_viewed', metadata: { operation: 'logs.view' } })
-    return { data: await logs(db, input, isPricingSuperAdmin(admin)) }
+    return { data: await logs(db, input) }
   })
   app.get('/renewal-alerts', async request => {
     const admin = requireAdmin(request)
-    if (!isPricingSuperAdmin(admin)) throw new ForbiddenError()
     return { data: await listRenewalAlerts(db, admin.id) }
   })
   app.post('/renewal-alerts/:id/acknowledge', async request => {
     const admin = requireAdmin(request)
-    if (!isPricingSuperAdmin(admin)) throw new ForbiddenError()
     const { id } = parse(z.object({ id: z.string().regex(/^[a-z0-9_-]{1,40}\.[a-z0-9_]{1,80}$/) }), request.params)
     return { data: await acknowledgeRenewalAlert(db, id, admin.id) }
   })
   app.post('/logs/export', async (request, reply) => {
     const { proof, ...input } = parse(logsQuery.extend({ proof: proofSchema }), request.body), admin = requireAdmin(request)
     await db.transaction(tx => consumeAuthorization(tx, admin, proof, 'logs.export', input))
-    const data = await logs(db, input, isPricingSuperAdmin(admin), 1000)
+    const data = await logs(db, input, 1000)
     await writeAudit(db, { actorId: admin.id, action: 'system.logs_exported', metadata: { result: 'success' } })
     return reply.header('Content-Disposition', 'attachment; filename="system-events.json"').send(data)
   })

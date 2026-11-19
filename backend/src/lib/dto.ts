@@ -112,7 +112,12 @@ export function invoiceToDto(invoice: {
   createdAt: Date
   dueAt: Date
   paidAt?: Date | null
+  snapshot?: unknown
 }) {
+  const entries = (invoice.snapshot as { traffic?: unknown } | null)?.traffic
+  const traffic = Array.isArray(entries) ? entries.map(entry => ({ month: entry.month, previousOutgoingBytes: entry.previousOutgoingBytes,
+    outgoingBytes: entry.outgoingBytes, includedBytes: entry.includedBytes, blocks: entry.blocks, fxRate: entry.fxRate, fxAt: entry.fxAt,
+    taxRial: entry.taxRial, totalRial: entry.totalRial })) : []
   return {
     id: invoice.id,
     number: invoice.invoiceNumber,
@@ -123,6 +128,7 @@ export function invoiceToDto(invoice: {
     date: invoice.createdAt.toISOString(),
     dueAt: invoice.dueAt.toISOString(),
     paidAt: invoice.paidAt?.toISOString() ?? null,
+    ...(traffic.length ? { traffic } : {}),
   }
 }
 

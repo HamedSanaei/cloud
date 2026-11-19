@@ -1,3 +1,4 @@
+import { type AccountRole } from '../../backend/src/contracts/account-role'
 import { apiGet, apiPatch, apiPost } from '../lib/apiClient'
 import type { ServerOperation } from '../lib/serverManagement'
 import type { ServerActionEvidence } from '../../backend/src/modules/providers/customer.interface'
@@ -9,7 +10,7 @@ export interface AdminUser {
   firstName: string | null
   lastName: string | null
   mobile: string | null
-  role: 'admin' | 'user'
+  role: AccountRole
   status: 'active' | 'pending' | 'disabled'
   emailVerifiedAt: string | null
   mobileVerifiedAt: string | null
@@ -92,7 +93,7 @@ export interface Paged<T> {
 }
 export interface AdminOverview {
   source: 'website'
-  accounts: Array<{ role: 'user' | 'admin'; status: string; count: number }>
+  accounts: Array<{ role: AccountRole; status: string; count: number }>
   orderCounts: Record<string, number>
   serverCounts: Record<string, number>
   ordersNeedingAttention: number
@@ -100,7 +101,7 @@ export interface AdminOverview {
   overdue: number
   failedRenewals24h: number
   finance?: {
-    initialRial: number; renewalRial: number; refundsRial: number; netRial: number; depositsRial: number
+    initialRial: number; renewalRial: number; trafficRial: number; refundsRial: number; netRial: number; depositsRial: number
     exceptionCount: number; renewalMismatchCount: number
     exceptions: Array<{ id: string; orderNumber: string; debitRial: number; refundRial: number; invoicedRial: number; unreturned: boolean; mismatch: boolean }>
   }

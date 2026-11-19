@@ -1,3 +1,4 @@
+import { isActiveAdmin } from '../../contracts/account-role.js'
 import { eq } from 'drizzle-orm'
 import type { DbOrTx } from '../../db/index.js'
 import { providers } from '../../db/schema.js'
@@ -18,6 +19,6 @@ export async function assertProviderPurchaseAllowed(db: DbOrTx, providerId: stri
   if (!provider) throw new ValidationError('دیتاسنتر یافت نشد')
   if (!provider.enabled) {
     const user = await db.query.users.findFirst({ where: t => eq(t.id, userId) })
-    if (user?.role !== 'admin' || user.status !== 'active') throw new ForbiddenError('خرید از این دیتاسنتر موقتاً غیرفعال است')
+    if (!isActiveAdmin(user)) throw new ForbiddenError('خرید از این دیتاسنتر موقتاً غیرفعال است')
   }
 }

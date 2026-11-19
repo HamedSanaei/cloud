@@ -14,6 +14,7 @@ import { ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/ser
 import { writeAudit } from '../../src/modules/audit/service.js'
 import { coordinationPool, exclusive, operationsLock, sharedWriter, writerLock } from '../../src/modules/system/writer-gate.js'
 import { requestAdjustment } from '../../src/modules/system/finance.js'
+import { bootstrapSuperAdmin } from '../../src/modules/system/super-admin.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 
 const password = 'Fixture-system-only-123!', oldMerchant = '11111111-1111-4111-8111-111111111111', nextMerchant = '22222222-2222-4222-8222-222222222222', base = '/api/admin/settings'
@@ -37,7 +38,7 @@ describe.skipIf(!dbAvailable)('store system security and real ledger integration
     app = await buildApp({ db: ctx.db, queues: ctx.queues, logger: testLogger }); await app.ready()
   })
   afterAll(async () => { await app?.close(); await ctx?.close(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
-  async function account(role: 'user' | 'admin' = 'admin') {
+  async function account(role: 'user' | 'admin' | 'super_admin' = 'super_admin') {
     const n = ++sequence, user = await registerUser(ctx.db, { email: `sys-${n}@fixture.test`, password, mobile: '+98912' + String(n).padStart(7, '0') })
     const secret = createTotpSecret()
     await ctx.db.update(users).set({ role, twoFactorEnabled: true, totpSecretEncrypted: encryptTotpSecret(secret) }).where(eq(users.id, user.id))
@@ -52,12 +53,45 @@ describe.skipIf(!dbAvailable)('store system security and real ledger integration
     const response = await send(a, 'POST', base + '/authorize', { action, payload })
     expect(response.statusCode, response.body).toBe(200); return response.json().data.proof as string
   }
-  it('allows active admins without extra MFA and denies regular users and unauthorized uploads', async () => {
+  it('bootstraps an independently selected administrator and gives two active Super Admins identical access', async () => {
+    const owner = await account('admin'), second = await account('admin'), user = await account('user')
+    await expect(bootstrapSuperAdmin(ctx.db, user.user.id)).rejects.toMatchObject({ status: 409 })
+    await bootstrapSuperAdmin(ctx.db, owner.user.id)
+    await expect(bootstrapSuperAdmin(ctx.db, second.user.id)).rejects.toMatchObject({ status: 409 })
+    const roles = base + '/admin-roles'
+    const payload = { id: second.user.id, role: 'super_admin', password, totp: currentTotp(owner.secret), confirm: true }
+    expect((await send(second, 'POST', roles, payload)).statusCode).toBe(403)
+    expect((await send(owner, 'POST', roles, { ...payload, id: owner.user.id, role: 'admin' })).statusCode).toBe(409)
+    expect((await send(owner, 'POST', roles, { ...payload, totp: undefined })).statusCode).toBe(403)
+    const granted = await send(owner, 'POST', roles, payload)
+    expect(granted.statusCode, granted.body).toBe(200)
+    const capabilities = async (actor: Account) => (await send(actor, 'GET', base + '/capabilities')).json().data
+    expect(await capabilities(owner)).toMatchObject({ allowed: true, hetznerMargin: true, primaryIpv4Pricing: true })
+    expect(await capabilities(second)).toEqual(await capabilities(owner))
+    for (const path of ['/admin-roles', '/hetzner-margin', '/primary-ipv4-pricing/hetzner', '/gateway', '/outbound', '/backups', '/logs', '/renewal-alerts', '/finance/adjustments']) {
+      for (const actor of [owner, second]) {
+        const response = await send(actor, 'GET', base + path)
+        expect(response.statusCode, path + response.body).toBe(path === '/backups' ? 422 : 200)
+      }
+      expect((await send(user, 'GET', base + path)).statusCode).toBe(403)
+    }
+    const proofBeforeRevoke = await proof(second, 'gateway.diagnose', { confirm: true })
+    expect((await send(owner, 'POST', roles, { ...payload, role: 'admin' })).statusCode).toBe(200)
+    expect(await capabilities(second)).toMatchObject({ allowed: false, hetznerMargin: false, primaryIpv4Pricing: false })
+    expect((await send(second, 'POST', base + '/gateway/diagnose', { confirm: true, proof: proofBeforeRevoke })).statusCode).toBe(403)
+    expect((await send(second, 'GET', '/api/admin/audit')).statusCode).toBe(403)
+    const audit = await send(owner, 'GET', '/api/admin/audit?action=admin.role_changed')
+    expect(audit.json().data).toEqual(expect.arrayContaining([expect.objectContaining({ actorId: owner.user.id,
+      targetId: second.user.id, metadata: { before: 'admin', after: 'super_admin' } })]))
+    await ctx.db.update(users).set({ status: 'disabled', role: 'super_admin' }).where(eq(users.id, second.user.id))
+    expect((await send(second, 'GET', base + '/hetzner-margin')).statusCode).toBe(401)
+  })
+  it('allows active Super Admins without extra MFA and denies regular users and unauthorized uploads', async () => {
     const user = await account('user'), other = await account('admin'), admin = await account()
     expect((await app.inject(base + '/logs')).statusCode).toBe(401)
     expect((await send(user, 'GET', base + '/logs')).statusCode).toBe(403)
-    expect((await send(other, 'GET', base + '/gateway')).statusCode).toBe(200)
-    expect((await send(other, 'GET', base + '/capabilities')).json().data.allowed).toBe(true)
+    expect((await send(other, 'GET', base + '/gateway')).statusCode).toBe(403)
+    expect((await send(other, 'GET', base + '/capabilities')).json().data.allowed).toBe(false)
     expect((await app.inject({ method: 'POST', url: base + '/backups/upload', payload: Buffer.from('not a dump'), headers: { 'content-type': 'application/octet-stream' } })).statusCode).toBe(401)
     await ctx.db.update(users).set({ twoFactorEnabled: false }).where(eq(users.id, admin.user.id))
     expect((await send(admin, 'POST', base + '/authorize', { action: 'gateway.diagnose', payload: { confirm: true } })).statusCode).toBe(200)
