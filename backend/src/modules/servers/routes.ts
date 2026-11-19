@@ -16,6 +16,7 @@ import { loadFundingFleet, serverPowerPolicy } from '../billing/funding.js'
 import { pendingProvisioningRows, provisioningRow } from './provisioning.js'
 import { registerCustomerServerRoutes } from './customer-routes.js'
 import { registerServerConsole } from './console.js'
+import { authorizeOperation, operationKey } from '../auth/operation-email.js'
 
 const wizardSchema = z.object({
   name: z.string().min(3).max(63),
@@ -64,7 +65,9 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
   app.post('/servers', async (request, reply) => {
     const user = requireUser(request)
     const input = parse(wizardSchema, request.body)
-    const idempotencyKey = parse(z.string().min(1).max(200).optional(), request.headers['idempotency-key'])
+    const idempotencyKey = parse(operationKey, request.headers['idempotency-key'])
+    const authorize = await authorizeOperation(db, user, request.headers, { action: 'create', key: idempotencyKey, payload: input })
+    if (input.expectedTotalRial === undefined) throw new ValidationError('مبلغ سفارش را پیش از درخواست ساخت تأیید کنید')
 
     const offer = await getOffer(db, input.offerId)
     const location = offer.locationId ? await db.query.providerLocations.findFirst({ where: (t) => eq(t.id, offer.locationId!) }) : null
@@ -88,6 +91,7 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
       hostname: input.name ?? '',
       idempotencyKey,
       expectedTotalRial: input.expectedTotalRial,
+      authorize,
     })
 
     if (result.order.status === 'paid') {

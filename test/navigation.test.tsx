@@ -15,6 +15,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     const path = url.replace(/^\/api/, '').split('?')[0]
     requests.push({ path, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : {}, key: (init?.headers as Record<string, string>)?.['idempotency-key'] })
+    if (path === '/auth/operation-email/start') return Response.json({ data: { token: 'fixture-email-code', destination: 'f***@example.test', expiresIn: 300, resendAfter: 0 } })
     return new Response(JSON.stringify(fixture(path)), { headers: { 'content-type': 'application/json' } })
   }))
 })
@@ -37,6 +38,53 @@ async function reviewOrder(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('Penpot routes with canonical integration ENABLED', () => {
+  it('names all six dashboard metrics and opens invoices with Enter', async () => {
+    const user = userEvent.setup()
+    open('/dashboard')
+    const firstMetric = await screen.findByRole('link', { name: 'سرور فعال', exact: true })
+    const metrics = within(firstMetric.closest<HTMLElement>('.metrics-grid--six')!)
+    for (const name of ['سرور فعال', 'آی‌پی', 'دامنه', 'بسته ترافیک', 'تیکت باز', 'فاکتور پرداخت‌نشده']) {
+      expect(await metrics.findByRole('link', { name, exact: true })).toBeTruthy()
+    }
+    metrics.getByRole('link', { name: 'فاکتور پرداخت‌نشده' }).focus()
+    await user.keyboard('{Enter}')
+    expect(await screen.findByRole('heading', { name: /فاکتورها/, level: 1 })).toBeTruthy()
+  })
+
+  it('localizes invoice labels and matches Latin, Persian and Arabic digits', async () => {
+    const original = globalThis.fetch
+    const invoice = { id: 'renewal', number: 'INV-202611-123456', description: 'تمدید اشتراک نمونه — HOURLY', status: 'paid', amount: 100, date: '2026-11-18T08:00:00Z' }
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => url.endsWith('/invoices')
+      ? Response.json({ data: [invoice] }) : original(url, init)))
+    const user = userEvent.setup()
+    open('/invoices')
+    expect(await screen.findByText('تمدید اشتراک نمونه — ساعتی')).toBeTruthy()
+    expect(screen.getByRole('cell', { name: 'پرداخت شده' })).toBeTruthy()
+    await user.selectOptions(screen.getByRole('combobox', { name: 'وضعیت' }), 'paid')
+    const search = screen.getByPlaceholderText(/جستجو در شماره فاکتور/)
+    for (const text of [invoice.number, 'INV-۲۰۲۶۱۱-۱۲۳۴۵۶', 'INV-٢٠٢٦١١-١٢٣٤٥٦', 'ساعتی']) {
+      await user.clear(search)
+      await user.type(search, text)
+      expect(screen.getByRole('cell', { name: invoice.number })).toBeTruthy()
+    }
+  })
+
+  it('combines the sales department, status and ticket search filters', async () => {
+    const original = globalThis.fetch
+    const ticket = { id: 'sales', title: 'سفارش فروش', department: 'sales', status: 'pending', updatedAt: '2026-11-18T08:00:00Z' }
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => url.endsWith('/tickets')
+      ? Response.json({ data: [ticket, { ...ticket, id: 'technical', department: 'technical', title: 'سفارش فنی' }, { ...ticket, id: 'finance', department: 'finance', title: 'سفارش مالی' }] }) : original(url, init)))
+    const user = userEvent.setup()
+    open('/tickets')
+    await screen.findByText(ticket.title)
+    await user.selectOptions(screen.getByRole('combobox', { name: 'بخش' }), 'sales')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'وضعیت' }), 'pending')
+    await user.type(screen.getByPlaceholderText(/جستجو در تیکت‌ها/), 'سفارش')
+    expect(screen.getByText(ticket.title)).toBeTruthy()
+    expect(screen.queryByText('سفارش فنی')).toBeNull()
+    expect(screen.queryByText('سفارش مالی')).toBeNull()
+  })
+
   it('manages delegated inventory by platform UUID and drops stale access after revocation', async () => {
     const original = globalThis.fetch
     const canonicalId = 'f07b9500-414e-4000-8000-000000000002'
@@ -302,6 +350,10 @@ describe('Penpot routes with canonical integration ENABLED', () => {
     await user.click(screen.getByRole('button', { name: 'مرحله قبل' }))
     await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
     await user.click(screen.getByRole('button', { name: 'تایید و ایجاد سرور' }))
+    await user.click(screen.getByRole('button', { name: 'ارسال کد به ایمیل' }))
+    expect(requests.filter(r => r.path === '/platform/orders')).toHaveLength(0)
+    await user.type(await screen.findByLabelText('کد تأیید ایمیل'), '۱۲۳۴۵۶')
+    await user.click(screen.getByRole('button', { name: 'تأیید کد و ادامه' }))
     await waitFor(() => expect(requests.filter(r => r.path === '/platform/orders')).toHaveLength(1))
     const order = requests.find(r => r.path === '/platform/orders')!
     expect(order.body).toEqual({ offerId, image: 'ubuntu-24.04', expectedMinor: 4, expectedCurrency: 'USD' })
@@ -322,8 +374,15 @@ describe('Penpot routes with canonical integration ENABLED', () => {
     open('/servers/create')
     await reviewOrder(user)
     await user.click(screen.getByRole('button', { name: 'تایید و ایجاد سرور' }))
+    await user.click(screen.getByRole('button', { name: 'ارسال کد به ایمیل' }))
+    await user.type(await screen.findByLabelText('کد تأیید ایمیل'), '123456')
+    await user.click(screen.getByRole('button', { name: 'تأیید کد و ادامه' }))
     await screen.findByText('نتیجه درخواست نامشخص است.')
-    await user.click(screen.getByRole('button', { name: 'تایید و ایجاد سرور' }))
+    await user.click(screen.getByRole('button', { name: 'ارسال دوبارهٔ کد' }))
+    const code = screen.getByLabelText('کد تأیید ایمیل') as HTMLInputElement
+    await waitFor(() => expect(code.value).toBe(''))
+    await user.type(code, '654321')
+    await user.click(screen.getByRole('button', { name: 'تأیید کد و ادامه' }))
     await waitFor(() => expect(requests.filter(r => r.path === '/platform/orders')).toHaveLength(2))
     const orders = requests.filter(r => r.path === '/platform/orders')
     expect(orders[0].key).toBe(orders[1].key)

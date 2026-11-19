@@ -5,6 +5,7 @@ import { parse } from '../../http/validate.js'
 import { requireUser } from '../../http/auth.js'
 import { cancelUnpaidOrder, createOrderFromQuote, getOrder, listOrders, payOrder } from './service.js'
 import { orderToDto } from '../../lib/dto.js'
+import { authorizeOperation, operationKey } from '../auth/operation-email.js'
 
 const createOrderSchema = z.object({
   quoteId: z.string().uuid(),
@@ -22,7 +23,8 @@ export const registerOrderRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
   app.post('/orders', async (request, reply) => {
     const user = requireUser(request)
     const input = parse(createOrderSchema, request.body)
-    const idempotencyKey = (request.headers['idempotency-key'] as string | undefined) ?? undefined
+    const idempotencyKey = parse(operationKey, request.headers['idempotency-key'])
+    const authorize = await authorizeOperation(db, user, request.headers, { action: 'create_order', key: idempotencyKey, payload: input })
 
     const result = await createOrderFromQuote(db, {
       userId: user.id,
@@ -30,6 +32,7 @@ export const registerOrderRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
       walletId: input.walletId,
       hostname: input.hostname ?? '',
       idempotencyKey,
+      authorize,
     })
 
     // Replay recovers a failed enqueue after payment committed. The queue uses
@@ -76,8 +79,9 @@ export const registerOrderRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
     const user = requireUser(request)
     const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
     const input = parse(paySchema, request.body)
-    const idempotencyKey = (request.headers['idempotency-key'] as string | undefined) ?? undefined
-    const order = await payOrder(db, { userId: user.id, orderId: id, walletId: input.walletId, idempotencyKey })
+    const idempotencyKey = parse(operationKey, request.headers['idempotency-key'])
+    const authorize = await authorizeOperation(db, user, request.headers, { action: 'pay_order', key: idempotencyKey, payload: { orderId: id, ...input } })
+    const order = await payOrder(db, { userId: user.id, orderId: id, walletId: input.walletId, idempotencyKey, authorize })
     await queues.addProvision(order.id)
     return { data: orderToDto(order) }
   })

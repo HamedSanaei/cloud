@@ -142,6 +142,8 @@
 .server-facts dt { color: #64748b; flex-shrink: 0; }
 .server-facts dd { margin: 0; overflow-wrap: anywhere; text-align: end; }
 .server-muted { color: #64748b; }
+.server-chart-stats, .server-chart-scale { color: var(--ink); }
+.server-chart-scale { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .server-power-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-top: 20px; }
 .server-power-action { min-height: 58px; font-size: 14px; }
 .server-operation { padding: 18px 0; border-top: 1px solid #d9e2ec; }
@@ -190,6 +192,14 @@
 .server-credential-list article { padding-block: 14px; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
 .server-credential-list article p { margin: 6px 0; }
 .server-credential-list small { display: block; color: var(--muted); margin-bottom: 8px; }
+.server-root-credential, .server-secret-panel { display: grid; gap: 18px; align-content: start; }
+.server-root-credential > div > p { margin-block: 0 12px; }
+.server-root-credential > p, .server-secret-panel > p { margin: 0; }
+.server-root-credential .server-credential-list { padding-block-start: 16px; border-top: 1px solid var(--border); }
+.server-credential-list h3 { margin-block: 0 12px; }
+.server-secret-context { display: grid; gap: 8px; overflow-wrap: anywhere; }
+.server-secret-context bdi { display: block; margin-block-start: 4px; }
+.server-secret-panel > button { justify-self: start; }
 .server-resize-effects { color: var(--ink); }
 @media (max-width: 1000px) { .server-detail-columns { grid-template-columns: 1fr; } .server-resize-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .Toastify__toast { font-family: Vazirmatn, sans-serif; font-size: 14px; border: 1px solid #d9e2ec; border-radius: 12px; line-height: 1.8; }

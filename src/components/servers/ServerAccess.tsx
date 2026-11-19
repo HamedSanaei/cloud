@@ -57,10 +57,11 @@ export function ServerAccess({ server, busy, loading, stale, ask, reveal, rechec
       <RebuildControls serverId={server.id} eligible={!eligibility.rebuild} ask={ask} reasonId={rebuildReason}
         notice={rebuildBlock ? notice(rebuildBlock, rebuildReason) : null} />
     </Card>
-    <Card>
+    <Card className="server-root-credential">
       <h2>رمز عبور root</h2>
-      <p>رمز فعلی قابل بازیابی نیست.</p>
-      <Button disabled={!!passwordBlock} aria-describedby={passwordBlock ? passwordReason : undefined} onClick={() => ask('reset_password')}>بازنشانی رمز عبور</Button>
+      <div><p>رمز فعلی قابل بازیابی نیست.</p>
+        <Button disabled={!!passwordBlock} aria-describedby={passwordBlock ? passwordReason : undefined} onClick={() => ask('reset_password')}>بازنشانی رمز عبور</Button>
+      </div>
       {passwordBlock ? notice(passwordBlock, passwordReason)
         : <p className="server-notice">رمز جدید پس از تأیید عملیات، تنها در نشست درخواست‌کننده و فقط یک‌بار قابل دریافت است.</p>}
       <ServerCredentialList server={server} reveal={reveal} />
@@ -107,7 +108,8 @@ function RebuildControls({ serverId, eligible, ask, reasonId, notice }: {
 }) {
   const images = useApiQuery(() => eligible ? getServerImages(serverId) : Promise.resolve([]), [serverId, eligible])
   const [selection, setSelection] = useState('')
-  const image = images.data?.some(item => item.id === selection) ? selection : ''
+  const selected = images.data?.find(item => item.id === selection)
+  const image = selected?.id ?? ''
   const imageReason = images.loading ? 'در حال دریافت تصاویر مجاز…' : images.error ? 'دریافت تصاویر مجاز ناموفق بود.'
     : !images.data?.length ? 'تصویر سازگار برای این سرور پیدا نشد.' : null
   const description = notice || imageReason ? reasonId : undefined
@@ -119,7 +121,7 @@ function RebuildControls({ serverId, eligible, ask, reasonId, notice }: {
     </Select>
     <p className="server-danger-note">تمام داده‌های دیسک سرور حذف می‌شود.</p>
     <Button variant="danger" disabled={!!notice || !!imageReason || !image} aria-describedby={description}
-      onClick={() => ask('rebuild', { image })}>نصب مجدد و حذف داده‌ها</Button>
+      onClick={() => { if (selected) ask('rebuild', { image: selected.id, imageLabel: selected.name }) }}>نصب مجدد و حذف داده‌ها</Button>
     {notice || (imageReason && <div className="server-notice server-access-notice">
       <p id={reasonId} role="status">{imageReason}</p>
       {!images.loading && <Button size="sm" variant="secondary" onClick={images.refetch}>دریافت دوبارهٔ تصاویر</Button>}

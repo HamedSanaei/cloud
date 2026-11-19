@@ -20,7 +20,7 @@ import { Badge, Table } from '../components/ui/Table'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { ApiError } from '../lib/apiClient'
 import { getWalletSummary, listChargeRequests, listInvoices, listTransactions } from '../lib/endpoints'
-import { formatFaDateTime, formatToman } from '../lib/format'
+import { formatFaDateTime, formatToman, toAsciiDigits } from '../lib/format'
 import { WalletRecharge } from '../components/ui/WalletRecharge'
 import { WalletPaymentStatus } from '../components/ui/WalletPaymentStatus'
 import { useAuth } from '../auth/AuthContext'
@@ -106,6 +106,9 @@ interface FinancialListProps {
   type: 'invoice' | 'charge'
 }
 
+const invoiceStatusLabels: Record<string, string> = { pending: 'در انتظار پرداخت', paid: 'پرداخت شده', cancelled: 'لغو شده', refunded: 'مسترد شده' }
+const invoicePeriods: Record<string, string> = { HOURLY: 'ساعتی', DAILY: 'روزانه', MONTHLY: 'ماهانه' }
+const invoiceDescription = (text = '') => text.replace(/^(تمدید .*?[-—–]\s*)(HOURLY|DAILY|MONTHLY)\s*$/, (_match, prefix, period) => prefix + invoicePeriods[period])
 const chargeStatusLabels: Record<string, string> = {
   pending: 'در انتظار', approved: 'تایید شده', rejected: 'رد شده', processing: 'در حال پردازش',
 }
@@ -127,14 +130,14 @@ function FinancialList({ type }: FinancialListProps) {
 
   const rows = useMemo(() => {
     const items = (active.data?.items ?? []) as Array<{ number: string; description?: string; invoiceNumber?: string; status: string; amount: number; formattedAmount?: string; date: string; dueAt?: string; paidAt?: string; id: string }>
-    const normalized = query.trim()
+    const normalized = toAsciiDigits(query.trim())
     return items.filter((item) => {
-      const haystack = `${item.number} ${item.description ?? ''} ${item.invoiceNumber ?? ''}`
+      const haystack = toAsciiDigits(`${item.number} ${item.description ?? ''} ${item.invoiceNumber ?? ''} ${isInvoice ? invoiceDescription(item.description) : ''}`)
       const matchesQuery = !normalized || haystack.includes(normalized)
       const matchesStatus = status === 'all' || item.status === status
       return matchesQuery && matchesStatus
     })
-  }, [active.data, query, status])
+  }, [active.data, query, status, isInvoice])
 
   return (
     <div className="page-stack financial-list-page">
@@ -151,7 +154,7 @@ function FinancialList({ type }: FinancialListProps) {
       >
         <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="وضعیت">
           <option value="all">همه وضعیت‌ها</option>
-          {isInvoice ? <><option value="pending">در انتظار پرداخت</option><option value="paid">پرداخت شده</option><option value="cancelled">لغو شده</option><option value="refunded">مسترد شده</option></> : Object.entries(chargeStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          {Object.entries(isInvoice ? invoiceStatusLabels : chargeStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </Select>
       </FilterPanel>
       <Card className={!active.loading && !active.error && !active.data?.unavailable && !rows.length ? 'resource-empty-card' : undefined}>
@@ -174,10 +177,10 @@ function FinancialList({ type }: FinancialListProps) {
             {rows.map((row) => (
               <tr key={row.id}>
                 <td>{row.number}</td>
-                <td>{isInvoice ? row.description : row.invoiceNumber ?? '—'}</td>
+                <td>{isInvoice ? invoiceDescription(row.description) : row.invoiceNumber ?? '—'}</td>
                 <td>{row.formattedAmount ?? formatToman(row.amount)}</td>
                 <td><FinancialDate label={isInvoice ? 'صدور' : undefined} date={row.date} dueAt={isInvoice ? row.dueAt : undefined} paidAt={isInvoice ? row.paidAt : undefined} timezone={user?.timezone} /></td>
-                <td><Badge>{isInvoice ? row.status : chargeStatusLabels[row.status] ?? 'نامشخص'}</Badge></td>
+                <td><Badge>{(isInvoice ? invoiceStatusLabels : chargeStatusLabels)[row.status] ?? 'نامشخص'}</Badge></td>
               </tr>
             ))}
           </Table>

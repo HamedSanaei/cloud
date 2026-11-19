@@ -70,9 +70,16 @@ export function OneTimePassword({ server, operationId, onClose }: { server: Serv
     catch { if (mounted.current) setError('رمز قابل دریافت نیست، قبلاً نمایش داده شده یا عملیات هنوز تأیید نشده است.') }
     finally { if (mounted.current) setBusy(false) }
   }
-  return <Modal className="server-management-modal" trapFocus open onClose={onClose} title={operation?.action === 'enable_rescue' ? 'رمز Rescue — فقط یک‌بار' : 'رمز جدید root — فقط یک‌بار'} description={operation ? `${actionLabels[operation.action]} — ${formatFaDateTime(operation.createdAt)} — ${operation.id}` : 'این مقدار تنها در نشست فعلی و برای مدت کوتاه نمایش داده می‌شود.'}>
-    <p>رمز را در محل امن نگه دارید. پس از بستن این پنجره یا خروج از تب، نمایش دوباره ممکن نیست.</p>
+  return <Modal className="server-management-modal" trapFocus open onClose={onClose} title={operation?.action === 'enable_rescue' ? 'رمز Rescue — فقط یک‌بار' : 'رمز جدید root — فقط یک‌بار'}>
+    <div className="server-secret-panel">
+    {operation && <div className="server-secret-context">
+      <strong>{actionLabels[operation.action]}</strong>
+      <time dateTime={operation.createdAt}>{formatFaDateTime(operation.createdAt)}</time>
+      <small>شناسهٔ عملیات <bdi dir="ltr">{operation.id}</bdi></small>
+    </div>}
+    <p className="server-notice">رمز را در محل امن نگه دارید. پس از بستن این پنجره یا خروج از تب، نمایش دوباره ممکن نیست.</p>
     {secret ? <><output className="server-password" dir="ltr">{secret.password}</output><div className="server-inline-actions"><Button onClick={() => { void navigator.clipboard.writeText(secret.password).catch(() => setError('کپی خودکار در این مرورگر ممکن نیست.')) }}>کپی رمز</Button><Button variant="secondary" onClick={() => { setSecret(null); void acknowledgeServerPassword(server.id, operationId); onClose() }}>مشاهده و دریافت شد</Button></div></> : <Button disabled={busy} onClick={claim}>دریافت امن رمز</Button>}
     {error && <p role="alert">{error}</p>}
+    </div>
   </Modal>
 }

@@ -18,6 +18,8 @@ import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers
 import type { ManagementAction } from '../../src/modules/providers/customer.interface.js'
 import { managementDto } from '../../src/modules/servers/management.js'
 import { consoleSessionExpiredCode } from '../../src/contracts/server-console.js'
+import { createQuote } from '../../src/modules/quotes/service.js'
+import { operationEmailHeaders } from '../operation-email-fixture.js'
 
 const { openSocket } = vi.hoisted(() => ({ openSocket: vi.fn() }))
 vi.mock('../../src/modules/servers/console-transport.js', () => ({ connectConsole: openSocket }))
@@ -128,7 +130,10 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     const headers = { authorization: `Bearer ${session.token}` }, wallet = await ensureDefaultWallet(ctx.db, user.id)
     await creditWallet(ctx.db, user.id, wallet.id, 100000000, { idempotencyKey: randomUUID() })
     const offer = await findOfferByProductAndLocation(ctx.db, 'hetzner', 'cx-fixture:EUR', 'hel1')
-    const response = await app.inject({ method: 'POST', url: '/api/servers', headers: { ...headers, 'idempotency-key': randomUUID() }, payload: { name: 'fixture-server', offerId: offer!.id, os: '11', walletId: wallet.id, billingPeriod: 'hourly' } })
+    const quote = await createQuote(ctx.db, { userId: user.id, offerId: offer!.id, locationCode: 'hel1', billingOption: { billingCycle: 'hourly' }, billingPeriod: 'hourly', operatingSystem: '11' })
+    const payload = { name: 'fixture-server', offerId: offer!.id, os: '11', walletId: wallet.id, billingPeriod: 'hourly', expectedTotalRial: quote.totalRial }
+    const verified = await operationEmailHeaders(app, ctx.db, user.id, headers, { action: 'create', key: randomUUID(), payload })
+    const response = await app.inject({ method: 'POST', url: '/api/servers', headers: verified, payload })
     expect(response.statusCode, response.body).toBe(201)
     const initial = response.json().data, orderId = initial.tracking.orderId as string
     await handleProvision(ctx, { orderId })
@@ -137,8 +142,15 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
   }
   type Purchase = Awaited<ReturnType<typeof buy>>
   async function activate(p: Purchase) { machines.get(p.providerId)!.status = 'running'; await handleServerSync(ctx, { serverId: p.server.id }) }
+  async function requestAction(p: Purchase, command: ManagementAction, key = randomUUID()) {
+    const hostname = 'fixture-server'
+    const headers = command === 'delete' || command === 'reset_password'
+      ? await operationEmailHeaders(app, ctx.db, p.user.id, p.headers, { action: command, key, payload: { serverId: p.server.id, hostname } })
+      : { ...p.headers, 'idempotency-key': key }
+    return app.inject({ method: 'POST', remoteAddress: p.remoteAddress, url: `/api/servers/${p.server.id}/management/actions`, headers, payload: { action: command, hostname, confirm: true } })
+  }
   async function action(p: Purchase, command: ManagementAction, key = randomUUID()) {
-    const response = await app.inject({ method: 'POST', remoteAddress: p.remoteAddress, url: `/api/servers/${p.server.id}/management/actions`, headers: { ...p.headers, 'idempotency-key': key }, payload: { action: command, hostname: 'fixture-server', confirm: true } })
+    const response = await requestAction(p, command, key)
     expect(response.statusCode, response.body).toBe(202); return response.json().data.id as string
   }
   async function ipServer() {
@@ -176,8 +188,7 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     const id = responses[0].json().data.id
     expect(responses[1].json().data.id).toBe(id)
     expect((await requestIp(p, quote)).statusCode).toBe(409)
-    const blocked = await app.inject({ method: 'POST', remoteAddress: p.remoteAddress, url: `/api/servers/${p.server.id}/management/actions`,
-      headers: { ...p.headers, 'idempotency-key': randomUUID() }, payload: { hostname: 'fixture-server', action: 'delete', confirm: true } })
+    const blocked = await requestAction(p, 'delete')
     expect(blocked.statusCode).toBe(409)
     const admin = await registerUser(ctx.db, { email: 'ip-super-admin@fixture.test', password: 'Fixture-admin-123!' })
     await ctx.db.update(users).set({ role: 'admin' }).where(eq(users.id, admin.id))
@@ -610,8 +621,7 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     const resolve = () => app.inject({ method: 'POST', url: adminUrl, headers: adminHeaders, payload: { actionId, note: 'Verified owning project receipt and original dispatch time' } })
     const recheck = () => app.inject({ method: 'POST', url: `${serverUrl}/management/operations/${opId}/recheck`, ...owner })
     const worker = () => handleServerAction(ctx, { operationId: opId, serverId: p.server.id, action: 'power_off' })
-    const requestDelete = () => app.inject({ method: 'POST', url: `${serverUrl}/management/actions`, ...owner,
-      headers: { ...p.headers, 'idempotency-key': randomUUID() }, payload: { action: 'delete', hostname: 'fixture-server', confirm: true } })
+    const requestDelete = () => requestAction(p, 'delete')
     expect((await requestDelete()).statusCode).toBe(409)
     expect((await app.inject({ url: adminUrl, ...owner })).statusCode).toBe(403)
     expect((await review()).json().data).toEqual({ state: 'active', candidates: [] })
@@ -666,9 +676,7 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     const url = '/api/servers/' + p.server.id
     const recheck = () => app.inject({ method: 'POST', url: url + '/management/operations/' + orphan!.id + '/recheck',
       headers: p.headers, remoteAddress: p.remoteAddress })
-    const deleteServer = () => app.inject({ method: 'POST', url: url + '/management/actions',
-      headers: { ...p.headers, 'idempotency-key': randomUUID() }, remoteAddress: p.remoteAddress,
-      payload: { action: 'delete', hostname: 'fixture-server', confirm: true } })
+    const deleteServer = () => requestAction(p, 'delete')
     expect((await deleteServer()).statusCode).toBe(409)
     const [a, b] = await Promise.all([recheck(), recheck()])
     expect(a.statusCode, a.body).toBe(200)

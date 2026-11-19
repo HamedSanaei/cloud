@@ -12,6 +12,8 @@ import { useToast } from '../components/ui/Toast'
 import { LifecycleBadge, ServerResourceMetricCard } from '../components/servers/ServerPrimitives'
 import { DestructiveConfirmation, OneTimePassword, ServerBillingTerminationState, ServerOperationStatus, ServerPowerActionButton, type ProtectionChange } from '../components/servers/ServerManagementControls'
 import { ServerConsole } from '../components/servers/ServerConsole'
+import { OperationEmail } from '../components/EmailConfirmation'
+import type { EmailProof } from '../lib/operationEmail'
 import { ServerAccess, ServerCredentialList } from '../components/servers/ServerAccess'
 import { ResizeEffects, resizeEffectsVerified } from '../components/servers/ResizeEffects'
 import { MetricChart } from '../components/servers/MetricChart'
@@ -28,7 +30,7 @@ const byteValue = (value: number | null | undefined) => value === null || value 
 const amount = (value: number | null) => value === null ? missing : formatToman(value / 10)
 const periodLabels: Record<string, string> = { HOURLY: 'ساعتی', DAILY: 'روزانه', MONTHLY: 'ماهانه' }
 const tabs = [['overview', 'نمای کلی'], ['monitoring', 'مانیتورینگ'], ['operations', 'عملیات'], ['resize', 'تغییر پلن'], ['access', 'سیستم‌عامل و دسترسی'], ['console', 'کنسول'], ['settings', 'تنظیمات']] as const
-type ActionRequest = { action: ManagementAction; input: Record<string, unknown>; resizePreview?: ResizePreview; protectionChange?: ProtectionChange } | { action: 'replace_primary_ipv4'; quote: PrimaryIpv4Quote }
+type ActionRequest = { action: ManagementAction; input: Record<string, unknown>; imageLabel?: string; resizePreview?: ResizePreview; protectionChange?: ProtectionChange } | { action: 'replace_primary_ipv4'; quote: PrimaryIpv4Quote }
 export function ServerDetailsPage() {
   const { id = '' } = useParams(), [search, setSearch] = useSearchParams(), tab = search.get('tab') || 'overview'
   const fresh = useRef(false)
@@ -39,6 +41,7 @@ export function ServerDetailsPage() {
     return getServerDetail(id, refresh)
   }, [id]), { showToast } = useToast()
   const [request, setRequest] = useState<ActionRequest | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('')
+  const [emailPending, setEmailPending] = useState(false)
   const [checking, setChecking] = useState(false)
   const [checked, setChecked] = useState<{ serverId: string; operationId: string; message: string } | null>(null)
   const [secretOperation, setSecretOperation] = useState<string | null>(null), rounds = useRef(0), key = useRef('')
@@ -86,14 +89,17 @@ export function ServerDetailsPage() {
     return () => window.clearTimeout(timer)
   }, [pending, detail.loading, server?.operations, refresh])
   const ask = (action: ManagementAction, input: Record<string, unknown> = {}, resizePreview?: ResizePreview) => {
+    const { imageLabel, ...payload } = input
     const protection = server?.facts?.protection
     const flags = action === 'change_protection' && protection ? (['delete', 'rebuild'] as const).filter(flag => typeof input[flag] === 'boolean' && input[flag] !== protection[flag]) : []
     const flag = flags.length === 1 ? flags[0] : undefined
     const protectionChange = flag && protection ? { flag, from: protection[flag], to: input[flag] as boolean } : undefined
-    key.current = crypto.randomUUID(); setError(''); setRequest({ action, input, resizePreview, protectionChange })
+    key.current = crypto.randomUUID(); setError(''); setEmailPending(false)
+    setRequest({ action, input: payload, imageLabel: typeof imageLabel === 'string' ? imageLabel : undefined, resizePreview, protectionChange })
   }
-  const confirm = async () => {
+  const confirm = async (proof?: EmailProof) => {
     if (!request || !server || busy) return
+    if (!proof && (request.action === 'delete' || request.action === 'reset_password')) { setEmailPending(true); return }
     if (request.action === 'change_protection') {
       const current = server.facts?.protection, change = request.protectionChange
       const other = change?.flag === 'delete' ? 'rebuild' : 'delete'
@@ -113,10 +119,13 @@ export function ServerDetailsPage() {
     setBusy(true); setError('')
     try {
       if (request.action === 'replace_primary_ipv4') await submitPrimaryIpv4(server.id, server.name, request.quote, key.current)
-      else await submitServerAction(server.id, server.name, request.action, request.input, key.current)
+      else await submitServerAction(server.id, server.name, request.action, request.input, key.current, proof)
       showToast('درخواست ثبت شد؛ نتیجهٔ نهایی ارائه‌دهنده در تاریخچه نمایش داده می‌شود.', 'info')
-      setRequest(null); rounds.current = 0; refresh(); window.dispatchEvent(new Event('server-lifecycle-changed'))
-    } catch (error) { setError(error instanceof Error ? error.message : 'ثبت عملیات ناموفق بود؛ پیش از تکرار، تاریخچه را بررسی کنید.') }
+      setEmailPending(false); setRequest(null); rounds.current = 0; refresh(); window.dispatchEvent(new Event('server-lifecycle-changed'))
+    } catch (error) {
+      if (proof) throw error
+      setError(error instanceof Error ? error.message : 'ثبت عملیات ناموفق بود؛ پیش از تکرار، تاریخچه را بررسی کنید.')
+    }
     finally { setBusy(false) }
   }
   if (!server) return detail.loading ? <LoadingState label="دریافت اطلاعات معتبر سرور…" /> : <QueryError message={detail.error || missing} onRetry={refresh} />
@@ -191,10 +200,17 @@ export function ServerDetailsPage() {
         </div>
       </div>}
     </Card>}
-    {request && (request.action !== 'delete' || tab === 'settings') && <DestructiveConfirmation key={key.current} server={server} action={request.action} protectionChange={request.action === 'change_protection' ? request.protectionChange : undefined} busy={busy} error={error} onClose={() => setRequest(null)} onConfirm={() => { void confirm() }}>
+    {request && !emailPending && (request.action !== 'delete' || tab === 'settings') && <DestructiveConfirmation key={key.current} server={server} action={request.action} protectionChange={request.action === 'change_protection' ? request.protectionChange : undefined} busy={busy} error={error} onClose={() => setRequest(null)} onConfirm={() => { void confirm() }}>
       {request.action === 'replace_primary_ipv4' && <><PrimaryIpv4Summary quote={request.quote} unavailableReason={addressUnavailable} /><PrimaryIpv4Warning /></>}
       {request.action === 'resize' && request.resizePreview && <ResizeEffects preview={request.resizePreview} />}
+      {request.action === 'rebuild' && request.imageLabel && <p>سیستم‌عامل مقصد <bdi>{request.imageLabel}</bdi></p>}
     </DestructiveConfirmation>}
+    {emailPending && (request?.action === 'reset_password' || request?.action === 'delete' && tab === 'settings') &&
+      <OperationEmail intent={{ action: request.action, key: key.current, payload: { serverId: server.id, hostname: server.name } }}
+        execute={confirm} close={() => { setEmailPending(false); setRequest(null) }}>
+        <p>{actionLabels[request.action]} · <bdi>{server.name}</bdi></p>
+        {request.action === 'delete' && <p className="server-danger-note">داده‌های سرور برای همیشه حذف می‌شوند.</p>}
+      </OperationEmail>}
     {secretOperation && <OneTimePassword server={server} operationId={secretOperation} onClose={() => { setSecretOperation(null); refresh() }} />}
   </div>
 }

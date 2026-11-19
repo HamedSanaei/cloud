@@ -47,7 +47,7 @@ export function maskEmail(email: string): string {
   return `${visible}${'*'.repeat(Math.max(3, local.length - visible.length))}@${domain}`
 }
 
-export async function sendEmailOtp(to: string, code: string, purpose: 'login' | 'register' | 'recovery'): Promise<{ developmentCode?: string }> {
+export async function sendEmailOtp(to: string, code: string, purpose: 'login' | 'register' | 'recovery' | 'operation', expiresIn?: number): Promise<{ developmentCode?: string }> {
   const config = getConfig()
   if (config.AUTH_DELIVERY_MODE === 'log') {
     if (isProduction()) throw new ProviderPermanentError('ارسال ایمیل در محیط عملیاتی پیکربندی نشده است')
@@ -59,20 +59,25 @@ export async function sendEmailOtp(to: string, code: string, purpose: 'login' | 
     login: 'کد ورود به پارس سرور',
     register: 'تأیید ایمیل پارس سرور',
     recovery: 'بازیابی رمز عبور پارس سرور',
+    operation: 'کد تأیید عملیات سرور پارس سرور',
   }
   const transport = nodemailer.createTransport({
     host: config.SMTP_HOST,
     port: config.SMTP_PORT,
     secure: config.SMTP_SECURE,
+    requireTLS: !config.SMTP_SECURE && isProduction(),
+    connectionTimeout: 10_000,
+    socketTimeout: 15_000,
     auth: config.SMTP_USER ? { user: config.SMTP_USER, pass: config.SMTP_PASSWORD } : undefined,
   })
+  const validity = `این کد تا ${Math.ceil((expiresIn ?? config.AUTH_OTP_TTL_SECONDS) / 60)} دقیقه معتبر است.`
   try {
     await transport.sendMail({
       from: config.SMTP_FROM,
       to,
       subject: titles[purpose],
-      text: `کد تأیید شما: ${code}\nاین کد تا ${Math.ceil(config.AUTH_OTP_TTL_SECONDS / 60)} دقیقه معتبر است.`,
-      html: `<div dir="rtl" style="font-family:Tahoma,sans-serif"><h2>${titles[purpose]}</h2><p>کد تأیید شما:</p><p style="font-size:30px;letter-spacing:8px;font-weight:bold" dir="ltr">${code}</p><p>این کد تا ${Math.ceil(config.AUTH_OTP_TTL_SECONDS / 60)} دقیقه معتبر است.</p></div>`,
+      text: `کد تأیید شما: ${code}\n${validity}`,
+      html: `<div dir="rtl" style="font-family:Tahoma,sans-serif"><h2>${titles[purpose]}</h2><p>کد تأیید شما:</p><p style="font-size:30px;letter-spacing:8px;font-weight:bold" dir="ltr">${code}</p><p>${validity}</p></div>`,
     })
     return {}
   } catch {

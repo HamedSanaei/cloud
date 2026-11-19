@@ -96,6 +96,7 @@ export async function generateNumber(
 // ---------------------------------------------------------------------------
 // Create order from quote (optionally paying immediately from a wallet)
 // ---------------------------------------------------------------------------
+type OperationAuthorization = import('../auth/operation-email.js').OperationAuthorization
 export interface CreateOrderInput {
   userId: string
   quoteId: string
@@ -104,6 +105,7 @@ export interface CreateOrderInput {
   hostname: string
   idempotencyKey?: string
   expectedTotalRial?: number
+  authorize?: OperationAuthorization
 }
 
 export async function createOrderFromQuote(db: DbClient, input: CreateOrderInput) {
@@ -118,6 +120,7 @@ export async function createOrderFromQuote(db: DbClient, input: CreateOrderInput
       const existing = await tx.query.orders.findFirst({ where: t => eq(t.idempotencyKey, input.idempotencyKey!) })
       if (existing) {
         if (existing.userId !== input.userId) throw new ConflictError('کلید درخواست قبلاً استفاده شده است')
+        await input.authorize?.(tx)
         return { order: existing, created: false }
       }
     }
@@ -132,6 +135,7 @@ export async function createOrderFromQuote(db: DbClient, input: CreateOrderInput
     if (wallet) await assertCreationFunding(tx, {
       userId: input.userId, walletId: wallet.id, totalRial: quote.totalRial, billingInterval: quote.billingInterval,
     })
+    await input.authorize?.(tx)
     // Single-use guarantee: lock the quote row so two concurrent orders can
     // never consume the same quote.
     const lockedQuote = await lockQuote(tx, quote.id)
@@ -254,18 +258,24 @@ export async function createOrderFromQuote(db: DbClient, input: CreateOrderInput
 // ---------------------------------------------------------------------------
 async function payOrderAttempt(
   db: DbClient,
-  input: { userId: string; orderId: string; walletId?: string; idempotencyKey?: string },
+  input: { userId: string; orderId: string; walletId?: string; idempotencyKey?: string; authorize?: OperationAuthorization },
 ) {
   const order = await db.query.orders.findFirst({ where: (t) => eq(t.id, input.orderId) })
   if (!order || order.userId !== input.userId) throw new NotFoundError('سفارش یافت نشد')
-  if (order.status === 'paid') return order // already paid — idempotent
+  if (order.status === 'paid') {
+    if (input.authorize) await db.transaction(input.authorize)
+    return order
+  }
   if (order.status !== 'awaiting_payment') throw new ConflictError('این سفارش قابل پرداخت نیست')
 
   const wallet = await getWallet(db, input.userId, input.walletId)
 
   const result = await db.transaction(async (tx) => {
     const [txOrder] = await tx.select().from(orders).where(eq(orders.id, input.orderId)).for('update')
-    if (txOrder?.status === 'paid') return txOrder
+    if (txOrder?.status === 'paid') {
+      await input.authorize?.(tx)
+      return txOrder
+    }
     if (!txOrder || txOrder.status !== 'awaiting_payment') throw new ConflictError('این سفارش قابل پرداخت نیست')
     if (txOrder.billingInterval === 'HOURLY') {
       const quote = txOrder.quoteId ? await tx.query.quotes.findFirst({ where: t => eq(t.id, txOrder.quoteId!) }) : null
@@ -273,6 +283,7 @@ async function payOrderAttempt(
     }
     await assertProviderPurchaseAllowed(tx, txOrder.provider, input.userId)
     await assertCreationFunding(tx, { userId: input.userId, walletId: wallet.id, totalRial: txOrder.totalRial, billingInterval: txOrder.billingInterval })
+    await input.authorize?.(tx)
 
     await applyWalletTransaction(tx, input.userId, wallet.id, {
       amountRial: txOrder.totalRial,
@@ -358,7 +369,7 @@ export async function markOrderError(db: DbClient, orderId: string, error: strin
 }
 
 /** A rejected wallet payment is definitive; timeouts/unknown provider results are not. */
-export async function payOrder(db: DbClient, input: { userId: string; orderId: string; walletId?: string; idempotencyKey?: string }) {
+export async function payOrder(db: DbClient, input: { userId: string; orderId: string; walletId?: string; idempotencyKey?: string; authorize?: OperationAuthorization }) {
   try { return await payOrderAttempt(db, input) }
   catch (error) {
     if (error instanceof AppError && error.code === 'insufficient_funds') await db.transaction(async tx => {
