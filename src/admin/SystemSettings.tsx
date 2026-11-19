@@ -23,7 +23,7 @@ const rial = (value: number) => new Intl.NumberFormat('fa-IR').format(value) + '
 const countLabel: Record<string,string> = { users: 'کاربران', tickets: 'تیکت‌ها', wallets: 'کیف پول‌ها', wallet_transactions: 'گردش‌های مالی', orders: 'سفارش‌ها', order_items: 'اقلام سفارش', order_events: 'رویدادهای سفارش', invoices: 'فاکتورها', invoice_items: 'اقلام فاکتور', subscriptions: 'اشتراک‌ها', subscription_events: 'رویدادهای اشتراک', renewal_attempts: 'تلاش‌های تمدید', servers: 'سرورها', provider_operations: 'عملیات سرویس‌دهنده', wallet_payments: 'پرداخت‌ها', gateway_credentials: 'نسخه‌های مرچنت', admin_adjustments: 'تعدیل‌های مالی', pricing_rules: 'قواعد قیمت‌گذاری' }
 const label = (value: string) => ({ active: 'فعال', disabled: 'غیرفعال', pending: 'در انتظار', backup: 'پشتیبان', upload: 'فایل بارگذاری‌شده', rehearsal: 'آزمایش بازیابی', restore: 'بازیابی', completed: 'تکمیل‌شده', failed: 'ناموفق', running: 'در حال اجرا', queued: 'در صف', awaiting_approval: 'در انتظار تکمیل', interrupted: 'قطع‌شده؛ نیازمند بررسی', rolled_back: 'بازگردانی ایمن انجام شد', deleted: 'حذف‌شده', preflight: 'پیش‌بررسی', dumping: 'تهیه پشتیبان', encrypted: 'رمزگذاری‌شده', authenticated: 'اصالت تأیید شد', verified: 'صحت‌سنجی موفق', pre_backup: 'پشتیبان پیش از بازیابی', restoring: 'در حال بازیابی', rollback: 'بازگردانی ایمن', retention_expired: 'پایان دوره نگهداری' } as Record<string,string>)[value] || value
 function date(value: string) { return new Date(value).toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' }) }
-interface Capabilities { allowed: boolean; primaryIpv4Pricing?: boolean; hetznerMargin?: boolean; encryptionReady: boolean; backupsEnabled: boolean; restoreEnabled: boolean; maxUploadBytes: number; dualApprovalRial: number }
+interface Capabilities { allowed: boolean; encryptionReady: boolean; backupsEnabled: boolean; restoreEnabled: boolean; maxUploadBytes: number; dualApprovalRial: number }
 function SimpleAdminActions({ children }: { children: ReactNode }) {
   const [error, setError] = useState('')
   const inFlight = useRef(false)
@@ -56,8 +56,8 @@ export function SystemSettingsLayout() {
       { to: 'sms', label: 'پیامک‌های پارس‌گرین', icon: Settings2 }, { to: 'gateway', label: 'درگاه‌ها', icon: CreditCard }, { to: 'logs', label: 'لاگ‌ها', icon: FileClock },
       { to: 'backups', label: 'پشتیبان‌گیری و بازیابی', icon: Database }, { to: 'finance', label: 'عملیات مالی کاربران', icon: WalletCards },
       { to: 'iran-tariffs', label: 'تعرفهٔ سرور ایران', icon: Settings2 },
-      ...(capabilities.data?.primaryIpv4Pricing ? [{ to: 'primary-ipv4', label: 'تعرفهٔ تعویض IPv4', icon: Settings2 }] : []),
-      ...(capabilities.data?.hetznerMargin ? [{ to: 'hetzner-margin', label: 'تنظیم سود سرورهای هتزنر', icon: Settings2 }] : []),
+      { to: 'primary-ipv4', label: 'تعرفهٔ تعویض IPv4', icon: Settings2 },
+      { to: 'hetzner-margin', label: 'تنظیم سود سرورهای هتزنر', icon: Settings2 },
       { to: 'outbound', label: 'شبکه و پراکسی خروجی', icon: Settings2 },
       { to: 'admin-roles', label: 'نقش مدیران', icon: Settings2 },
     ].map(({ to, label, icon: Icon }) => <NavLink key={to} to={to}><Icon size={19} />{label}</NavLink>)}</nav>}
@@ -130,11 +130,6 @@ export function SystemIranTariffs() {
 }
 type IpPricing = { feeRial: number; history: Array<{ actorId: string; createdAt: string; metadata: { previousRial: number; feeRial: number } }> }
 export function SystemPrimaryIpv4Pricing() {
-  const capabilities = useOutletContext<Capabilities>()
-  return capabilities.primaryIpv4Pricing ? <PrimaryIpv4PricingForm /> : <p role="alert">این تنظیم فقط برای سوپرادمین مجاز است.</p>
-}
-
-function PrimaryIpv4PricingForm() {
   const path = '/primary-ipv4-pricing/hetzner'
   const query = useApiQuery(() => get<IpPricing>(path))
   const [draft, setDraft] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('')
@@ -209,12 +204,11 @@ function RenewalAlerts() {
   </Card>
 }
 export function SystemLogs() {
-  const capabilities = useOutletContext<Capabilities>()
   const [page, setPage] = useState(1), [level, setLevel] = useState(''), [service, setService] = useState(''), [event, setEvent] = useState(''), [actorId, setActorId] = useState(''), [search, setSearch] = useState(''), [from, setFrom] = useState(''), [to, setTo] = useState('')
   const [detail, setDetail] = useState<LogEvent | null>(null), [notice, setNotice] = useState('')
   const sensitive = useSensitive(), [filters, setFilters] = useState<Record<string, string | number>>({ level: '', service: '', event: '', actorId: '', search: '' })
   const query = useApiQuery(() => get<Page<LogEvent>>('/logs?' + new URLSearchParams(Object.entries({ ...filters, page, limit: 20 }).map(([k, v]) => [k, String(v)]))), [page, filters])
-  return <div className="page-stack">{capabilities?.primaryIpv4Pricing && <RenewalAlerts />}<Card><h2>رویدادهای سیستم و Audit</h2><p>زمان‌ها با منطقهٔ Asia/Tehran نمایش داده می‌شوند. اطلاعات محرمانه و متن خام خطاها حذف شده‌اند؛ جست‌وجو بر اساس نام رخداد یا شناسهٔ درخواست است.</p>
+  return <div className="page-stack"><RenewalAlerts /><Card><h2>رویدادهای سیستم و Audit</h2><p>زمان‌ها با منطقهٔ Asia/Tehran نمایش داده می‌شوند. اطلاعات محرمانه و متن خام خطاها حذف شده‌اند؛ جست‌وجو بر اساس نام رخداد یا شناسهٔ درخواست است.</p>
     <form className="system-filter" onSubmit={e => { e.preventDefault(); setPage(1); setFilters({ level, service, event, actorId, search, ...(from ? { from: new Date(from).toISOString() } : {}), ...(to ? { to: new Date(to).toISOString() } : {}) }) }}>
       <Input label="جست‌وجو" value={search} onChange={e => setSearch(e.target.value)} /><Input label="نوع رخداد" value={event} onChange={e => setEvent(e.target.value)} /><Input label="شناسهٔ کاربر / مدیر" value={actorId} onChange={e => setActorId(e.target.value)} />
       <Select label="شدت" value={level} onChange={e => setLevel(e.target.value)}><option value="">همه</option><option value="info">اطلاعات</option><option value="warn">هشدار</option><option value="error">خطا</option><option value="critical">خطرناک</option></Select><Select label="سرویس" value={service} onChange={e => setService(e.target.value)}><option value="">همه</option>{['audit', 'billing', 'api', 'worker', 'cloud-api', 'cloud-server', 'cloud-worker', 'cloud-migrate'].map(s => <option key={s}>{s}</option>)}</Select>
@@ -259,6 +253,7 @@ export function SystemBackups() {
   const [notice, setNotice] = useState(''), [file, setFile] = useState<File | null>(null), [detail, setDetail] = useState<Backup | null>(null), [phrase, setPhrase] = useState('')
   if (!capabilities.backupsEnabled) return <Card><h2>پشتیبان‌گیری نیاز به تنظیم میزبان دارد</h2><p>اپراتور باید کلید مستقل Backup، شناسهٔ سامانه، ابزارهای PostgreSQL و فضای خصوصی را آماده و SYSTEM_BACKUP_ENABLED را فعال کند. Restore کلید فعال‌سازی جداگانه دارد.</p></Card>
   return <div className="page-stack"><Card><h2>پشتیبان‌گیری خصوصی PostgreSQL</h2><p>فایل‌ها رمزگذاری‌شده و خارج از Web Root هستند. دانلود فقط با تأیید یک‌بارمصرف و کوتاه‌مدت ممکن است؛ کلیدهای خارجی باید جداگانه نگهداری شوند.</p>
+    {!capabilities.restoreEnabled && <p role="status">برای اجرای بازیابی، اپراتور باید SYSTEM_RESTORE_ENABLED را روی میزبان فعال کند.</p>}
     <div className="system-actions"><Button onClick={() => sensitive('backup.backup', { confirm: true }, 'ساخت Backup رمزگذاری‌شده از دیتابیس فعال؛ هیچ موجودی یا سفارشی تغییر نمی‌کند.', async proof => { const job = await post<Backup>('/backups', { confirm: true, proof }); setNotice(`عملیات ${job.id} ثبت شد.`); query.refetch() })}>ساخت Backup</Button><Button variant="secondary" onClick={query.refetch}>به‌روزرسانی وضعیت</Button></div>
     <label className="field"><span>بارگذاری Backup همین سامانه (.psb)</span><input type="file" accept=".psb" onChange={e => setFile(e.target.files?.[0] || null)} /></label>
     <Button variant="secondary" disabled={!file} onClick={async () => { if (!file) return; try { const caps = await get<Capabilities>('/capabilities'); if (file.size > caps.maxUploadBytes) throw new Error('فایل بیش از سقف مجاز است.'); const bytes = await file.arrayBuffer(), checksum = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))).map(b => b.toString(16).padStart(2, '0')).join(''); sensitive('backup.upload', { checksum, size: bytes.byteLength, confirm: true }, `بارگذاری ${file.name} (${file.size} بایت)؛ فقط بررسی اصالت، بدون Restore.`, async proof => { await systemBinary(base + '/backups/upload', { method: 'POST', body: bytes, headers: { 'x-system-proof': proof } }); setFile(null); query.refetch() }) } catch (e) { setNotice(errorText(e)) } }}>بررسی و بارگذاری</Button>

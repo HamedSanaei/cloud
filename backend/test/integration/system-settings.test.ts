@@ -55,9 +55,9 @@ describe.skipIf(!dbAvailable)('store system security and real ledger integration
   }
   it('bootstraps an independently selected administrator and gives two active Super Admins identical access', async () => {
     const owner = await account('admin'), second = await account('admin'), user = await account('user')
-    await expect(bootstrapSuperAdmin(ctx.db, user.user.id)).rejects.toMatchObject({ status: 409 })
-    await bootstrapSuperAdmin(ctx.db, owner.user.id)
-    await expect(bootstrapSuperAdmin(ctx.db, second.user.id)).rejects.toMatchObject({ status: 409 })
+    await expect(bootstrapSuperAdmin(ctx.db, user.user.email)).rejects.toMatchObject({ status: 409 })
+    await bootstrapSuperAdmin(ctx.db, owner.user.email)
+    await expect(bootstrapSuperAdmin(ctx.db, second.user.email)).rejects.toMatchObject({ status: 409 })
     const roles = base + '/admin-roles'
     const payload = { id: second.user.id, role: 'super_admin', password, totp: currentTotp(owner.secret), confirm: true }
     expect((await send(second, 'POST', roles, payload)).statusCode).toBe(403)

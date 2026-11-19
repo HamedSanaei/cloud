@@ -17,7 +17,10 @@ beforeEach(() => {
     let data = checkoutFixture(path)
     if (path === '/auth/me' && allowed) data = { data: { ...data.data, role: 'super_admin' } }
     if (path === '/admin/settings/capabilities') data = { data: { ...data.data, allowed, encryptionReady } }
+    if (path === '/admin/settings/hetzner-margin') data = { data: { enabled: true, markupPercent: '25', markupFixedRial: 0,
+      taxPercent: '0', version: '2026-11-19T12:00:00.000Z', updatedBy: null, history: [] } }
     if (path === '/admin/settings/admin-roles') data = { data: [{ id: serverId, email: 'operator@example.test', role: 'admin' }] }
+    if (path === '/admin/settings/renewal-alerts') data = { data: [] }
     if (path === '/admin/settings/authorize') data = { data: { proof: 'f07b9500-414e-4000-8000-000000000004' } }
     if (path === '/admin/settings/finance/adjustments' && method === 'POST') data = { data: { id: 'fixture-operation', status: 'completed', afterRial: 5500000 } }
     return new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } })
@@ -54,6 +57,16 @@ describe('store administration routes and explicit confirmations', () => {
     expect(await screen.findByRole('heading', { name: /Audit/ })).toBeTruthy()
     expect(await screen.findByText(/STORE_SECRET_KEY/)).toBeTruthy()
     expect(requests.some(r => r.path.startsWith('/admin/settings/logs'))).toBe(true)
+  })
+  it('uses the shared settings permission for margin and IPv4 tabs', async () => {
+    encryptionReady = false
+    open('/admin/settings/hetzner-margin')
+    expect(await screen.findByRole('heading', { name: 'تنظیم سود سرورهای هتزنر' })).toBeTruthy()
+    const tabs = within(screen.getByRole('navigation', { name: 'بخش‌های تنظیمات فروشگاه' }))
+    for (const label of ['درگاه‌ها', 'شبکه و پراکسی خروجی', 'تعرفهٔ تعویض IPv4', 'پشتیبان‌گیری و بازیابی', 'نقش مدیران']) {
+      expect(tabs.getByRole('link', { name: label })).toBeTruthy()
+    }
+    expect(requests.some(request => request.path === '/admin/settings/hetzner-margin')).toBe(true)
   })
   it('filters system logs by critical severity', async () => {
     open('/admin/settings/logs')

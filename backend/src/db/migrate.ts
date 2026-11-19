@@ -22,6 +22,31 @@ export async function assertWalletConsolidationApproved(client: Pick<PoolClient,
 
 // Stable, database-scoped key shared by CLI, API and worker.
 const migrationLock = [1953457774, 1835624306] as const
+const legacySuperAdminBackfill = 'auth.legacy_super_admin_backfill'
+
+async function backfillLegacySuperAdmin(client: PoolClient) {
+  // The same role lock as the interactive recovery path. The client is destroyed before startup completes.
+  await client.query('select pg_advisory_lock(724519, 1)')
+  await client.query(`with pending as (
+    select key from settings where key = $1 and value = '"pending"'::jsonb
+  ), legacy as (
+    select id from users where role = 'admin' and status = 'active' and exists (select 1 from pending)
+  ), promoted as (
+    update users set role = 'super_admin', updated_at = current_timestamp
+    where id in (select id from legacy) and (select count(*) from legacy) = 1
+      and not exists (select 1 from users where role = 'super_admin' and status = 'active')
+    returning id
+  ), audited as (
+    insert into audit_logs (action, target_type, target_id, metadata)
+    select 'admin.super_admin_bootstrapped', 'user', id,
+      jsonb_build_object('before', 'admin', 'after', 'super_admin', 'source', 'legacy_role_migration') from promoted
+    returning id
+  )
+  update settings set value = to_jsonb(case when exists (select 1 from audited) then 'promoted'::text
+    when exists (select 1 from users where role = 'super_admin' and status = 'active') then 'already_configured'
+    when (select count(*) from legacy) > 1 then 'ambiguous' else 'no_active_admin' end), updated_at = current_timestamp
+  where key in (select key from pending)`, [legacySuperAdminBackfill])
+}
 
 /**
  * Applies committed SQL migrations (backend/drizzle/*.sql).
@@ -59,6 +84,7 @@ export async function migrate(connectionString?: string): Promise<void> {
       await client.query("select set_config('parserver.wallet_consolidation_approved',$1,false)",
         [String(getConfig().NODE_ENV !== 'production' || process.env.WALLET_CONSOLIDATION_APPROVED === 'true')])
       await drizzleMigrate(drizzle(client), { migrationsFolder })
+      await backfillLegacySuperAdmin(client)
     } finally {
       // Destroy this session even on success: releasing a session lock this way
       // cannot leak a held lock to a pool borrower, even after a failed rollback.

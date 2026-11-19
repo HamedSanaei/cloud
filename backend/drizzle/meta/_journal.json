@@ -120,6 +120,13 @@
       "when": 1795121941469,
       "tag": "0016_hetzner-traffic",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1795125333366,
+      "tag": "0017_restore_legacy_super_admin",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,7 @@
 // HTTP/HTML verification, not a headless browser. Only disposable labeled fixtures.
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -62,10 +62,37 @@ try {
   assert.equal(redirect.status, 308); assert.equal(redirect.headers.get('location'), 'https://parserver.ir/hetzner?period=hourly&x=one%20two')
   const http = await fetch(origin + '/hetzner?x=one%20two', { headers: { 'x-forwarded-proto': 'http' }, redirect: 'manual' })
   assert.equal(http.status, 308); assert.equal(http.headers.get('location'), 'https://parserver.ir/hetzner?x=one%20two')
-  for (const uri of ['/dashboard', '/tickets', '/login', '/register', '/servers/create?offer=fixture-plan&period=hourly', '/servers/fixture-id', '/admin/settings/sms', '/admin/settings/hetzner-margin', '/auth/callback']) {
+  for (const uri of ['/dashboard', '/tickets', '/login', '/register', '/servers/create?offer=fixture-plan&period=hourly', '/servers/fixture-id', '/admin/settings/sms', '/admin/settings/hetzner-margin', '/admin/settings/admin-roles', '/auth/callback']) {
     const response = await fetch(origin + uri)
     assert.equal(response.status, 200, uri); assert.ok(response.headers.get('x-robots-tag')?.includes('noindex'), uri)
     assert.ok((await response.text()).includes('content="noindex,follow"'), uri)
+  }
+  const sheet = await fetch(origin + '/kalameh/home.css')
+  const css = await sheet.text()
+  assert.equal(sheet.status, 200)
+  assert.match(sheet.headers.get('content-type') ?? '', /^text\/css\b/)
+  const font = await fetch(origin + '/kalameh/kalameh-bold.woff2')
+  if (process.env.PUBLIC_SMOKE_LICENSED === '1') {
+    assert.equal(font.status, 200)
+    assert.match(font.headers.get('content-type') ?? '', /^font\/woff2\b/)
+    const bytes = Buffer.from(await font.arrayBuffer())
+    assert.equal(bytes.subarray(0, 4).toString(), 'wOF2')
+    const folder = '/kalameh/' + createHash('sha256').update(bytes).digest('hex')
+    assert.match(css, /@font-face[\s\S]*font-weight: 700;[\s\S]*font-display: swap;/)
+    assert.ok(css.includes(`${folder}/kalameh-bold.woff2`))
+    const versionedCss = await fetch(origin + folder + '/home.css')
+    assert.equal(versionedCss.status, 200)
+    assert.equal(await versionedCss.text(), css)
+    const versionedFont = await fetch(origin + folder + '/kalameh-bold.woff2')
+    assert.equal(versionedFont.status, 200)
+    assert.deepEqual(Buffer.from(await versionedFont.arrayBuffer()), bytes)
+    const home = await (await fetch(origin + '/')).text()
+    assert.ok(home.includes(`rel="preload" href="${folder}/kalameh-bold.woff2"`))
+    assert.ok(home.includes(`href="${folder}/home.css"`))
+    assert.ok(!(await (await fetch(origin + '/hetzner')).text()).includes('/kalameh/'))
+  } else {
+    assert.doesNotMatch(css, /@font-face/)
+    assert.equal(font.status, 404)
   }
   for (const uri of ['/does-not-exist-seo-check-2026', '/hetzner/fake', '/Dashboard', '/admin/fake', '/login/fake', '/assets/missing.js', '/missing.ico', '/home.html', '/hetzner.html', '/.vite/manifest.json']) {
     const response = await fetch(origin + uri)

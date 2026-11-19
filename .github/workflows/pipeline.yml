@@ -153,6 +153,19 @@ jobs:
       - name: Verify public SEO, redirects, 404s and SSR pricing in isolation
         run: node test/public-http-smoke.mjs
 
+      - name: Verify licensed-mode build with an open-font fixture
+        run: |
+          set -euo pipefail
+          if KALAMEH_FONT_REQUIRED=1 node build-tools/prerender-home.mjs > "$RUNNER_TEMP/kalameh-missing.log" 2>&1; then
+            echo 'A required font build must reject missing input' >&2
+            exit 1
+          fi
+          grep -F 'This release requires KALAMEH_FONT_FILE' "$RUNNER_TEMP/kalameh-missing.log" >/dev/null
+          fixture="$PWD/node_modules/@fontsource/vazirmatn/files/vazirmatn-arabic-700-normal.woff2"
+          docker buildx build --load --tag tofan-cloud:ci-font --build-arg KALAMEH_FONT_REQUIRED=1 \
+            --secret "id=kalameh_font,src=$fixture" .
+          PUBLIC_SMOKE_IMAGE=tofan-cloud:ci-font PUBLIC_SMOKE_LICENSED=1 node test/public-http-smoke.mjs
+
       - name: Smoke-test the built image
         run: |
           set -euo pipefail
@@ -478,6 +491,34 @@ jobs:
           chmod 600 "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts"
           ssh-keygen -y -f "$HOME/.ssh/deploy_key" >/dev/null
 
+      - name: Set up Docker Buildx for the licensed web release
+        if: vars.KALAMEH_WEB_FONT_REQUIRED == 'true'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and deliver the licensed web image over SSH
+        id: licensed-web
+        if: vars.KALAMEH_WEB_FONT_REQUIRED == 'true'
+        env:
+          FONT_B64: ${{ secrets.KALAMEH_WEB_BOLD_WOFF2_B64 }}
+          FONT_B64_TAIL: ${{ secrets.KALAMEH_WEB_BOLD_WOFF2_B64_TAIL }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ -n "$FONT_B64" ]] || { echo 'The licensed release requires KALAMEH_WEB_BOLD_WOFF2_B64' >&2; exit 1; }
+          font_file="$(mktemp "$RUNNER_TEMP/kalameh.XXXXXX")"
+          trap 'rm -f -- "$font_file"' EXIT
+          printf '%s%s' "$FONT_B64" "$FONT_B64_TAIL" | base64 --decode > "$font_file"
+          unset FONT_B64 FONT_B64_TAIL
+          image="parserver-web-licensed:sha-${RELEASE_SHA}"
+          # The secret is available only to this build. Do not publish the image or its cache.
+          docker buildx build --load --platform linux/amd64 -t "$image" \
+            --build-arg IMAGE_REVISION="$RELEASE_SHA" --build-arg KALAMEH_FONT_REQUIRED=1 \
+            --secret "id=kalameh_font,src=$font_file" .
+          docker save "$image" | gzip -1 | ssh -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -i "$HOME/.ssh/deploy_key" \
+            -p "${DEPLOY_PORT:-22}" "${DEPLOY_USER}@${DEPLOY_HOST}" 'set -o pipefail; gzip -dc | docker load'
+          printf 'ref=%s\n' "$image" >> "$GITHUB_OUTPUT"
+
       - name: Deliver the verified recovery and release bundle
         run: |
           set -euo pipefail
@@ -521,7 +562,7 @@ jobs:
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_ACTOR: ${{ github.actor }}
-          IMAGE: ${{ needs.build-push.outputs.image }}
+          IMAGE: ${{ steps.licensed-web.outputs.ref || needs.build-push.outputs.image }}
           API_IMAGE: ${{ needs.build-push.outputs.api_image }}
           SKIP: ${{ inputs.skip_public_healthcheck }}
         run: |

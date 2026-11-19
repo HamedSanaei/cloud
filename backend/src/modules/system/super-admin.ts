@@ -40,11 +40,11 @@ export function changeSuperAdmin(db: DbClient, actor: SessionUser, input: z.infe
   })
 }
 
-export function bootstrapSuperAdmin(db: DbClient, verifiedAdminId: string) {
+export function bootstrapSuperAdmin(db: DbClient, verifiedAdminEmail: string) {
   return db.transaction(async tx => {
     await lockRoleChanges(tx)
     if (await tx.$count(users, activeSuperAdmin)) throw new ConflictError('An active Super Admin already exists. Use the admin panel.')
-    const [target] = await tx.select().from(users).where(eq(users.id, verifiedAdminId)).for('update')
+    const [target] = await tx.select().from(users).where(eq(users.email, verifiedAdminEmail)).for('update')
     if (target?.role !== 'admin' || target.status !== 'active') throw new ConflictError('Choose an independently verified active administrator.')
     await tx.update(users).set({ role: 'super_admin', updatedAt: new Date() }).where(eq(users.id, target.id))
     await writeAudit(tx, { action: 'admin.super_admin_bootstrapped', targetType: 'user', targetId: target.id,
