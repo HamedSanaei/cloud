@@ -1,3 +1,4 @@
+import { isSuperAdmin } from '../../contracts/account-role.js'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm'
 import type { DbClient, DbOrTx } from '../../db/index.js'
@@ -5,7 +6,6 @@ import { authChallenges, notifications, oauthAccounts, orders, platformLinks, se
 import { ConflictError, ForbiddenError, NotFoundError } from '../../lib/errors.js'
 import { writeAudit } from '../audit/service.js'
 import { hashPassword, type SessionUser } from '../auth/service.js'
-import { isPricingSuperAdmin } from '../system/security.js'
 
 export const isErasedAccount = (email: string) => email.endsWith('@deleted.parserver.invalid')
 export const liveServer = sql`${servers.status} <> 'terminated' and ${servers.terminatedAt} is null and ${servers.terminationState} is distinct from 'terminated'`
@@ -25,12 +25,12 @@ async function deletionBlock(db: DbOrTx, id: string) {
 }
 
 export async function userDataActions(db: DbClient, actor: SessionUser, target: typeof users.$inferSelect) {
-  if (!isPricingSuperAdmin(actor) || actor.id === target.id || target.role !== 'user' || isErasedAccount(target.email)) return null
+  if (!isSuperAdmin(actor) || actor.id === target.id || target.role !== 'user' || isErasedAccount(target.email)) return null
   return { canBlock: target.status !== 'disabled', deleteBlocked: await deletionBlock(db, target.id) }
 }
 
 export async function manageUserData(db: DbClient, actor: SessionUser, id: string, action: 'block' | 'delete_data', reason: string) {
-  if (!isPricingSuperAdmin(actor) || actor.id === id) throw new ForbiddenError('این عملیات فقط برای سوپرادمین مجاز است')
+  if (!isSuperAdmin(actor) || actor.id === id) throw new ForbiddenError('این عملیات فقط برای سوپرادمین مجاز است')
   const passwordHash = action === 'delete_data' ? await hashPassword(randomUUID()) : undefined
   return db.transaction(async tx => {
     // Serialize account mutations with session issuance, billing and management.

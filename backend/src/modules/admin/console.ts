@@ -1,3 +1,4 @@
+import { isSuperAdmin } from '../../contracts/account-role.js'
 import { staffTicketAction } from '../tickets/service.js'
 /**
  * Admin console backed by the website PostgreSQL DB, with audited operator actions.
@@ -12,7 +13,7 @@ import { users, wallets, orders, servers, providers, tickets } from '../../db/sc
 import { ticketToDto, transactionToDto } from '../../lib/dto.js'
 import { getConfig } from '../../config.js'
 import { syncHetznerInventory } from '../providers/hetzner/inventory.js'
-import { requireAdmin } from '../../http/auth.js'
+import { requireAdmin, requireSuperAdmin } from '../../http/auth.js'
 import { parse } from '../../http/validate.js'
 import { NotFoundError, ConflictError } from '../../lib/errors.js'
 import { rialToToman } from '../../lib/money.js'
@@ -23,7 +24,6 @@ import { findBlockingManagementOperation, isOrphanedPowerOperation, managementDt
 import { inspectLegacyPowerOperation, resolveLegacyPowerOperation } from '../servers/power-reconciliation.js'
 import { isErasedAccount, manageUserData, userDataActions } from './user-data.js'
 import { internalEmail } from '../auth/email-address.js'
-import { isPricingSuperAdmin } from '../system/security.js'
 import { pendingOrderStatuses, readAdminOverview, readOrderFinancialEvidence } from './overview.js'
 
 const paging = z.object({
@@ -122,7 +122,7 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
   })
 
   app.patch('/providers/:id', async request => {
-    const admin = requireAdmin(request)
+    const admin = requireSuperAdmin(request)
     const { id } = parse(z.object({ id: z.enum(['hetzner', 'leaseweb']) }), request.params)
     const { enabled } = parse(z.object({ enabled: z.boolean() }).strict(), request.body)
     await ctx.db.transaction(async tx => {
@@ -137,7 +137,7 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
   })
 
   app.get('/overview', async (request, reply) => {
-    const { recentOrders, ...overview } = await readAdminOverview(ctx.db, isPricingSuperAdmin(requireAdmin(request)))
+    const { recentOrders, ...overview } = await readAdminOverview(ctx.db, isSuperAdmin(requireAdmin(request)))
     const names = await userNames(ctx, recentOrders.map(({ order }) => order.userId))
     reply.header('Cache-Control', 'private, no-store')
     return { data: {
@@ -264,7 +264,7 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
       ctx.db.query.orderItems.findMany({ where: t => eq(t.orderId, id) }),
       ctx.db.query.orderEvents.findMany({ where: t => eq(t.orderId, id), orderBy: t => [desc(t.createdAt)] }),
       ctx.db.query.invoices.findFirst({ where: t => eq(t.orderId, id) }),
-      isPricingSuperAdmin(requireAdmin(request)) ? readOrderFinancialEvidence(ctx.db, id) : null,
+      isSuperAdmin(requireAdmin(request)) ? readOrderFinancialEvidence(ctx.db, id) : null,
     ])
     return { data: {
       order: orderDto(order), user: user ? userDto(user) : null,
@@ -312,13 +312,14 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
     const s = await ctx.db.query.servers.findFirst({ where: t => eq(t.id, id) })
     if (!s) throw new NotFoundError('سرور یافت نشد')
     const owner = await ctx.db.query.users.findFirst({ where: t => eq(t.id, s.userId) })
-    const operation = s.provider === 'hetzner' ? await findBlockingManagementOperation(ctx.db, s.id) : null
+    const operation = isSuperAdmin(requireAdmin(request)) && s.provider === 'hetzner' ? await findBlockingManagementOperation(ctx.db, s.id) : null
     return { data: { server: serverDto(s), owner: owner ? userDto(owner) : null,
       legacyPowerOperation: operation && isOrphanedPowerOperation(operation) ? managementDto(operation) : null } }
   })
 
   const operationParams = idParam.extend({ operationId: z.string().uuid() })
   app.get('/servers/:id/legacy-power/:operationId', { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async (request, reply) => {
+    requireSuperAdmin(request)
     const { id, operationId } = parse(operationParams, request.params)
     const server = await ctx.db.query.servers.findFirst({ where: t => eq(t.id, id) })
     const operation = await ctx.db.query.providerOperations.findFirst({ where: t => and(eq(t.id, operationId), eq(t.referenceId, id)) })
@@ -328,7 +329,7 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
     return { data: { state: view.state, candidates } }
   })
   app.post('/servers/:id/legacy-power/:operationId', { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async request => {
-    const admin = requireAdmin(request)
+    const admin = requireSuperAdmin(request)
     const { id, operationId } = parse(operationParams, request.params)
     const input = parse(z.object({ actionId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), note: z.string().trim().min(1).max(500) }).strict(), request.body)
     const server = await ctx.db.query.servers.findFirst({ where: t => eq(t.id, id) })

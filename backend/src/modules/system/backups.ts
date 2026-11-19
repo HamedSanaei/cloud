@@ -49,7 +49,7 @@ async function snapshot(client: PoolClient): Promise<Snapshot> {
   const schemaHead = String((await client.query('select max(created_at) as head from drizzle.__drizzle_migrations')).rows[0].head)
   const counts: Record<string, number> = {}, hash = createHash('sha256')
   // Read under a single exported repeatable-read snapshot when backing up.
-  for (const table of ['sms_preferences', 'sms_outbox', 'service_incidents', 'ticket_replies', 'users', 'tickets', 'wallets', 'wallet_transactions', 'orders', 'order_items', 'order_events', 'invoices', 'invoice_items', 'subscriptions', 'subscription_events', 'renewal_attempts', 'servers', 'provider_operations', 'wallet_payments', 'gateway_credentials', 'admin_adjustments', 'pricing_rules']) {
+  for (const table of ['sms_preferences', 'sms_outbox', 'service_incidents', 'ticket_replies', 'users', 'tickets', 'wallets', 'wallet_transactions', 'orders', 'order_items', 'order_events', 'invoices', 'invoice_items', 'subscriptions', 'subscription_events', 'renewal_attempts', 'servers', 'hetzner_traffic_periods', 'provider_operations', 'wallet_payments', 'gateway_credentials', 'admin_adjustments', 'pricing_rules']) {
     // Authorizing recovery creates sessions. Their permanently disabled login
     // notices have no sending side effect, just like transient session records.
     // Every preference and every pending/sending/accepted/unknown SMS still

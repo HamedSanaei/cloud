@@ -1,3 +1,4 @@
+import { isActiveAdmin, isSuperAdmin } from '../contracts/account-role.js'
 import type { FastifyRequest } from 'fastify'
 import type { SessionUser } from '../modules/auth/service.js'
 import { ForbiddenError, UnauthorizedError } from '../lib/errors.js'
@@ -24,7 +25,13 @@ export function requireUser(request: FastifyRequest): SessionUser {
 
 export function requireAdmin(request: FastifyRequest): SessionUser {
   const user = requireUser(request)
-  if (user.role !== 'admin') throw new ForbiddenError('این عملیات نیاز به دسترسی مدیر دارد')
+  if (!isActiveAdmin(user)) throw new ForbiddenError('این عملیات نیاز به دسترسی مدیر دارد')
+  return user
+}
+
+export function requireSuperAdmin(request: FastifyRequest): SessionUser {
+  const user = requireUser(request)
+  if (!isSuperAdmin(user)) throw new ForbiddenError('این عملیات به دسترسی سوپرادمین فعال نیاز دارد.')
   return user
 }
 

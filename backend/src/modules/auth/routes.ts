@@ -1,3 +1,4 @@
+import { isActiveAdmin } from '../../contracts/account-role.js'
 import { enqueueSms, deliverAuthSms } from '../notifications/sms.js'
 import { randomBytes } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
@@ -392,7 +393,7 @@ export const registerAuthRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async
     const user = await db.query.users.findFirst({ where: (t) => eq(t.id, auth.id) })
     if (!user) throw new BadRequestError('کاربر یافت نشد')
     await verifyPrimaryCredentials(db, { email: user.email, password: input.password })
-    if (user.role === 'admin' && user.status === 'active' && user.twoFactorEnabled &&
+    if (isActiveAdmin(user) && user.twoFactorEnabled &&
         (!input.code || !user.totpSecretEncrypted || !verifyTotp(decryptTotpSecret(user.totpSecretEncrypted), input.code))) {
       throw new ForbiddenError('برای غیرفعال کردن تأیید امنیتی مدیر سیستم، کد فعلی برنامه نیز الزامی است.')
     }

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { embeddedPrices, hetznerTariffHeading, isPublicHomePrices, publicLocation, renderHomeTariffs, renderTariffSections, tariffCountryCode, tariffCountryName, tariffFlagEmoji, tariffFlagImage, type PublicHomePrices, type TariffScope } from '../../backend/src/contracts/home-tariffs'
-import type { TariffSort } from '../../backend/src/contracts/home-tariffs'
+import { defaultTariffSort, type TariffSort } from '../../backend/src/contracts/home-tariffs'
 
 export const fallbackTariffs = renderHomeTariffs(null, null)
 const sortOptions = [
@@ -54,7 +54,7 @@ export function HomeTariffs({ initialHtml, scope = 'all' }: { initialHtml?: stri
   const [warning, setWarning] = useState('')
   const [expired, setExpired] = useState(false)
   const [{ country, location }, setFilters] = useState({ country: '', location: '' })
-  const [sort, setSort] = useState<TariffSort>({ by: 'price', direction: 'asc', period: 'hourly' })
+  const [sort, setSort] = useState<TariffSort>(defaultTariffSort)
   const [retry, setRetry] = useState(0)
   const [expiresAt, setExpiresAt] = useState(() => Math.min(data ? Date.parse(data.meta.validUntil) : Infinity, Date.now() + 60_000))
   const mounted = useRef(true)

@@ -137,7 +137,7 @@ describe('outbound security boundary', () => {
     expect(routeInput.safeParse({ revision: 'initial', integration: 'internal', enabled: true, profileId: id, failurePolicy: 'closed', confirm: true }).success).toBe(false)
   })
   it('uses existing active admin roles without a separate ID list and keeps logs sanitized', () => {
-    const user = { id: adminId, role: 'admin', status: 'active' } as SessionUser
+    const user = { id: adminId, role: 'super_admin', status: 'active' } as SessionUser
     expect(canManageOutbound(user)).toBe(true)
     expect(canManageOutbound({ ...user, id: randomUUID() })).toBe(true)
     expect(canManageOutbound({ ...user, role: 'user' })).toBe(false)

@@ -88,12 +88,35 @@ Four historical paid orders pointed to terminated servers. The snapshot also
 found a failed order with a 39,000 IRR debit and no linked wallet refund.
 
 The overview uses all-time IRR wallet postings. It shows gross initial charges
-for the accepted order states above, gross renewal charges, service refunds,
+for the accepted order states above, gross renewal and traffic charges, service refunds,
 net service debits after linked refunds, and wallet deposits separately. Net
 includes outstanding debits on failed orders. Invoices are evidence for
 reconciliation and are excluded from the sum of wallet postings. The financial
 review queue flags mismatches and failed orders with an outstanding debit. The
 order detail links the evidence needed to review the case. The report is read-only.
+
+### Hetzner traffic overage
+
+The worker reads the server's outgoing counter and allowance from the owning
+project each hour. Amounts are calculated on new 100,000,000-byte blocks with
+the server type and location's EUR/TB tariff, the current valid approved EUR/IRR
+rate, and the configured percentage and tax. The fixed rent markup applies only
+to rent. Hourly renewals post the rent and traffic separately in one invoice and
+one transaction. Monthly servers receive a separate paid traffic invoice.
+
+The first valid observation for an existing server baselines pre-cutover usage.
+New servers start from zero. A decrease within the same UTC month is flagged.
+A decrease across the UTC month boundary confirms the reset. Ambiguous rollover
+stays pending for a later observation. Earlier unpaid observations, exclusions,
+and settled blocks are retained. Failed pricing or insufficient funds leaves
+the owed blocks in place for retry. Customers see usage, FX, tax and retail
+amount in their invoices. The immutable ledger also retains wholesale evidence
+for reconciliation by the authorized operator.
+
+For rollback of traffic charging alone, the database operator can set the
+`billing.hetzner_traffic_cutover` settings value to JSON `false` while preserving
+its original `updated_at`. This pauses traffic charging while normal rent
+renewal continues. Review the stored checkpoints before re-enabling it.
 
 ## Subscriptions & renewal (HOURLY / DAILY / MONTHLY)
 

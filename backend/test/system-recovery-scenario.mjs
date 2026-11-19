@@ -26,10 +26,10 @@ const handle = createDb(), db = handle.db, config = getConfig(), password = 'Smo
 const accounts = []
 for (let index = 0; index < 3; index++) {
   const id = randomUUID(), secret = createTotpSecret(), email = `fixture-${index}@example.test`
-  await db.insert(users).values({ id, email, passwordHash: await hashPassword(password), role: index < 2 ? 'admin' : 'user', status: 'active',
+  await db.insert(users).values({ id, email, passwordHash: await hashPassword(password), role: index < 2 ? 'super_admin' : 'user', status: 'active',
     twoFactorEnabled: true, totpSecretEncrypted: encryptTotpSecret(secret) })
   const session = await createSession(db, id, {})
-  accounts.push({ id, secret, sessionId: session.sessionId, token: session.token, email, role: index < 2 ? 'admin' : 'user', status: 'active' })
+  accounts.push({ id, secret, sessionId: session.sessionId, token: session.token, email, role: index < 2 ? 'super_admin' : 'user', status: 'active' })
 }
 let [a, b, customer] = accounts
 const wallet = await ensureDefaultWallet(db, customer.id)

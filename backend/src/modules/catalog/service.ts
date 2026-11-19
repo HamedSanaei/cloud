@@ -1,5 +1,5 @@
 import { and, eq, sql } from 'drizzle-orm'
-import type { DbClient } from '../../db/index.js'
+import type { DbClient, DbOrTx } from '../../db/index.js'
 import { productSyncRuns, providerLocations, providerProducts, providers } from '../../db/schema.js'
 import { NotFoundError } from '../../lib/errors.js'
 import type { CommercialType } from '../providers/provider.interface.js'
@@ -291,7 +291,7 @@ export async function latestSyncRun(db: DbClient, providerId: string) {
   })
 }
 
-export async function findOfferByProductAndLocation(db: DbClient, provider: string, productId: string, locationCode: string) {
+export async function findOfferByProductAndLocation(db: DbOrTx, provider: string, productId: string, locationCode: string) {
   const rows = await db.query.providerProducts.findMany({
     where: (t, { and, eq }) =>
       and(

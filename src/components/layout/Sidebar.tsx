@@ -1,3 +1,4 @@
+import { isActiveAdmin } from '../../../backend/src/contracts/account-role'
 import { Home, LogOut, Settings, X } from 'lucide-react'
 import { useCallback, useEffect, useRef } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
@@ -87,7 +88,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               <span>{label}</span>
             </NavLink>
           ))}
-          {user?.role === 'admin' && <NavLink to="/admin" onClick={onClose} className="nav-item nav-item--compact"><Settings size={18} /><span>مدیریت سایت</span></NavLink>}
+          {isActiveAdmin(user) && <NavLink to="/admin" onClick={onClose} className="nav-item nav-item--compact"><Settings size={18} /><span>مدیریت سایت</span></NavLink>}
           {integration.data?.enabled && (
             <details className="sidebar-settings">
               <summary className="nav-item nav-item--compact"><Settings size={18} /><span>اتصال‌ها و مدیریت پلتفرم</span></summary>

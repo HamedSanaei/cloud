@@ -26,7 +26,7 @@ export function movementAmounts(transaction: Movement): [credit: string, debit: 
 
 const categories: Record<string, string> = {
   deposit: 'شارژ کیف پول', purchase: 'خرید', renewal: 'تمدید سرویس', refund: 'بازگشت وجه',
-  manual_credit: 'واریز دستی', manual_debit: 'برداشت دستی', adjustment: 'تعدیل موجودی',
+  manual_credit: 'واریز دستی', manual_debit: 'برداشت دستی', adjustment: 'تعدیل موجودی', traffic_overage: 'ترافیک مازاد',
 }
 const referenceCategories: Record<string, string> = {
   tabapay: 'شارژ با تاباپی', primary_ipv4_replacement: 'تعویض IPv4 اصلی', traffic_overage: 'ترافیک مازاد',

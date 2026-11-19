@@ -1,9 +1,8 @@
 # Hetzner profit settings
 
-Open **پنل ادمین → تنظیمات فروشگاه → تنظیم سود سرورهای هتزنر**. Access uses the
-existing active site Super Admin permission for Hetzner IPv4 pricing
-(`PRIMARY_IPV4_SUPER_ADMIN_IDS`). No additional role, secret or setting is
-required. In platform authority mode the canonical service owns pricing.
+Open **پنل ادمین → تنظیمات فروشگاه → تنظیم سود سرورهای هتزنر** with an active
+site `super_admin` account. See the [Super Admin rollout](SUPER_ADMIN.md).
+In platform authority mode the canonical service owns pricing.
 
 The percentage accepts 0–1000% with up to four decimal places. The additional
 fixed amount is optional (zero by default) and accepts up to 1,000,000 toman with

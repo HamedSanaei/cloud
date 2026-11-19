@@ -41,7 +41,7 @@ async function main() {
     await db.update(users).set({ role: 'admin' }).where(eq(users.id, admin.id))
     console.log(`[seed] admin created: ${adminEmail}`)
   } else {
-    await db.update(users).set({ role: 'admin' }).where(eq(users.id, admin.id))
+    if (admin.role === 'user') await db.update(users).set({ role: 'admin' }).where(eq(users.id, admin.id))
     console.log(`[seed] admin exists: ${adminEmail}`)
   }
 

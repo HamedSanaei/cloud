@@ -8,7 +8,7 @@ import { assertNonNegative, rialToToman } from '../../lib/money.js'
 import { writeAudit } from '../audit/service.js'
 import { publishNotification } from '../notifications/service.js'
 
-export type WalletTxType = 'deposit' | 'purchase' | 'renewal' | 'refund' | 'manual_credit' | 'manual_debit' | 'adjustment'
+export type WalletTxType = typeof walletTransactions.$inferSelect.type
 
 export interface WalletTxInput {
   amountRial: number // positive integer; direction is implied by type below
@@ -20,7 +20,7 @@ export interface WalletTxInput {
   metadata?: Record<string, unknown>
 }
 
-const DEBIT_TYPES: WalletTxType[] = ['purchase', 'renewal', 'manual_debit']
+const DEBIT_TYPES: WalletTxType[] = ['purchase', 'renewal', 'traffic_overage', 'manual_debit']
 const CREDIT_TYPES: WalletTxType[] = ['deposit', 'refund', 'manual_credit', 'adjustment']
 
 export async function ensureDefaultWallet(db: DbOrTx, userId: string) {
@@ -134,7 +134,8 @@ export async function applyWalletTransaction(
       }
     }
     const titles = { deposit: 'کیف پول شارژ شد', refund: 'مبلغ به کیف پول بازگشت', manual_credit: 'موجودی کیف پول افزایش یافت',
-      manual_debit: 'از کیف پول برداشت شد', adjustment: 'موجودی کیف پول اصلاح شد', renewal: 'پرداخت تمدید تأیید شد' } as const
+      manual_debit: 'از کیف پول برداشت شد', adjustment: 'موجودی کیف پول اصلاح شد', renewal: 'پرداخت تمدید تأیید شد',
+      traffic_overage: 'هزینه ترافیک مازاد پرداخت شد' } as const
     if (input.type !== 'purchase' && input.amountRial > 0) {
       await publishNotification(tx, { userId, eventKey: `wallet-transaction:${txRow.id}`, title: titles[input.type],
         body: `مبلغ ${rialToToman(input.amountRial).toLocaleString('fa-IR')} تومان.`, href: '/wallet', type: 'success' })

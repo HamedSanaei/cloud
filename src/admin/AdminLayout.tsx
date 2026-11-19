@@ -1,3 +1,4 @@
+import { isActiveAdmin, isSuperAdmin } from '../../backend/src/contracts/account-role'
 import { ClipboardList, Gauge, HardDrive, Home, LogOut, ShieldCheck, Users, XCircle, Globe, LifeBuoy, Settings2, Moon, Sun } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { AuthPage } from '../pages/AuthPages'
@@ -30,7 +31,7 @@ export function AdminLayout() {
 
   if (loading) return <div className="route-loader" role="status"><span /><p>در حال بررسی دسترسی مدیر…</p></div>
   if (!user) return <AuthPage intent="login" adminEntry />
-  if (user.role !== 'admin' || user.status !== 'active') {
+  if (!isActiveAdmin(user)) {
     return (
       <main className="admin-denied" dir="rtl">
         <div className="admin-denied__card">
@@ -46,6 +47,7 @@ export function AdminLayout() {
     await logout()
     navigate('/admin', { replace: true })
   }
+  const visibleNav = isSuperAdmin(user) ? nav : nav.filter(item => item.to !== '/admin/settings')
   return (
     <div className="admin-shell" dir="rtl">
       <aside className="admin-sidebar" aria-label="ناوبری پنل مدیریت">
@@ -55,7 +57,7 @@ export function AdminLayout() {
         </Link>
         <p className="admin-sidebar__caption">مدیریت</p>
         <nav className="admin-sidebar__links">
-          {nav.map(({ to, label, icon: Icon, end }) => (
+          {visibleNav.map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end}
               className={({ isActive }) => `admin-nav-link ${isActive ? 'admin-nav-link--active' : ''}`}>
               <Icon size={19} strokeWidth={1.85} /><span>{label}</span>
@@ -77,7 +79,7 @@ export function AdminLayout() {
         <main className="admin-main"><Outlet /></main>
       </div>
       <nav className="admin-bottom-nav" aria-label="ناوبری موبایل پنل مدیریت">
-        {nav.map(({ to, label, icon: Icon, end }) => (
+        {visibleNav.map(({ to, label, icon: Icon, end }) => (
           <NavLink key={to} to={to} end={end} className={({ isActive }) => `admin-bottom-nav__link ${isActive ? 'is-active' : ''}`}>
             <Icon size={21} strokeWidth={1.7} /><span>{label}</span>
           </NavLink>

@@ -15,7 +15,9 @@ beforeEach(() => {
     const body = init?.body ? JSON.parse(String(init.body)) : {}
     requests.push({ path, method, body, key: (init?.headers as Record<string, string>)?.['idempotency-key'] })
     let data = checkoutFixture(path)
+    if (path === '/auth/me' && allowed) data = { data: { ...data.data, role: 'super_admin' } }
     if (path === '/admin/settings/capabilities') data = { data: { ...data.data, allowed, encryptionReady } }
+    if (path === '/admin/settings/admin-roles') data = { data: [{ id: serverId, email: 'operator@example.test', role: 'admin' }] }
     if (path === '/admin/settings/authorize') data = { data: { proof: 'f07b9500-414e-4000-8000-000000000004' } }
     if (path === '/admin/settings/finance/adjustments' && method === 'POST') data = { data: { id: 'fixture-operation', status: 'completed', afterRial: 5500000 } }
     return new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } })
@@ -32,6 +34,19 @@ describe('store administration routes and explicit confirmations', () => {
     allowed = false; open('/admin/settings/gateway')
     expect(await screen.findByText('دسترسی مدیریت مجاز نیست')).toBeTruthy()
     expect(requests.some(r => r.path === '/admin/settings/gateway')).toBe(false)
+  })
+  it('changes an explicitly selected manager role with credentials and confirmation', async () => {
+    open('/admin/settings/admin-roles')
+    const user = userEvent.setup()
+    await screen.findByRole('option', { name: /operator@example.test/ })
+    await user.selectOptions(screen.getByLabelText('حساب مدیر'), serverId)
+    await user.type(screen.getByLabelText('رمز فعلی خودتان'), 'fixture-current-password')
+    await user.type(screen.getByLabelText(/کد دومرحله‌ای خودتان/), '012345')
+    await user.click(screen.getByLabelText('اعطای نقش سوپرادمین را تأیید می‌کنم'))
+    await user.click(screen.getByRole('button', { name: 'ثبت تغییر نقش' }))
+    expect(await screen.findByText('نقش مدیر به‌روزرسانی شد.')).toBeTruthy()
+    expect(requests.find(request => request.path.endsWith('/admin-roles') && request.method === 'POST')?.body)
+      .toEqual({ id: serverId, role: 'super_admin', password: 'fixture-current-password', totp: '012345', confirm: true })
   })
   it('renders admin sections even when the merchant encryption key is not configured', async () => {
     encryptionReady = false

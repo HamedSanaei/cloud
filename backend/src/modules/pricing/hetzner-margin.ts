@@ -1,3 +1,4 @@
+import { isSuperAdmin } from '../../contracts/account-role.js'
 import { and, eq } from 'drizzle-orm'
 import { z } from 'zod'
 import type { DbClient } from '../../db/index.js'
@@ -5,7 +6,7 @@ import type { SessionUser } from '../auth/service.js'
 import { AppError, ConflictError, ForbiddenError } from '../../lib/errors.js'
 import { isSiteAuthority } from '../integration/authority.js'
 import { getStorefront } from '../catalog/storefront.js'
-import { consumeAuthorization, isPricingSuperAdmin } from '../system/security.js'
+import { consumeAuthorization } from '../system/security.js'
 import { computePriceFromRules, getPricingRules, savePricingRules } from './service.js'
 import { providerCentsToRial } from './periods.js'
 import { maxHetznerFixedRial, maxHetznerMarkupPercent } from '../../contracts/hetzner-margin.js'
@@ -20,7 +21,7 @@ export const confirmedMargin = marginInput.extend({ confirm: z.literal(true) })
 type MarginInput = z.infer<typeof marginInput>
 
 export function requireHetznerPricingAdmin(user: SessionUser) {
-  if (!isSiteAuthority() || !isPricingSuperAdmin(user)) throw new ForbiddenError('تنظیم سود هتزنر فقط برای سوپرادمین سایت مجاز است.')
+  if (!isSiteAuthority() || !isSuperAdmin(user)) throw new ForbiddenError('تنظیم سود هتزنر فقط برای سوپرادمین سایت مجاز است.')
 }
 
 export async function getHetznerMargin(db: DbClient) {

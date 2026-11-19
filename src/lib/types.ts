@@ -171,6 +171,8 @@ export interface Invoice {
   date: string
   dueAt?: string
   paidAt?: string
+  traffic?: Array<{ month: string; previousOutgoingBytes: number; outgoingBytes: number; includedBytes: number; blocks: number;
+    fxRate: string; fxAt: string; taxRial: number; totalRial: number }>
 }
 
 export interface ChargeRequest {

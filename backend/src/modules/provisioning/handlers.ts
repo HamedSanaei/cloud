@@ -3,6 +3,7 @@ import { sweepSmsEvents, smsToman, smsDate } from '../notifications/sms-events.j
 import { isRenewalPriceBlocked, latestApprovedEuro, renewalPrice } from '../pricing/renewal.js'
 import { fxMaxAgeMs, getActiveFxRate } from '../pricing/service.js'
 import { monitorEuroRenewals, observeRenewalAlert, resolveRenewalAlerts } from '../billing/renewal-alerts.js'
+import { observeHetznerTraffic, settleTrafficCharges, sweepStandaloneHetznerTraffic, trafficCharges, warnTrafficFunds } from '../billing/hetzner-traffic.js'
 import { getConfig } from '../../config.js'
 /**
  * Job handlers. These are plain functions (no BullMQ dependency) so they can
@@ -710,6 +711,9 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
   let pricingBlocked = 0
 
   for (const sub of subs) {
+    const trafficServer = sub.billingInterval === 'HOURLY' && sub.autoRenew && sub.serverId
+      ? await db.query.servers.findFirst({ where: t => eq(t.id, sub.serverId!) }) : undefined
+    const trafficObserved = await observeHetznerTraffic(db, trafficServer, asOf)
     const outcome = await db.transaction(async (tx) => {
       await tx.select({ id: users.id }).from(users).where(eq(users.id, sub.userId)).for('no key update')
       const [current] = await tx.select().from(subscriptions).where(eq(subscriptions.id, sub.id)).for('update').limit(1)
@@ -809,6 +813,22 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
         }
       }
       if (!current.autoRenew) return 'skipped'
+      const hourlyServer = trafficObserved && hourly && current.serverId === trafficServer?.id
+        ? (await tx.select().from(servers).where(eq(servers.id, current.serverId!)).for('update'))[0] : undefined
+      const traffic = hourlyServer && hourlyServer.providerServerId === trafficServer?.providerServerId
+        && !hourlyServer.terminatedAt && hourlyServer.status === 'active' && !hourlyServer.billingPowerBlocked
+        && [null, 'delete_failed'].includes(hourlyServer.terminationState)
+        ? await tx.transaction(async child => {
+          const charges = await trafficCharges(child, hourlyServer, { asOf, latest })
+          if (!Number.isSafeInteger(charges.reduce((total, charge) => total + charge.price.totalRial, invoice.totalRial))) {
+            recordEvent('billing.hetzner_traffic_pricing_failed', 'warn', 'billing', { serverId: hourlyServer.id, code: 'traffic_price_overflow' })
+            return []
+          }
+          return charges
+        }).catch(() => {
+          recordEvent('billing.hetzner_traffic_pricing_failed', 'warn', 'billing', { serverId: hourlyServer.id, code: 'traffic_pricing_failed' })
+          return []
+        }) : []
       const fxReceipt = invoice.snapshot as Record<string, unknown> | null
       const fallbackMetadata = fxReceipt?.fxFallback === true ? Object.fromEntries(
         ['fxFallback', 'fxRateId', 'fxRate', 'fxAt', 'fxSource', 'fxSelectedAt', 'fxAgeMs', 'fxSelectionPolicy', 'fxFallbackReason', 'periodStart']
@@ -818,22 +838,30 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
         subscriptionId: current.id,
         invoiceId: invoice.id,
         status: 'pending',
-        amountRial: invoice.totalRial,
+        amountRial: traffic.reduce((total, charge) => total + charge.price.totalRial, invoice.totalRial),
       }).returning()
       if (!attempt) throw new Error('failed to create renewal attempt')
       try {
         const wallet = await getWallet(tx, current.userId, order?.walletId ?? undefined)
-        await applyWalletTransaction(tx, current.userId, wallet.id, {
-          amountRial: invoice.totalRial,
-          type: 'renewal',
-          referenceType: 'subscription',
-          referenceId: current.id,
-          idempotencyKey: `renewal:${invoice.id}`,
-          metadata: fallbackMetadata,
-          description: `پرداخت خودکار تمدید ${invoice.invoiceNumber}`,
+        await tx.transaction(async settlement => {
+          await applyWalletTransaction(settlement, current.userId, wallet.id, {
+            amountRial: invoice.totalRial,
+            type: 'renewal',
+            referenceType: 'subscription',
+            referenceId: current.id,
+            idempotencyKey: `renewal:${invoice.id}`,
+            metadata: fallbackMetadata,
+            description: `پرداخت خودکار تمدید ${invoice.invoiceNumber}`,
+          })
+          if (traffic.length) {
+            const extra = await settleTrafficCharges(settlement, current.userId, wallet.id, invoice.id, traffic)
+            await settlement.update(invoices).set({ totalRial: invoice.totalRial + extra.totalRial, subtotalRial: invoice.subtotalRial + extra.subtotalRial,
+              taxRial: invoice.taxRial + extra.taxRial }).where(eq(invoices.id, invoice.id))
+          }
         })
       } catch (err) {
         if (!(err instanceof AppError) || err.code !== 'insufficient_funds') throw err
+        if (hourlyServer) await warnTrafficFunds(tx, hourlyServer, traffic)
         if (hourly) await alert('renewal_insufficient_funds')
         await tx.update(renewalAttempts).set({ status: 'insufficient_funds', error: (err as Error).message }).where(eq(renewalAttempts.id, attempt.id))
         if (current.status !== 'grace') {
@@ -853,7 +881,8 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
       await tx.update(subscriptions).set({ priceRial: invoice.totalRial }).where(eq(subscriptions.id, current.id))
       await extendSubscriptionPeriod(tx, current.id, { scheduledHourly: true })
       const renewedSub = await tx.query.subscriptions.findFirst({ where: t => eq(t.id, current.id) })
-      await tx.update(invoices).set({ snapshot: { ...(invoice.snapshot as Record<string, unknown>), periodStart: renewedSub!.currentPeriodStart.toISOString(), periodEnd: renewedSub!.currentPeriodEnd.toISOString() } }).where(eq(invoices.id, invoice.id))
+      await tx.update(invoices).set({ snapshot: { ...(invoice.snapshot as Record<string, unknown>), periodStart: renewedSub!.currentPeriodStart.toISOString(), periodEnd: renewedSub!.currentPeriodEnd.toISOString(),
+        ...(traffic.length ? { traffic: traffic.map(charge => charge.evidence) } : {}) } }).where(eq(invoices.id, invoice.id))
       await enqueueSms(tx, 'serviceRenewed', current.userId, `invoice:${invoice.id}:renewed`, { serviceName: order?.hostname ?? 'سرور', endDate: smsDate(renewedSub!.currentPeriodEnd) })
       if (hourly && fxReceipt?.providerCurrency === 'EUR' && !fallbackMetadata && fxAgeMs !== undefined && fxAgeMs < fxMaxAgeMs('EUR') &&
           renewedSub!.nextInvoiceAt > new Date()) await resolveRenewalAlerts(tx, current.id + '.')
@@ -869,6 +898,7 @@ export async function handleRenewalSweep(ctx: HandlerContext): Promise<{ renewed
     if (outcome === 'pricing_blocked') pricingBlocked++
   }
   for (const id of await protectHourlyServers(ctx)) shutdowns.add(id)
+  await sweepStandaloneHetznerTraffic(db, { asOf, latest })
 
   // Grace expiry: suspend services past their grace period.
   const expired = await findGraceExpiredSubscriptions(db)

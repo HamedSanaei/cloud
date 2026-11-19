@@ -1,10 +1,10 @@
 import { nativePeriod } from '../../src/modules/pricing/periods.js'
-import { getConfig } from '../../src/config.js'
 import type { ProviderBillingOption } from '../../src/modules/providers/provider.interface.js'
+import type { CustomerProvider } from '../../src/modules/providers/customer.interface.js'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { getTestContext, truncateAll, dbAvailable, type TestContext } from '../helpers.js'
-import { subscriptions, users, fxRates } from '../../src/db/schema.js'
+import { subscriptions, users, fxRates, servers, providerProducts, settings } from '../../src/db/schema.js'
 import { createSession, registerUser } from '../../src/modules/auth/service.js'
 import { buildApp } from '../../src/app.js'
 import { testLogger } from '../helpers.js'
@@ -14,7 +14,7 @@ import { euroMarketSource, setFxRate, updatePricingRules } from '../../src/modul
 import { renewalPrice } from '../../src/modules/pricing/renewal.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
 import { createOrderFromQuote } from '../../src/modules/orders/service.js'
-import { ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/service.js'
+import { applyWalletTransaction, ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/service.js'
 import { handleProvision, handleRenewalSweep } from '../../src/modules/provisioning/handlers.js'
 
 // Provider transport is an isolated fixture; wallet, quote, order and renewal use PostgreSQL.
@@ -53,6 +53,65 @@ describe.skipIf(!dbAvailable)('hourly billing and grandfathered daily boundaries
     const subscription = await ctx.db.query.subscriptions.findFirst({ where: (t) => eq(t.orderId, result.order.id) })
     return { quote, order: result.order, subscription: subscription!, wallet }
   }
+
+  it('settles incremental Hetzner traffic for both periods and retries low funds without double charging', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const hour = Math.floor(Date.now() / 3_600_000) * 3_600_000
+    vi.setSystemTime(hour + 10_000)
+    await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
+    const hourly = await buy('hourly', 'traffic-hourly@test.local'), monthly = await buy('monthly', 'traffic-monthly@test.local')
+    const product = (await findOfferByProductAndLocation(ctx.db, 'hetzner', 'VPS02_4', 'FRA-01'))!
+    await ctx.db.insert(providerProducts).values({ provider: 'hetzner', providerProductId: 'traffic-fixture:EUR', providerCurrency: 'EUR', name: 'Fixture traffic',
+      locationId: product.locationId, vcpu: 1, memoryMb: 1024, diskGb: 10, lastSyncedAt: new Date(),
+      raw: { trafficTariff: { source: 'hetzner-server-type-location', location: 'FRA-01', currency: 'EUR', grossPerTb: '1.0000' } } })
+    await ctx.db.update(settings).set({ updatedAt: new Date(hour) }).where(eq(settings.key, 'billing.hetzner_traffic_cutover'))
+    for (const [suffix, product] of [[1, hourly], [2, monthly]] as const) {
+      await ctx.db.update(servers).set({ providerServerId: `fixture:${suffix}`, activatedAt: new Date(hour + 1) }).where(eq(servers.id, product.subscription.serverId!))
+    }
+    const provider = getProvider('hetzner')
+    let usage = 999_999_999
+    const customer: CustomerProvider = {
+      inspect: async id => ({ providerServerId: id, state: 'active', metadata: { serverType: 'traffic-fixture',
+        location: 'FRA-01', includedTrafficBytes: 1_000_000_000, outgoingTrafficBytes: usage } }),
+      submit: vi.fn(), observe: vi.fn(), actionHistory: vi.fn(), absent: vi.fn(), metrics: vi.fn(), images: vi.fn(), resizeOptions: vi.fn(), console: vi.fn(),
+    }
+    registerProvider({ ...provider, customer })
+    const rows = async (walletId: string) => (await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.walletId, walletId) })).filter(t => t.type === 'traffic_overage')
+    try {
+      const prepaid = (await ctx.db.query.invoices.findFirst({ where: t => eq(t.orderId, monthly.order.id) }))!
+      await handleRenewalSweep(ctx)
+      expect(await rows(monthly.wallet.id)).toHaveLength(0)
+      // Simulate low funds using the real wallet posting helper.
+      const available = (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, monthly.wallet.id) }))!.balanceRial
+      await applyWalletTransaction(ctx.db, monthly.order.userId, monthly.wallet.id, { amountRial: available, type: 'manual_debit' })
+      usage = 1_000_000_001
+      vi.setSystemTime(hour + 3_600_000 + 20_000)
+      await Promise.all([handleRenewalSweep(ctx), handleRenewalSweep(ctx)])
+      expect(await rows(hourly.wallet.id)).toHaveLength(1)
+      const charged = (await rows(hourly.wallet.id))[0]!
+      expect(charged.amountRial).toBe(-77)
+      const invoice = (await ctx.db.query.invoices.findFirst({ where: t => eq(t.id, charged.referenceId!) }))!
+      expect(invoice.totalRial).toBe(hourly.order.totalRial + 77)
+      expect(await ctx.db.query.invoiceItems.findMany({ where: t => eq(t.invoiceId, invoice.id) })).toHaveLength(2)
+      expect((await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.id, hourly.subscription.id) }))!.priceRial).toBe(hourly.order.totalRial)
+      expect(await rows(monthly.wallet.id)).toHaveLength(0)
+      expect((await ctx.db.query.hetznerTrafficPeriods.findFirst({ where: t => eq(t.serverId, monthly.subscription.serverId!) }))?.paidBlocks).toBe(0)
+      await creditWallet(ctx.db, monthly.order.userId, monthly.wallet.id, 1000, { type: 'manual_credit' })
+      await Promise.all([handleRenewalSweep(ctx), handleRenewalSweep(ctx)])
+      expect((await rows(monthly.wallet.id)).map(debit => debit.amountRial)).toEqual([-77])
+      usage = 1_100_000_001
+      vi.setSystemTime(hour + 2 * 3_600_000 + 20_000)
+      await setFxRate(ctx.db, '1240000', { source: 'market', note: euroMarketSource })
+      await handleRenewalSweep(ctx)
+      expect((await rows(monthly.wallet.id)).map(debit => debit.amountRial).sort()).toEqual([-155, -77])
+      expect((await ctx.db.query.invoices.findFirst({ where: t => eq(t.id, prepaid.id) }))?.snapshot).toEqual(prepaid.snapshot)
+      expect((await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.id, monthly.subscription.id) }))?.priceRial).toBe(monthly.order.totalRial)
+    } finally {
+      registerProvider(provider)
+      await ctx.db.update(servers).set({ terminatedAt: new Date(), status: 'terminated' }).where(eq(servers.id, hourly.subscription.serverId!))
+      await ctx.db.update(servers).set({ terminatedAt: new Date(), status: 'terminated' }).where(eq(servers.id, monthly.subscription.serverId!))
+    }
+  })
 
   it('blocks a new daily quote while preserving grandfathered daily records', async () => {
     await expect(buy('daily', 'daily-blocked@test.local')).rejects.toMatchObject({ code: 'validation_error' })
@@ -237,18 +296,15 @@ describe.skipIf(!dbAvailable)('hourly billing and grandfathered daily boundaries
     await ctx.db.update(users).set({ role: 'admin' }).where(eq(users.id, operator.id))
     const session = await createSession(ctx.db, operator.id, {})
     const headers = { authorization: `Bearer ${session.token}` }
-    const config = getConfig(), previous = config.PRIMARY_IPV4_SUPER_ADMIN_IDS
     const app = await buildApp({ db: ctx.db, queues: ctx.queues, logger: testLogger })
     try {
-      config.PRIMARY_IPV4_SUPER_ADMIN_IDS = []
       expect((await app.inject({ url: '/api/admin/settings/renewal-alerts', headers })).statusCode).toBe(403)
-      config.PRIMARY_IPV4_SUPER_ADMIN_IDS = [operator.id]
+      await ctx.db.update(users).set({ role: 'super_admin' }).where(eq(users.id, operator.id))
       const result = await app.inject({ url: '/api/admin/settings/logs?level=critical', headers })
       expect(result.statusCode, result.body).toBe(200)
       expect(result.json().data.items.filter((item: { metadata: { subscriptionId?: string } }) => item.metadata.subscriptionId === id))
         .toEqual(expect.arrayContaining([expect.objectContaining({ service: 'audit' }), expect.objectContaining({ service: 'billing' })]))
     } finally {
-      config.PRIMARY_IPV4_SUPER_ADMIN_IDS = previous
       await app.close()
     }
   })

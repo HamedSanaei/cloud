@@ -12,8 +12,9 @@ try {
   const places = [['fsn1', 'DE', 'Falkenstein'], ['nbg1', 'DE', 'Nuremberg'], ['ash', 'US', 'Ashburn'],
     ['hil', 'US', 'Hillsboro'], ['hel1', 'FI', 'Helsinki'], ['sin', 'SG', 'Singapore'], ['lon', 'GB', 'London']]
   const offers = Array.from({ length: 10 }, (_, group) => places.map(([location, country, city], index) => ({
-    id: `${location}-${group}`, name: `CX ${location}-${group}`, location, country, city, vcpu: 2, memoryMb: 4096,
+    id: `${location}-${group}`, name: `CX ${location}-${group}`, location, country, city, vcpu: group + 1, memoryMb: 4096 + group * 1024,
     diskGb: 40, diskType: 'Local', trafficGb: null, hourly: 123450 + index, monthly: 800000 + group,
+    includedTrafficBytes: group === 9 ? null : (group + 1) * 100_000_000,
   }))).flat()
 
   for (const width of [320, 390, 768, 1024, 1440]) {
@@ -64,13 +65,26 @@ try {
       } else await visit(germany)
       assert.equal(await germany.getAttribute('aria-pressed'), 'true')
       assert.equal(await table.locator('tbody tr').count(), 20)
+      const priceBasis = page.getByLabel('مبنای قیمت')
+      const sort = page.getByLabel('مرتب‌سازی بر اساس')
+      assert.equal(await priceBasis.inputValue(), 'monthly')
+      assert.equal(await sort.inputValue(), 'price:asc')
+      const names = table.locator('tbody tr th a')
+      for (const field of ['price', 'vcpu', 'memoryMb', 'traffic']) {
+        await sort.selectOption(`${field}:asc`)
+        assert.match(await names.first().textContent(), /-0$/)
+        await sort.selectOption(`${field}:desc`)
+        assert.match(await names.first().textContent(), field === 'traffic' ? /-8$/ : /-9$/)
+        if (field === 'traffic') assert.match(await names.last().textContent(), /-9$/)
+        assert.match(await names.first().getAttribute('href'), /period=hourly/)
+      }
+      await sort.selectOption('price:asc')
 
       const rowFlag = table.locator('summary[aria-label="آلمان"]').first()
       await visit(rowFlag)
       assert.equal(new URL(page.url()).pathname, path)
       assert.equal(await rowFlag.locator('.tariff-country-tip').evaluate(tip => getComputedStyle(tip).visibility), 'visible')
-      await page.getByLabel('مبنای قیمت').selectOption('monthly')
-      await page.getByLabel('مرتب‌سازی بر اساس').selectOption('name:desc')
+      await sort.selectOption('name:desc')
 
       const scrollWithinTable = async () => {
         const top = await head.evaluate(row => row.getBoundingClientRect().top + window.scrollY)

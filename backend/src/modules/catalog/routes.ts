@@ -1,3 +1,4 @@
+import { isActiveAdmin } from '../../contracts/account-role.js'
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { eq } from 'drizzle-orm'
@@ -29,7 +30,7 @@ export const registerCatalogRoutes: FastifyPluginAsync<{ ctx: AppContext }> = as
   app.get('/catalog/storefront', async (request, reply) => {
     // Admin sales visibility must never enter a shared/public cache.
     reply.header('Cache-Control', 'private, no-store').header('Vary', 'Cookie, Authorization')
-    return { data: await getStorefront(db, request.user?.role === 'admin' && request.user.status === 'active') }
+    return { data: await getStorefront(db, isActiveAdmin(request.user)) }
   })
 
   app.get('/catalog/providers', async () => {

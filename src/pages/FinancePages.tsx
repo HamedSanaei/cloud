@@ -21,6 +21,7 @@ import { useApiQuery } from '../hooks/useApiQuery'
 import { ApiError } from '../lib/apiClient'
 import { getWalletSummary, listChargeRequests, listInvoices, listTransactions } from '../lib/endpoints'
 import { formatCount, formatFaDateTime, formatToman, toAsciiDigits } from '../lib/format'
+import type { Invoice } from '../lib/types'
 import { WalletRecharge } from '../components/ui/WalletRecharge'
 import { WalletPaymentStatus } from '../components/ui/WalletPaymentStatus'
 import { useAuth } from '../auth/AuthContext'
@@ -138,7 +139,9 @@ function FinancialList({ type }: FinancialListProps) {
   }, [type])
 
   const rows = useMemo(() => {
-    const items = (active.data?.items ?? []) as Array<{ number: string; description?: string; invoiceNumber?: string; paymentReference?: string; status: string; amount: number; formattedAmount?: string; date: string; dueAt?: string; paidAt?: string; id: string }>
+    const items = (active.data?.items ?? []) as Array<Partial<Pick<Invoice, 'description' | 'traffic' | 'dueAt' | 'paidAt'>> & {
+      number: string; invoiceNumber?: string; paymentReference?: string; status: string; amount: number; formattedAmount?: string; date: string; id: string
+    }>
     const normalized = toAsciiDigits(query.trim())
     return items.filter((item) => {
       const haystack = toAsciiDigits(`${item.number} ${item.description ?? ''} ${item.invoiceNumber ?? ''} ${item.paymentReference ?? ''} ${isInvoice ? invoiceDescription(item.description) : ''}`)
@@ -186,7 +189,14 @@ function FinancialList({ type }: FinancialListProps) {
             {rows.map((row) => (
               <tr key={row.id}>
                 <td>{row.number}</td>
-                <td>{isInvoice ? invoiceDescription(row.description) : chargeReferences(row).paymentReference ?? '—'}</td>
+                <td>{isInvoice ? <>{invoiceDescription(row.description)}{row.traffic?.length ? <details>
+                  <summary>جزئیات ترافیک مازاد</summary>
+                  <ul>{row.traffic.map(line => <li key={line.month}>
+                    <bdi>{line.month}</bdi> · {formatCount(line.blocks)} بلوک ۱۰۰ مگابایتی · {formatCount(line.totalRial)} ریال (مالیات {formatCount(line.taxRial)} ریال)
+                    <br />مصرف قبلی {formatCount(line.previousOutgoingBytes)}، مصرف فعلی {formatCount(line.outgoingBytes)}، سهمیه {formatCount(line.includedBytes)} بایت
+                    <br />هر یورو {formatCount(Number(line.fxRate))} ریال · {formatFaDateTime(line.fxAt, user?.timezone)}
+                  </li>)}</ul>
+                </details> : null}</> : chargeReferences(row).paymentReference ?? '—'}</td>
                 {!isInvoice && <td>{chargeReferences(row).invoiceNumber ?? '—'}</td>}
                 <td>{row.formattedAmount ?? formatToman(row.amount)}</td>
                 <td><FinancialDate label={isInvoice ? 'صدور' : undefined} date={row.date} dueAt={isInvoice ? row.dueAt : undefined} paidAt={isInvoice ? row.paidAt : undefined} timezone={user?.timezone} /></td>

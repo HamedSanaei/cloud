@@ -50,7 +50,7 @@ describe.skipIf(!dbAvailable)('durable SMS event producers and dispatcher (no re
   async function account(admin = false) {
     const mobile = `+989${String(++sequence).padStart(9, '0')}`
     const user = await registerUser(ctx.db, { email: `sms-${sequence}@example.test`, password: 'Fixture-password-123!', mobile })
-    await ctx.db.update(users).set({ mobile, mobileVerifiedAt: new Date(), role: admin ? 'admin' : 'user', status: 'active' }).where(eq(users.id, user.id))
+    await ctx.db.update(users).set({ mobile, mobileVerifiedAt: new Date(), role: admin ? 'super_admin' : 'user', status: 'active' }).where(eq(users.id, user.id))
     return (await ctx.db.query.users.findFirst({ where: t => eq(t.id, user.id) }))!
   }
   async function purchase(userId: string, pay = true) {

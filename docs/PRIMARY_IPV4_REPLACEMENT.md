@@ -10,9 +10,8 @@ operation and does not change the server subscription.
 
 The default is 1,500,000 rial (150,000 toman). The store accepts a positive
 whole-toman price between 1 and 100,000,000 toman, stored in integer rial by
-provider. Set `PRIMARY_IPV4_SUPER_ADMIN_IDS` in the API environment to the
-comma-separated UUIDs of authorized active admin accounts, then select
-**تعرفهٔ تعویض IPv4** under store settings. Price history records the operator,
+provider. Active [Super Admins](SUPER_ADMIN.md) can select **تعرفهٔ تعویض IPv4**
+under store settings. Price history records the operator,
 old/new price and date. A new request uses the current quote version; an
 accepted request keeps its quoted fee.
 

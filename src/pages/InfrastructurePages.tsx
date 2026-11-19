@@ -1,3 +1,4 @@
+import { isActiveAdmin } from '../../backend/src/contracts/account-role'
 import {
   Box,
   Globe2,
@@ -195,7 +196,7 @@ export function ServersPage() {
   const { user } = useAuth()
   return <div className="page-stack">
     <ResourceList kind="server" />
-    {user?.role === 'admin' ? <HetznerInventoryPanel /> : null}
+    {isActiveAdmin(user) ? <HetznerInventoryPanel /> : null}
   </div>
 }
 

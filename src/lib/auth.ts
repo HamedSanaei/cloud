@@ -1,9 +1,10 @@
+import { type AccountRole } from '../../backend/src/contracts/account-role'
 import { apiGet, apiPost, clearAuthToken, setAuthToken } from './apiClient'
 
 export interface AuthUser {
   id: string
   email: string
-  role: 'user' | 'admin'
+  role: AccountRole
   status: 'active' | 'pending' | 'disabled'
   firstName?: string | null
   lastName?: string | null
