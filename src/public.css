@@ -12,6 +12,19 @@
 
 /* Landing ---------------------------------------------------------------- */
 .landing-page { --landing-header-height: 78px; background: #f8fbff; color: #111827; min-height: 100vh; }
+.landing-home :is(
+  .landing-hero .hero-copy h1,
+  .hero-tagline,
+  .landing-section-heading h2,
+  .server-offer-body h3,
+  .feature-grid h3,
+  .ipv6-banner h2,
+  .landing-cta h2,
+  .hero-actions .button,
+  .landing-cta .button
+) {
+  font-family: Kalameh, Vazirmatn, Tahoma, Arial, sans-serif;
+}
 .landing-header { height: var(--landing-header-height); background: #fff; border-bottom: 1px solid #e7edf5; position: sticky; top: 0; z-index: 20; }
 .landing-nav { width: min(1280px, calc(100% - 64px)); height: 100%; margin: auto; display: grid; grid-template-columns: 220px 1fr 220px; align-items: center; gap: 24px; }
 .landing-links { display: flex; justify-content: center; gap: 52px; color: #4a5870; font-size: 14px; }

@@ -4,6 +4,23 @@ import { createServer } from 'vite'
 const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom' })
 const escape = value => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 try {
+  const kalamehFile = process.env.KALAMEH_FONT_FILE
+  if (kalamehFile) {
+    const font = await readFile(kalamehFile)
+    if (font.length < 48 || font.toString('ascii', 0, 4) !== 'wOF2') {
+      throw new Error('KALAMEH_FONT_FILE must point to the licensed Kalameh Web Bold WOFF2')
+    }
+    await writeFile('dist/kalameh/kalameh-bold.woff2', font)
+    await writeFile('dist/kalameh/home.css', `@font-face {
+  font-family: Kalameh;
+  src: url('./kalameh-bold.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  unicode-range: U+0600-065F, U+066A-06EF, U+06FA-06FF, U+0750-077F, U+08A0-08FF;
+}
+`)
+  }
   const { renderHomepage, publicPages, PUBLIC_ORIGIN, shareImage } = await server.ssrLoadModule('/src/home-entry.tsx')
   const shell = await readFile('dist/index.html', 'utf8')
   if (!shell.includes('<div id="root"></div>')) throw new Error('Public mount is missing from Vite shell')
@@ -17,7 +34,10 @@ try {
       { '@type': 'ListItem', position: 1, name: 'خانه', item: PUBLIC_ORIGIN + '/' },
       { '@type': 'ListItem', position: 2, name: 'سرور هتزنر', item: canonical },
     ] }]
-    const metadata = `<title>${escape(title)}</title>
+    const fontPreload = path === '/' && kalamehFile
+      ? '<link rel="preload" href="/kalameh/kalameh-bold.woff2" as="font" type="font/woff2" crossorigin>'
+      : ''
+    const metadata = `${fontPreload}<title>${escape(title)}</title>
     <meta name="description" content="${escape(description)}">
     <link rel="canonical" href="${canonical}">
     <meta property="og:type" content="website"><meta property="og:locale" content="fa_IR">

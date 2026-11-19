@@ -23,7 +23,8 @@ export function LandingPage({ initialTariffs }: { initialTariffs?: string } = {}
   const [menuOpen, setMenuOpen] = useState(false)
   const { user } = useAuth()
   return (
-    <div className="landing-page" dir="rtl">
+    <div className="landing-page landing-home" dir="rtl">
+      <link rel="stylesheet" href="/kalameh/home.css" precedence="default" />
       <header className="landing-header">
         <nav className="landing-nav" aria-label="ناوبری اصلی">
           <Link className="public-logo" to="/"><BrandMark /><strong>{BRAND_NAME}</strong></Link>
