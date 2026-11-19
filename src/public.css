@@ -11,8 +11,8 @@
 :is(.landing-page, .auth-page) .button.large { min-height: 52px; padding-inline: 32px; }
 
 /* Landing ---------------------------------------------------------------- */
-.landing-page { background: #f8fbff; color: #111827; min-height: 100vh; }
-.landing-header { height: 78px; background: #fff; border-bottom: 1px solid #e7edf5; position: sticky; top: 0; z-index: 20; }
+.landing-page { --landing-header-height: 78px; background: #f8fbff; color: #111827; min-height: 100vh; }
+.landing-header { height: var(--landing-header-height); background: #fff; border-bottom: 1px solid #e7edf5; position: sticky; top: 0; z-index: 20; }
 .landing-nav { width: min(1280px, calc(100% - 64px)); height: 100%; margin: auto; display: grid; grid-template-columns: 220px 1fr 220px; align-items: center; gap: 24px; }
 .landing-links { display: flex; justify-content: center; gap: 52px; color: #4a5870; font-size: 14px; }
 .landing-links a:hover { color: #2869e8; }
@@ -135,8 +135,48 @@
 .tariff-scroll a { color: #1751a0; text-decoration: underline; white-space: nowrap; }
 .tariff-disk-type { display: block; color: #475569; font-weight: 400; }
 #hetzner-server table { min-width: 960px; }
+.tariff-scroll--hetzner { overflow: visible; }
+.tariff-scroll--hetzner table { border-collapse: separate; border-spacing: 0; }
+.tariff-scroll--hetzner thead { position: sticky; top: var(--tariff-header-top, var(--landing-header-height, 0px)); z-index: 3; }
+.tariff-scroll--hetzner thead th { border-bottom: 1px solid #cbd5e1; }
 .tariff-scroll-hint { display: none; }
-@media (max-width: 1020px) { .tariff-scroll-hint { display: block; } }
+@media (max-width: 1024px) {
+  .tariff-scroll-hint { display: block; }
+  .tariff-scroll--hetzner { overflow: auto; max-block-size: 65svh; }
+  .tariff-scroll--hetzner thead { top: 0; }
+  .tariff-scroll--hetzner[data-page-sticky] { max-block-size: none; }
+  .tariff-scroll--hetzner[data-page-sticky] thead { position: relative; top: auto; transform: translateY(var(--tariff-header-shift, 0px)); }
+}
+
+@font-face {
+  font-family: "Tariff Country Flags";
+  src: url("country-flag-emoji-polyfill/dist/TwemojiCountryFlags.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+1F1E6-1F1FF;
+}
+.tariff-flag-emoji { font: 23px/1 "Tariff Country Flags", "Apple Color Emoji", "Segoe UI Emoji", sans-serif; }
+.tariff-country-list { position: relative; display: flex; flex-wrap: wrap; gap: 6px; width: fit-content; max-width: 100%; margin-block: 12px; }
+.tariff-country-list button, .tariff-location-flag summary {
+  display: inline-flex; align-items: center; justify-content: center; padding: 4px;
+  border: 1px solid transparent; border-radius: 6px; background: #fff; color: #172842; cursor: pointer;
+}
+.tariff-country-list button { min-width: 44px; min-height: 44px; padding-inline: 8px; border-color: #cbd5e1; }
+.tariff-country-list button[aria-pressed="true"] { border-color: #1751a0; box-shadow: inset 0 0 0 1px #1751a0; background: #e8f1ff; color: #123e7c; }
+.tariff-location { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.tariff-location small { color: #475569; }
+.tariff-location-flag { position: relative; flex: none; }
+.tariff-location-flag summary { min-width: 32px; min-height: 28px; list-style: none; }
+.tariff-location-flag summary::-webkit-details-marker { display: none; }
+.tariff-country-tip {
+  position: absolute; z-index: 2; visibility: hidden; pointer-events: none;
+  padding: 4px 8px; border-radius: 6px; background: #172842; color: white; font-size: 13px; line-height: 1.5;
+}
+.tariff-country-list .tariff-country-tip { inset-inline: 0; inset-block-end: calc(100% + 4px); width: max-content; max-width: 100%; margin-inline: auto; }
+.tariff-location-flag .tariff-country-tip { inset-inline-start: calc(100% + 4px); inset-block-start: 50%; transform: translateY(-50%); white-space: nowrap; }
+.tariff-country-list button:is(:hover, :focus) .tariff-country-tip,
+.tariff-location-flag summary:is(:hover, :focus) .tariff-country-tip,
+.tariff-location-flag[open] .tariff-country-tip { visibility: visible; }
+.tariff-country-list button:focus-visible, .tariff-location-flag summary:focus-visible { outline: 2px solid #1751a0; outline-offset: 2px; }
 .landing-account-link { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-block: 20px; }
 
 /* Public comparison remains readable without JavaScript or accordion expansion. */

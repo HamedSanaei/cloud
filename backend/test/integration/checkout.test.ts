@@ -107,7 +107,7 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
 
   it('syncs real-shaped fallback evidence through storage, public HTML and monthly quotes', async () => {
     const included = 2 ** 39
-    const location = { name: 'sin', available: true }
+    const location = { name: 'sin', country: 'SG', city: 'Singapore', available: true }
     const responses: Record<string, unknown> = {
       server_types: { server_types: [{ id: 2, name: 'cpx02', architecture: 'x86', cores: 2, memory: 4, disk: 40, locations: [location],
         prices: [{ location: 'sin', price_hourly: { gross: '0.008000' }, included_traffic: included }] }] },
@@ -144,6 +144,9 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
       for (const scope of ['all', 'hetzner']) {
         const response = await app.inject('/api/public/home-tariffs?scope=' + scope)
         expect(response.body).toContain(`offer=${stored.id}&amp;period=hourly&amp;location=sin`)
+        expect(response.body).toContain('<th scope="col">لوکیشن</th>')
+        expect(response.body).toContain('<summary aria-label="سنگاپور"><img src="/flags/sg.svg"')
+        expect(response.body).toContain('<bdi>Singapore، sin</bdi>')
         expect(response.body).toContain(new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(publicOffer.monthly / 10) + ' تومان')
         expect(response.body).toContain('۰٫۵ TB')
         expect(response.body).not.toContain('قیمت ماهانهٔ معتبر در دسترس نیست')
