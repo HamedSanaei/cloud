@@ -49,4 +49,5 @@ backend/.env.*.local
 config.json
 known_hosts
 configuration.toml
+/public/fonts/kalameh/
 **/configuration.toml

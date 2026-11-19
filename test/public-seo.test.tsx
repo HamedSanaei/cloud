@@ -17,6 +17,10 @@ it('renders distinct crawlable Persian public pages with one H1 and visible guid
     expect(doc.querySelectorAll('main a[href^="#"]').length).toBeGreaterThan(0)
   }
   expect(home).toContain('href="/hetzner"')
+  expect(home).toContain('landing-page landing-home')
+  expect(home).toContain('href="/kalameh/home.css"')
+  expect(hetzner).not.toContain('landing-home')
+  expect(hetzner).not.toContain('/kalameh/home.css')
   expect(home).toContain('تعرفه سرور ایران')
   expect(hetzner).toContain('سرور ارزان هتزنر کدام است؟')
   expect(hetzner).toContain('ثابت می‌ماند')
