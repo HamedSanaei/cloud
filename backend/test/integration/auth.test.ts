@@ -6,6 +6,7 @@ import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocat
 import { getProvider } from '../../src/modules/providers/registry.js'
 import type { FastifyInstance } from 'fastify'
 import { eq } from 'drizzle-orm'
+import { users } from '../../src/db/schema.js'
 import { ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/service.js'
 import { handleProvision } from '../../src/modules/provisioning/handlers.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
@@ -75,33 +76,25 @@ describe.skipIf(skip)('auth + permissions (integration)', () => {
     expect(res.statusCode).toBe(401)
   })
 
+  it('allows only a Super Admin to sync the provider catalog', async () => {
+    const email = 'catalog-operator@test.local'
+    const token = await register(email, 'Catalog123456!')
+    const sync = () => app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/providers/leaseweb/catalog/sync',
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect((await sync()).statusCode).toBe(403)
+    await ctx.db.update(users).set({ role: 'admin' }).where(eq(users.email, email))
+    expect((await sync()).statusCode).toBe(403)
+    await ctx.db.update(users).set({ role: 'super_admin' }).where(eq(users.email, email))
+    expect((await sync()).statusCode).toBe(200)
+  })
+
   it('one user cannot read or act on another user\'s server', async () => {
-    // User A creates an offer + order (mocked provision handled separately).
+    // User A creates an order (mocked provision handled separately).
     const aToken = await register('bob@test.local', 'Bob123456!')
     const bToken = await register('carol@test.local', 'Carol123456!')
-
-    const catalog = await app.inject({
-      method: 'POST',
-      url: '/api/v1/admin/providers/leaseweb/catalog/sync',
-      headers: { authorization: `Bearer ${aToken}` },
-    })
-    // Non-admin is forbidden from admin endpoints.
-    expect(catalog.statusCode).toBe(403)
-
-    // Admin sync (create a quick admin directly).
-    const adminRes = await app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/register',
-      payload: { email: 'root@test.local', password: 'Root123456!' },
-    })
-    const adminToken = (adminRes.json() as { data: { token: string } }).data.token
-    await ctx.db.execute('update users set role = \'admin\' where email = \'root@test.local\'')
-    const sync = await app.inject({
-      method: 'POST',
-      url: '/api/v1/admin/providers/leaseweb/catalog/sync',
-      headers: { authorization: `Bearer ${adminToken}` },
-    })
-    expect(sync.statusCode).toBe(200)
 
     const offer = await findOfferByProductAndLocation(ctx.db, 'leaseweb', 'VPS02_4', 'FRA-01')
     const owner = await ctx.db.query.users.findFirst({ where: (t) => eq(t.email, 'bob@test.local') })
