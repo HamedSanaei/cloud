@@ -1,5 +1,6 @@
 import type { ProviderBillingOption, ProviderOffer, ProviderOsOption } from '../provider.interface.js'
 import { sanitizeLeasewebPayload } from './safety.js'
+import { bytesPerTb, isTrafficByteCount } from '../../../contracts/home-tariffs.js'
 
 export type LeasewebRecord = Record<string, unknown>
 
@@ -62,6 +63,18 @@ export function sizeGb(value: unknown): number {
   if (/\bT(?:I)?B\b/.test(unit)) return amount * 1024
   if (/\bM(?:I)?B\b/.test(unit)) return amount / 1024
   return amount
+}
+
+// Older VPS rows retain the provider's declared unit in raw. The legacy
+// trafficGb column alone loses the distinction between decimal and binary TB.
+export function leasewebTrafficBytes(raw: unknown, trafficGb: number | null) {
+  const reported = record(raw).traffic
+  const amount = reported == null ? trafficGb == null ? undefined : String(trafficGb) : text(reported)
+  const match = amount?.match(/^(\d+(?:\.\d+)?)\s*(TB|TiB|GB|GiB|MB|MiB|B)?$/i)
+  if (!match) return null
+  const factors: Record<string, number> = { TB: bytesPerTb, TIB: 2 ** 40, GB: 1e9, GIB: 2 ** 30, MB: 1e6, MIB: 2 ** 20, B: 1 }
+  const bytes = Math.round(Number(match[1]) * factors[(match[2] ?? 'GB').toUpperCase()]!)
+  return isTrafficByteCount(bytes) ? bytes : null
 }
 
 export function freeOptions(value: unknown): ProviderOsOption[] {

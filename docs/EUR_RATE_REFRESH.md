@@ -1,90 +1,48 @@
-# Automated EUR pricing — issue #101
+# AbanTether exchange rates for checkout
 
-Owner-approved source and cadence: AbanTether's `EUR` market, every 30 minutes,
-always direct. No USD/USDT substitution or proxy fallback is permitted for EUR.
+The website reads EUR from the active AbanTether EURIRT market and uses the
+active USDTIRT market as the basis for USD-denominated provider prices.
+The direct USD ticker was checked from Production and returned HTTP 404.
+USD and USDT are distinct currencies. This is the retail pricing policy for
+USD offers, with the USDT source explicitly recorded in the price snapshot.
 
-## Source and money
+## Refresh and validity
 
-- GET `https://api.abantether.com/api/v1/manager/otc/ticker?coin=EUR`.
-- Require `data.markets.EURIRT`, symbol exactly `EUR`, active=true, and a positive,
-  bounded decimal `buy_price`. This is the same buy/ask convention as existing
-  USDT pricing. The published IRT price is **toman**, converted to IRR by ×10.
-- Conversion uses integer arithmetic with the existing six-decimal FX precision;
-  only excess precision rounds upwards. No floating-point marketing price,
-  guessed rate, EURT, fiat-dollar or USDT substitute is inserted.
-- One genuine observation appends one EUR→IRR history row plus an atomic audit
-  entry `pricing.fx_rate.refreshed`, including source and conversion. `createdAt`
-  is the local observation time; the ticker provides no exchange timestamp.
-- Existing retail pricing, exact IRR ledger debits, future hourly pricing and
-  paid-month snapshots remain unchanged. Historical hourly renewal selects the
-  actual historical FX row; a new observation never backfills a missed hour.
+- EUR refreshes every 30 minutes. USDT refreshes at half of its configured TTL,
+  capped at 30 minutes. The existing BullMQ FX queue runs one scheduler per market.
+- AbanTether requests always use verified direct HTTPS. Each response must identify the
+  requested, active market and include a positive bounded decimal buy price.
+  The ticker reports toman. Multiplication by ten yields rial with six FX decimals.
+- A missing or expired observation triggers a refresh on read. A short per-market
+  PostgreSQL lease coalesces requests across API and Worker processes. HTTP runs
+  outside the transaction. The observed rate and audit are committed together.
+- A transient transport failure, HTTP 429 or HTTP 5xx gets one bounded retry.
+  The worker uses exponential backoff. Other failed attempts have a short cooldown
+  to prevent overlapping retries from overwhelming the source.
+- EUR quotes use observations less than 24 hours old. USDT uses its configured TTL.
+  New EUR and USD/USDT purchases use market observations. Rates entered through the
+  existing manual admin route retain their existing role for historical EUR renewal.
+  A new quote expires by the FX deadline and keeps the FX row, source and time.
+  Paid invoices and the historical renewal rules retain their recorded evidence.
 
-## Scheduling, failures and recovery
+## Diagnosis and operational checks
 
-The canonical website Worker upserts the single BullMQ scheduler
-`eur-fx-refresh` on queue `pricing.eur-refresh`, every 1800000 ms. Its first
-background run is 30 minutes after registration. Existing worker readiness,
-maintenance/backup writer gate and shutdown behavior also cover this queue.
-Platform-authority mode still leaves financial/provider jobs to its authority.
-No new secret, environment variable, migration or external cron is required.
+The admin finance screen shows the latest source, rate, time, freshness deadline
+and sanitized failure category for each market. A missing or expired rate during
+refresh raises a critical in-app notification for active superadmins. Near-expiry
+and consecutive failures raise warnings. Recovery clears the incident state.
+Sanitized EUR and USDT failure events also appear in the system log.
 
-API reads can recover a missing or expired EUR rate immediately without waiting
-for the first background tick. In-process single-flight plus a PostgreSQL
-transaction advisory lock serialize API/Worker refreshes. The transaction
-rechecks recent observations; a one-minute coalescing window prevents duplicate
-observations from concurrent processes/retries without skipping the next
-half-hour tick because of HTTP latency. No existing row is retimestamped.
+On 2026-11-20 UTC, the deployed API container returned valid active EURIRT and
+USDTIRT responses over direct TLS. The EUR history and audit showed half-hourly
+success, while USDT had no dedicated scheduler. The live admin catalog error
+was reproduced under a read-only DB connection. Leaseweb is hidden from normal
+sales but visible to admins, and its GBP rate was expired. That single missing
+rate caused the deployed admin storefront to reject otherwise valid EUR offers.
+Partial catalog results now retain independently priced offers and report the
+providers with temporarily unavailable prices.
 
-Requests have a ten-second deadline, no cache and no redirects. Invalid data,
-inactive/wrong markets, zero/negative/overflow prices, network/TLS/HTTP errors
-produce no new FX row. Background jobs retry three times with exponential
-one-minute backoff; sanitized error events (`pricing.eur_refresh_failed`,
-`job.failed`) appear in the existing admin system logs before the old rate
-expires. No raw provider response or credentials are logged.
-
-The existing **24-hour EUR maximum age is retained**, not extended: during a
-temporary source outage an existing still-valid observation remains usable with
-its original timestamp. Missing/expired EUR with a failed fresh fetch refuses
-pricing with `eur_rate_unavailable` (503), and the public price page explains
-unavailability. Future-dated rows are excluded. Recovery appends a real observed
-rate; it does not modify customer balances or previously paid invoices.
-
-## Direct-only network policy
-
-All `abantether` HTTP traffic, including existing USDT requests, uses the explicit
-direct Undici Agent with public-DNS validation and certificate verification.
-Saved proxy assignments, HTTP(S)/ALL_PROXY environment settings and unreadable
-encrypted proxy settings cannot route it through a proxy. Backend validation
-rejects new AbanTether proxy assignments and proxy-profile diagnostics; the admin
-card exposes only a direct connection test. Legacy saved routes are ignored,
-without rewriting encrypted settings or credentials. Other services retain
-their existing proxy policies and fail-closed behavior.
-
-The existing `USDT_RATE_API_BASE_URL` is reused for the common AbanTether API
-origin; no production env edit is needed. The production destination policy
-continues to allow only the exact fixed HTTPS authority, never arbitrary URLs.
-
-## Verification and release
-
-On 2026-11-18, a read-only direct request from the production host
-`213.177.178.82` (`curl --noproxy '*'`, normal SSL verification) successfully
-returned an active `EURIRT` market with decimal `buy_price`. No production FX,
-wallet, provider resource or configuration was changed during that check.
-
-Regression coverage includes exact conversion, concurrent API/Worker clients,
-history/audit uniqueness, half-hour refresh, failed fetch/recovery, invalid or
-future data, no USDT substitution, restored public retail/SSR prices, and the
-direct-only route/diagnostic/UI policy. Existing renewal/funding/monthly snapshot
-tests run unchanged. DB integration runs only against disposable CI databases.
-
-After approved publication, verify Worker readiness and the single scheduler,
-then the EUR history/audit source/time and another genuine observation after
-30 minutes. Check `/api/public/home-prices` and initial homepage/Hetzner HTML
-against the authoritative retail quote without submitting an order. Review
-admin logs on failure. Do not claim live restoration solely from PR CI.
-
-Rollback uses the prior API/Worker image pair through the normal deployment
-process, leaving genuine FX history and customer financial records intact.
-The old worker has no processor for this new queue, so remove only its
-`eur-fx-refresh` scheduler under rollback authorization to avoid pending jobs;
-never clear other queues or delete data/history. No DB migration reversal is needed.
+After deployment, verify the worker has both schedules, that new EUR and USDT
+observations and audits appear, and that the admin and regular storefronts
+provide offers with current pricing even if an independent provider is blocked.
+Confirm checkout recovery without submitting a real purchase.

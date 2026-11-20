@@ -9,7 +9,7 @@ import { retryStartup, startupFailure, waitForStartupDependencies } from './lib/
 import { assertSiteAuthorityReady, isPlatformAuthority } from './modules/integration/authority.js'
 import { installOutboundClient, OutboundHttp } from './modules/outbound/client.js'
 import { readOutbound } from './modules/outbound/settings.js'
-import { euroRefreshIntervalMs } from './modules/pricing/service.js'
+import { euroRefreshIntervalMs, usdtRefreshIntervalMs } from './modules/pricing/market-fx.js'
 
 async function main() {
   loadConfig()
@@ -46,10 +46,12 @@ async function main() {
       try {
         await queues.queue(JOB_NAMES.RENEWAL_SWEEP).waitUntilReady()
         await queues.scheduleRenewalSweep()
-        await queues.queue(JOB_NAMES.EUR_FX_REFRESH).upsertJobScheduler(
-          'eur-fx-refresh', { every: euroRefreshIntervalMs, startDate: Date.now() + euroRefreshIntervalMs },
-          { name: 'eur-fx-refresh', data: {}, opts: { attempts: 3, backoff: { type: 'exponential', delay: 60_000 }, removeOnComplete: 50, removeOnFail: 100 } },
-        )
+        for (const [currency, every] of [['EUR', euroRefreshIntervalMs], ['USDT', usdtRefreshIntervalMs()]] as const) {
+          const name = `${currency.toLowerCase()}-fx-refresh`
+          await queues.queue(JOB_NAMES.EUR_FX_REFRESH).upsertJobScheduler(name, { every }, {
+            name, data: { currency }, opts: { attempts: 3, backoff: { type: 'exponential', delay: 60_000 }, removeOnComplete: 50, removeOnFail: 100 },
+          })
+        }
         await queues.queue(JOB_NAMES.SERVER_SYNC).upsertJobScheduler(
           'provisioning-status', { every: 30_000 }, { name: 'server-sync', data: {} },
         )

@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm'
 import type { DbClient, DbOrTx } from '../../db/index.js'
 import { hetznerTrafficPeriods, invoiceItems, invoices, servers, subscriptions, users } from '../../db/schema.js'
-import { isTrafficByteCount } from '../../contracts/home-tariffs.js'
+import { formatTrafficTb, isTrafficByteCount } from '../../contracts/home-tariffs.js'
 import { AppError, ValidationError } from '../../lib/errors.js'
 import { recordEvent } from '../system/events.js'
 import { customerProvider } from '../servers/management.js'
@@ -137,7 +137,7 @@ export async function settleTrafficCharges(tx: DbOrTx, userId: string, walletId:
     taxRial: total.taxRial + price.taxRial, totalRial: total.totalRial + price.totalRial }), { subtotalRial: 0, taxRial: 0, totalRial: 0 })
   if (!Number.isSafeInteger(totals.totalRial)) throw new ValidationError('مبلغ ترافیک خارج از محدودهٔ دفترکل است')
   for (const { period, blocks, price, evidence } of charges) {
-    const description = `ترافیک مازاد هتزنر (${period.month})، ${blocks} × ۱۰۰ مگابایت`
+    const description = `ترافیک مازاد هتزنر (${period.month})، ${formatTrafficTb(blocks * blockBytes)}`
     await applyWalletTransaction(tx, userId, walletId, { amountRial: price.totalRial, type: 'traffic_overage', referenceType: 'invoice',
       referenceId: invoiceId, idempotencyKey: `hetzner-traffic:${period.id}:${evidence.firstBlock}-${evidence.lastBlock}`, description, metadata: evidence })
     await tx.insert(invoiceItems).values({ invoiceId, description, quantity: 1, unitAmountRial: price.totalRial, totalRial: price.totalRial,

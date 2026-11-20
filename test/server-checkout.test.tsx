@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { CreateServerPage } from '../src/pages/WizardPages'
-import { WalletPage } from '../src/pages/FinancePages'
+import { InvoicesPage, WalletPage } from '../src/pages/FinancePages'
 import { HetznerTraffic } from '../src/components/servers/HetznerTraffic'
 import { ToastProvider } from '../src/components/ui/Toast'
 import { createServer } from '../src/lib/endpoints'
@@ -21,11 +21,12 @@ let posts: Array<{ body: Record<string, unknown>; key?: string }>
 let balance: number
 let availableCatalog: typeof catalog
 let acceptedOrder: { id: string; name: string } | null
+let pricingUnavailable: boolean
 let holdOrderResponse: boolean
 let releaseOrderResponse: ((response: Response) => void) | undefined
 beforeEach(() => {
   sessionStorage.clear(); balance = 0; posts = []; availableCatalog = catalog
-  acceptedOrder = null; holdOrderResponse = false; releaseOrderResponse = undefined
+  acceptedOrder = null; pricingUnavailable = false; holdOrderResponse = false; releaseOrderResponse = undefined
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     if (init?.method === 'POST') {
       if (url.endsWith('/auth/operation-email/start')) {
@@ -40,6 +41,10 @@ beforeEach(() => {
     }
     if (url.includes('/servers/provisioning/by-request/')) return Response.json({ data: acceptedOrder })
     if (url.endsWith('/wallets/recharges/receipt-fixture')) return Response.json({ data: { id: 'receipt-fixture', status: 'succeeded' } })
+    if (pricingUnavailable && url.includes('/catalog/storefront')) return Response.json({ error: 'eur_rate_unavailable', message: 'قیمت‌گذاری موقتاً در دسترس نیست.' }, { status: 503 })
+    if (url.endsWith('/invoices')) return Response.json({ data: [{ id: 'traffic-invoice', number: 'INV-TRAFFIC', description: 'ترافیک مازاد هتزنر',
+      amount: 1000, status: 'paid', date: '2026-11-18T00:00:00Z', traffic: [{ month: '2026-11', blocks: 1, previousOutgoingBytes: 1e12,
+        outgoingBytes: 1_000_100_000_000, includedBytes: 1e12, taxRial: 0, totalRial: 10000, fxRate: '2000000', fxAt: '2026-11-18T00:00:00Z' }] }] })
     const data = url.includes('/catalog/storefront') ? availableCatalog : url.endsWith('/wallets') ? [{ id: 'wallet', name: 'Test wallet', balance }] : url.includes('integration/status') ? { enabled: false, linked: false } : []
     return new Response(JSON.stringify({ data }), { headers: { 'content-type': 'application/json' } })
   }))
@@ -47,6 +52,7 @@ beforeEach(() => {
 function open(path = '/servers/create') {
   return render(<MemoryRouter initialEntries={[path]}><ToastProvider><Routes>
     <Route path="/servers/create" element={<CreateServerPage />} /><Route path="/wallet" element={<WalletPage />} />
+    <Route path="/invoices" element={<InvoicesPage />} />
     <Route path="/servers" element={<Link to="/servers/create">ایجاد سرور جدید</Link>} />
   </Routes></ToastProvider></MemoryRouter>)
 }
@@ -148,12 +154,35 @@ describe('Issue #3 server checkout', () => {
     await act(async () => { releaseOrderResponse?.(Response.json({ data: acceptedOrder })) })
   })
 
-  it('labels included Hetzner traffic TiB and excess pricing decimal TB', () => {
+  it('converts byte allowances and shows decimal TB in the panel', () => {
     const stamp = '2026-11-18T00:00:00Z'
     render(<HetznerTraffic includedBytes={20 * 2 ** 40} overage={{ perTbRial: 100000, includedBytes: null,
       source: 'hetzner-server-type-location', observedAt: stamp, fxAt: stamp, ruleVersion: stamp }} />)
-    expect(screen.getByText('۲۰ TiB')).toBeTruthy()
+    expect(screen.getByText('۲۱٫۹۹۰۲۳۲۵۵۵۵۲ TB')).toBeTruthy()
     expect(screen.getByText('/ TB')).toBeTruthy()
+  })
+
+  it('keeps checkout blocked during missing FX and retries successfully in the same session', async () => {
+    pricingUnavailable = true
+    open()
+    await screen.findByRole('alert')
+    expect((screen.getByRole('button', { name: 'مرحله بعد' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: /Hetzner/ })).toBeNull()
+    pricingUnavailable = false
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'تلاش دوباره' }))
+    await user.click(await screen.findByRole('button', { name: /Hetzner/ }))
+    await user.click(screen.getByRole('button', { name: /نورنبرگ/ }))
+    expect((screen.getByRole('button', { name: 'مرحله بعد' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(posts).toEqual([])
+  })
+
+  it('renders invoice traffic usage and billed volume in TB without altering the invoice amount', async () => {
+    open('/invoices')
+    const details = (await screen.findByText('جزئیات ترافیک مازاد')).parentElement!
+    expect(details.textContent).toContain('۰٫۰۰۰۱ TB')
+    expect(details.textContent).toContain('۱٫۰۰۰۱ TB')
+    expect(details.textContent).toContain('۱۰۰۰۰ ریال')
   })
   it('sends idempotency only in the header accepted by the strict API', async () => {
     await createServer({ name: 'test-server', offerId: 'offer', os: 'ubuntu', billingPeriod: 'hourly', walletId: 'wallet', idempotencyKey: 'stable-key' })

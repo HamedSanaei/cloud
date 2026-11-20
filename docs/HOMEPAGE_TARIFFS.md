@@ -25,8 +25,9 @@ availability message. If a CDN rule caches HTML explicitly, exempt `/` and
 Under **تنظیمات فروشگاه → تعرفهٔ سرور ایران**, an active site administrator can
 save and publish independently approved monthly unit rates in integer rial.
 Use `null` for unconfirmed rates; a zero rate represents an explicitly
-published zero charge. Set the contract's TB/TiB unit and tax treatment before
-publishing. The table shows retail rates in toman. It does not create any Iran
+published zero charge. Enter traffic rates per decimal TB and set the tax
+treatment before publishing. Existing binary-unit approvals are projected to
+the nearest rial per decimal TB when read. The table shows retail rates in toman. It does not create any Iran
 billing, catalog inventory or provisioning behavior.
 
 After deployment, inspect the homepage URL in Search Console and validate its

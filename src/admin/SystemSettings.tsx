@@ -121,7 +121,7 @@ export function SystemIranTariffs() {
     }}>
       {resources.map(resource => <Input key={resource} label={`${iranResources[resource]} (ریال)`} type="number" min={0} max={iranRateMaximum} step={1}
         value={value.rates[resource] ?? ''} onChange={event => setDraft({ ...draft, rates: { ...value.rates, [resource]: event.target.value === '' ? null : Number(event.target.value) } })} />)}
-      <Select label="واحد ترافیک" value={value.trafficUnit} onChange={event => setDraft({ ...draft, trafficUnit: event.target.value === 'TiB' ? 'TiB' : 'TB' })}><option value="TB">TB (۱٬۰۰۰ GB)</option><option value="TiB">TiB (۱٬۰۲۴ GiB)</option></Select>
+      <p>مبلغ هر ردیف ترافیک به ازای ۱ TB ده‌دهی است.</p>
       <Select label="مالیات" value={value.tax} onChange={event => setDraft({ ...draft, tax: event.target.value === 'included' ? 'included' : 'excluded' })}><option value="excluded">بدون مالیات</option><option value="included">شامل مالیات</option></Select>
       <Toggle label="انتشار نرخ‌های تأییدشده در صفحهٔ اصلی" checked={value.published} onChange={published => setDraft({ ...draft, published })} />
       <Button type="submit" disabled={busy}>ذخیرهٔ تعرفه</Button><p role="status">{notice}</p>
@@ -223,6 +223,21 @@ function Pagination({ page, pages, setPage }: { page: number; pages: number; set
 function download(blob: Blob, name: string) { const url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = name; link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000) }
 
 interface FinancialUser { id: string; name: string; email: string; mobile: string; status: string; wallets: Array<{ id: string; name: string; balanceRial: number }> }
+function MarketFxStatus() {
+  type Status = { market: 'EUR' | 'USDT'; health: string; rate: string | null; lastSuccessAt: string | null; validUntil: string | null; failures: number; error: string | null }
+  const fx = useApiQuery(() => get<Status[]>('/finance/fx-status'))
+  const labels: Record<string, string> = { missing: 'ثبت نشده', expired: 'منقضی', expiring: 'نزدیک انقضا', fresh: 'معتبر' }
+  return <Card><h2>سلامت نرخ ارز آبان‌تتر</h2>
+    <p>نرخ یورو از EURIRT و مبنای قیمت‌گذاری دلاری از USDTIRT، با تبدیل تومان به ریال، ثبت می‌شود.</p>
+    {fx.loading ? <p role="status">در حال بررسی…</p> : fx.error ? <p role="alert">{fx.error}</p> : fx.data?.map(item =>
+      <section key={item.market} className="system-record">
+        <strong>{item.market} · {labels[item.health] ?? item.health}</strong>
+        <p>آخرین نرخ {item.rate ? rial(Number(item.rate)) : 'ثبت نشده'} · زمان ثبت {item.lastSuccessAt ? date(item.lastSuccessAt) : '—'} · اعتبار تا {item.validUntil ? date(item.validUntil) : '—'}</p>
+        {item.failures > 0 && <p role="status">شکست‌های پیاپی {item.failures} · علت <bdi>{item.error}</bdi></p>}
+      </section>)}
+    <Button variant="secondary" disabled={fx.loading} onClick={fx.refetch}>به‌روزرسانی وضعیت نرخ</Button>
+  </Card>
+}
 interface Adjustment { ownerEmail?: string; ownerName?: string; walletName?: string; id: string; actorId: string; userId: string; walletId: string; direction: string; amountRial: number; status: string; reason: string; reference: string; beforeRial: number | null; afterRial: number | null; createdAt: string }
 function LinkOrderRefund() {
   const [params] = useSearchParams()
@@ -260,7 +275,7 @@ export function SystemFinance() {
   const history = useApiQuery(() => get<Page<Adjustment>>('/finance/adjustments?' + new URLSearchParams({ page: String(page), ...(walletId ? { walletId } : {}) })), [page, walletId])
   const wallet = user?.wallets[0], value = Number(amount), after = wallet ? wallet.balanceRial + (direction === 'credit' ? 1 : -1) * value : 0
   const changed = () => { key.current = crypto.randomUUID() }
-  return <div className="page-stack"><Card><h2>یافتن دقیق حساب</h2><form className="system-search" onSubmit={async e => { e.preventDefault(); setBusy(true); setNotice(''); setUser(null); setResults([]); try { const found = await get<FinancialUser[]>('/finance/users?' + new URLSearchParams({ search })); setResults(found); if (!found.length) setNotice('حسابی پیدا نشد.') } catch (e) { setNotice(errorText(e)) } finally { setBusy(false) } }}>
+  return <div className="page-stack"><MarketFxStatus /><Card><h2>یافتن دقیق حساب</h2><form className="system-search" onSubmit={async e => { e.preventDefault(); setBusy(true); setNotice(''); setUser(null); setResults([]); try { const found = await get<FinancialUser[]>('/finance/users?' + new URLSearchParams({ search })); setResults(found); if (!found.length) setNotice('حسابی پیدا نشد.') } catch (e) { setNotice(errorText(e)) } finally { setBusy(false) } }}>
     <Input label="شمارهٔ موبایل یا ایمیل کامل" required value={search} onChange={e => setSearch(e.target.value)} /><Button type="submit" disabled={busy}>جست‌وجوی حساب</Button></form>
     {results.map(item => <button type="button" className={'system-user ' + (user?.id === item.id ? 'is-selected' : '')} aria-pressed={user?.id === item.id} key={item.id} onClick={() => { setUser(item); setPage(1); changed() }}><strong>{item.name || 'بدون نام'} · {label(item.status)}</strong><span dir="ltr">{item.email} · {item.mobile}</span><small dir="ltr">{item.id}</small></button>)}
   </Card>{user ? <Card><h2>تعدیل کیف پول حساب</h2><p>{user.name} · <bdi>{user.email}</bdi></p><p>همهٔ مبالغ این فرم دقیقاً به ریال هستند. تعدیل بزرگ نیاز به بررسی درخواست قدیمی دارد؛ برداشت نباید پوشش تعهدات فعال را کم کند.</p>

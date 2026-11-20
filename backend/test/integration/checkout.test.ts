@@ -12,7 +12,7 @@ import { handleProvision } from '../../src/modules/provisioning/handlers.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
 import { getProvider, registerProvider, registerConfiguredProviders } from '../../src/modules/providers/registry.js'
 import { createHetznerProvider } from '../../src/modules/providers/hetzner/live.js'
-import { setFxRate, updatePricingRules } from '../../src/modules/pricing/service.js'
+import { euroMarketSource, setFxRate, updatePricingRules } from '../../src/modules/pricing/service.js'
 import { hetznerPrepaidMonth } from '../../src/modules/pricing/periods.js'
 import { creditWallet, ensureDefaultWallet } from '../../src/modules/wallets/service.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
@@ -34,7 +34,7 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
       return { ...catalog, offers: catalog.offers.map(o => ({ ...o, provider: 'hetzner', category: 'cloud' as const,
         billingOptions: [{ billingCycle: 'hourly', amountCents: 10 }] })) }
     } })
-    await setFxRate(ctx.db, '620000')
+    await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
     await syncProviderCatalog(ctx.db, getProvider('hetzner'), { mode: 'live' })
     await ctx.db.update(providers).set({ enabled: true }).where(eq(providers.id, 'hetzner'))
     await enableAllOffersForSale(ctx.db, 'hetzner')
@@ -157,7 +157,7 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
         expect(response.body).toContain('<summary aria-label="سنگاپور"><img src="/flags/sg.svg"')
         expect(response.body).toContain('<bdi>Singapore، sin</bdi>')
         expect(response.body).toContain(new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(publicOffer.monthly / 10) + ' تومان')
-        expect(response.body).toContain('۰٫۵ TiB')
+        expect(response.body).toContain('۰٫۵۴۹۷۵۵۸۱۳۸۸۸ TB')
         expect(response.body).not.toContain('قیمت ماهانهٔ معتبر در دسترس نیست')
       }
       expect(await ctx.db.query.invoices.findMany({ where: t => eq(t.userId, customer.user.id) })).toEqual([])
@@ -285,7 +285,7 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
     const admin = await account(true), customer = await account()
     await ctx.db.update(users).set({ role: 'super_admin' }).where(eq(users.id, admin.user.id))
     const read = async () => (await app.inject('/api/public/home-prices')).json().data
-    const iran = { rates: { outbound: 123450, inbound: 0, cpu: 250000, ram: null }, trafficUnit: 'TiB', tax: 'included', published: false }
+    const iran = { rates: { outbound: 123450, inbound: 0, cpu: 250000, ram: null }, trafficUnit: 'TB', tax: 'included', published: false }
     const update = (headers: Record<string, string>, value: unknown) => app.inject({ method: 'POST', url: '/api/admin/settings/iran-tariffs', headers, payload: value as object })
     const original = (await read()).hetzner.find((row: { id: string }) => row.id === offer.id)
     const metadata = (await read()).meta
@@ -300,16 +300,16 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
     expect((await read()).iran).toBeNull()
     expect((await update(admin.headers, { ...iran, published: true })).statusCode).toBe(200)
     try {
-      expect((await read()).iran).toEqual({ rates: iran.rates, trafficUnit: 'TiB', tax: 'included' })
+      expect((await read()).iran).toEqual({ rates: iran.rates, trafficUnit: 'TB', tax: 'included' })
       const html = await app.inject('/api/public/home-tariffs')
       expect(html.headers['cache-control']).toBe('no-store')
       expect(html.body).toContain('۱۲٬۳۴۵ تومان')
-      expect(html.body).toContain('هر TiB برابر ۱٬۰۲۴ GiB است.')
+      expect(html.body).toContain('هر TB برابر ۱٬۰۰۰٬۰۰۰٬۰۰۰٬۰۰۰ بایت است.')
       expect(html.body).toContain(`offer=${offer.id}&amp;period=hourly`)
       const focused = await app.inject('/api/public/home-tariffs?scope=hetzner')
       expect(focused.body).toContain(`offer=${offer.id}&amp;period=hourly`)
       expect(focused.body).not.toContain('نرخ واحد منابع سرور ایران')
-      await setFxRate(ctx.db, '720000')
+      await setFxRate(ctx.db, '720000', { source: 'market', note: euroMarketSource })
       const repriced = (await read()).hetzner.find((row: { id: string }) => row.id === offer.id)
       expect(repriced.hourly).toBeGreaterThan(original.hourly)
       const rule = await updatePricingRules(ctx.db, 'hetzner', { markupFixedRial: 150000 })
@@ -321,7 +321,7 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
       const authenticated = await app.inject({ url: '/api/public/home-prices', headers: admin.headers })
       expect(authenticated.json().data.hetzner).toEqual([])
     } finally {
-      await setFxRate(ctx.db, '620000')
+      await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
       await updatePricingRules(ctx.db, 'hetzner', { markupFixedRial: 0 })
       await ctx.db.update(providerProducts).set({ lastSyncedAt: offer.lastSyncedAt }).where(eq(providerProducts.id, offer.id))
       await ctx.db.update(providers).set({ enabled: true }).where(eq(providers.id, 'hetzner'))

@@ -8,7 +8,7 @@ import {
   enableAllOffersForSale,
   findOfferByProductAndLocation,
 } from '../../src/modules/catalog/service.js'
-import { setFxRate } from '../../src/modules/pricing/service.js'
+import { euroMarketSource, setFxRate } from '../../src/modules/pricing/service.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
 import { createOrderFromQuote } from '../../src/modules/orders/service.js'
 import { getProvider } from '../../src/modules/providers/registry.js'
@@ -23,7 +23,7 @@ describe.skipIf(skip)('catalog retail safety (integration)', () => {
   beforeAll(async () => {
     ctx = await getTestContext()
     await truncateAll(ctx.db)
-    await setFxRate(ctx.db, '620000', { note: 'test fixture' })
+    await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
     await syncProviderCatalog(ctx.db, getProvider('leaseweb'))
     await enableAllOffersForSale(ctx.db)
   })

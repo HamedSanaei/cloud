@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm'
 import { getTestContext, truncateAll, dbAvailable } from '../helpers.js'
 import { registerUser } from '../../src/modules/auth/service.js'
 import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
-import { setFxRate } from '../../src/modules/pricing/service.js'
+import { euroMarketSource, setFxRate } from '../../src/modules/pricing/service.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
 import { createOrderFromQuote } from '../../src/modules/orders/service.js'
 import { ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/service.js'
@@ -27,7 +27,7 @@ describe.skipIf(skip)('provisioning safety + permissions (integration)', () => {
   beforeAll(async () => {
     ctx = await getTestContext()
     await truncateAll(ctx.db)
-    await setFxRate(ctx.db, '620000', { note: 'test fixture' })
+    await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
     await syncProviderCatalog(ctx.db, getProvider('leaseweb'))
     await enableAllOffersForSale(ctx.db)
     mock = getProvider('leaseweb') as unknown as MockLeasewebProvider

@@ -1,11 +1,12 @@
 import { eq } from 'drizzle-orm'
 import type { DbClient } from '../../db/index.js'
 import { getConfig } from '../../config.js'
-import { ValidationError } from '../../lib/errors.js'
+import { AppError, ValidationError } from '../../lib/errors.js'
 import { computePriceFromRules, fxMaxAgeMs, getActiveFxRate, getPricingRules } from '../pricing/service.js'
 import { offeredPeriods, retailBilling, type RetailPeriod } from '../pricing/periods.js'
 import type { ProviderBillingOption, ProviderOsOption } from '../providers/provider.interface.js'
 import { listProviders } from '../providers/registry.js'
+import { leasewebTrafficBytes } from '../providers/leaseweb/catalog.js'
 import { hetznerIncludedTraffic, indicativeHetznerTraffic } from '../pricing/hetzner-traffic.js'
 import type { IndicativeTrafficTariff } from '../../contracts/home-tariffs.js'
 
@@ -60,13 +61,19 @@ export async function getStorefront(db: DbClient, admin = false, providerFilter?
   const pricingKeys = [...new Set(eligible.map((product) => product.provider === 'leaseweb' && product.category === 'cloud' ? 'leaseweb.hourly' : product.provider))]
   const rulesByProvider = new Map(await Promise.all(pricingKeys.map(async (key) => [key, await getPricingRules(db, key)] as const)))
   const currencies = [...new Set(eligible.map((product) => product.providerCurrency))]
-  const fxByCurrency = new Map(await Promise.all(currencies.map(async (currency) => [currency, await getActiveFxRate(db, currency)] as const)))
+  const fxByCurrency = new Map<string, Awaited<ReturnType<typeof getActiveFxRate>> | AppError>(await Promise.all(currencies.map(async currency => {
+    try { return [currency, await getActiveFxRate(db, currency)] as const }
+    catch (error) {
+      if (!(error instanceof AppError) || !['eur_rate_unavailable', 'usdt_rate_unavailable', 'fx_rate_stale', 'not_found'].includes(error.code)) throw error
+      return [currency, error] as const
+    }
+  })))
   const offers: StorefrontOffer[] = []
   for (const product of eligible) {
     const location = locationById.get(product.locationId ?? '')
     const rules = rulesByProvider.get(product.provider === 'leaseweb' && product.category === 'cloud' ? 'leaseweb.hourly' : product.provider)
     const fx = fxByCurrency.get(product.providerCurrency)
-    if (!location || !rules?.enabled || !fx) continue
+    if (!location || !rules?.enabled || !fx || fx instanceof AppError) continue
     const options = (product.billingOptions ?? []) as ProviderBillingOption[]
     const operatingSystems = (product.operatingSystems ?? []) as ProviderOsOption[]
     if (operatingSystems.length === 0) continue
@@ -101,17 +108,25 @@ export async function getStorefront(db: DbClient, admin = false, providerFilter?
       diskType: (product.raw as { storageType?: unknown } | null)?.storageType === 'local' ? 'Local' :
         (product.raw as { storageType?: unknown } | null)?.storageType === 'network' ? 'Network' : undefined,
       trafficGb: product.trafficGb,
-      ...(product.provider === 'hetzner' ? { includedTrafficBytes: hetznerIncludedTraffic(product, location.code), trafficOverage: indicativeHetznerTraffic(product, location.code, rules, fx) } : {}),
+      includedTrafficBytes: product.provider === 'hetzner' ? hetznerIncludedTraffic(product, location.code) : leasewebTrafficBytes(product.raw, product.trafficGb),
+      ...(product.provider === 'hetzner' ? { trafficOverage: indicativeHetznerTraffic(product, location.code, rules, fx) } : {}),
       operatingSystems,
       prices,
     })
   }
   offers.sort((a, b) => a.vcpu - b.vcpu || a.memoryMb - b.memoryMb || a.name.localeCompare(b.name))
+  const pricingUnavailable = active.filter(provider => eligible.some(product => product.provider === provider.id &&
+    fxByCurrency.get(product.providerCurrency) instanceof AppError)).map(provider => ({ id: provider.id, name: provider.displayName }))
+  const firstFxError = [...fxByCurrency.values()].find((fx): fx is AppError => fx instanceof AppError)
+  if (!offers.length && firstFxError) throw new AppError(503, firstFxError.code, 'قیمت‌گذاری موقتاً در دسترس نیست. برای دریافت نرخ تازه دوباره تلاش کنید.')
   const now = Date.now()
   const offeredIds = new Set(offers.map(offer => offer.id))
   const sources = products.filter(product => offeredIds.has(product.id))
   const catalogTimes = sources.map(product => product.lastSyncedAt.getTime())
-  const fxTimes = [...new Set(sources.map(product => product.providerCurrency))].map(currency => ({ currency, fx: fxByCurrency.get(currency)! }))
+  const fxTimes = [...new Set(sources.map(product => product.providerCurrency))].flatMap(currency => {
+    const fx = fxByCurrency.get(currency)
+    return fx && !(fx instanceof AppError) ? [{ currency, fx }] : []
+  })
   return {
     freshness: {
       checkedAt: new Date(now).toISOString(),
@@ -122,7 +137,8 @@ export async function getStorefront(db: DbClient, admin = false, providerFilter?
       catalogUpdatedAt: catalogTimes.length ? new Date(Math.min(...catalogTimes)).toISOString() : null,
       fxUpdatedAt: fxTimes.length ? new Date(Math.min(...fxTimes.map(({ fx }) => fx.createdAt.getTime()))).toISOString() : null,
     },
-    datacenters: active.map((provider) => {
+    pricingUnavailable,
+    datacenters: active.filter(provider => !pricingUnavailable.some(item => item.id === provider.id) || offers.some(offer => offer.provider === provider.id)).map((provider) => {
       const providerOffers = offers.filter((offer) => offer.provider === provider.id)
       const codes = new Set(providerOffers.map((offer) => offer.location))
       const periods = new Set(providerOffers.flatMap((offer) => offer.prices.map((price) => price.period)))

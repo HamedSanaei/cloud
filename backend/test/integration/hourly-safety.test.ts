@@ -4,7 +4,7 @@ import { dbAvailable, getTestContext, truncateAll, testLogger } from '../helpers
 import type { TestContext } from '../helpers.js'
 import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
 import { getProvider, registerProvider } from '../../src/modules/providers/registry.js'
-import { setFxRate } from '../../src/modules/pricing/service.js'
+import { euroMarketSource, setFxRate } from '../../src/modules/pricing/service.js'
 import { registerUser, createSession } from '../../src/modules/auth/service.js'
 import { ensureDefaultWallet, creditWallet, debitWallet } from '../../src/modules/wallets/service.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
@@ -42,7 +42,7 @@ describe.skipIf(!dbAvailable)('hourly funding safety', () => {
         return { ...catalog, offers: catalog.offers.map((offer) => ({ ...offer, category: 'cloud' as const, billingOptions: [{ billingCycle: 'hourly', amount: '0.10' }, ...offer.billingOptions] })) }
       },
     })
-    await setFxRate(ctx.db, '620000')
+    await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
     await syncProviderCatalog(ctx.db, getProvider('leaseweb'))
     await enableAllOffersForSale(ctx.db)
   })

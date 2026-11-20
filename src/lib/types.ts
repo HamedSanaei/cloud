@@ -85,6 +85,8 @@ export interface StorefrontOffer {
 export interface StorefrontCatalog {
   datacenters: StorefrontDatacenter[]
   offers: StorefrontOffer[]
+  freshness?: { validUntil: string }
+  pricingUnavailable?: Array<{ id: string; name: string }>
   source?: 'platform'
 }
 

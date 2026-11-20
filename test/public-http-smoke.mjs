@@ -51,7 +51,7 @@ try {
     assert.ok(html.includes('offer=fixture-plan&amp;period=monthly&amp;location=hel1'))
     assert.ok(html.includes('۶۷۸٬۹۰۰ تومان'))
     assert.ok(!html.includes('انتخاب ساعتی') && !html.includes('انتخاب ماهانه'))
-    assert.ok(html.includes('۲۰ TiB') && html.includes('۳۳٬۳۴۵ تومان'))
+    assert.ok(html.includes('۲۱٫۹۹۰۲۳۲۵۵۵۵۲ TB') && html.includes('۳۳٬۳۴۵ تومان'))
     assert.ok(html.includes('og:image') && html.includes('/parserver-share.png'))
     assert.ok(!html.includes('<!--#'), 'SSI directives must be resolved, not exposed')
     assert.ok(html.includes('application/ld+json'))

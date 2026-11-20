@@ -29,6 +29,7 @@ import { WalletLedgerAmountCells, WalletLedgerDescription } from '../components/
 import { emptyAmount, movementAmounts, movementHeaders, transactionsCsv, transactionStatus } from '../lib/walletHistory'
 import { chargeReferences } from '../lib/paymentHandoff'
 import { readCheckoutDraft } from '../lib/serverCheckout'
+import { formatTrafficTb, hetznerTrafficBlockBytes } from '../../backend/src/contracts/home-tariffs'
 
 const walletHistoryHeaders = ['شرح', 'کیف پول', ...movementHeaders, 'تاریخ', 'وضعیت']
 
@@ -193,8 +194,8 @@ function FinancialList({ type }: FinancialListProps) {
                 <td>{isInvoice ? <>{invoiceDescription(row.description)}{row.traffic?.length ? <details>
                   <summary>جزئیات ترافیک مازاد</summary>
                   <ul>{row.traffic.map(line => <li key={line.month}>
-                    <bdi>{line.month}</bdi> · {formatCount(line.blocks)} بلوک ۱۰۰ مگابایتی · {formatCount(line.totalRial)} ریال (مالیات {formatCount(line.taxRial)} ریال)
-                    <br />مصرف قبلی {formatCount(line.previousOutgoingBytes)}، مصرف فعلی {formatCount(line.outgoingBytes)}، سهمیه {formatCount(line.includedBytes)} بایت
+                    <bdi>{line.month}</bdi> · حجم صورتحساب <bdi>{formatTrafficTb(line.blocks * hetznerTrafficBlockBytes)}</bdi> · {formatCount(line.totalRial)} ریال (مالیات {formatCount(line.taxRial)} ریال)
+                    <br />مصرف قبلی <bdi>{formatTrafficTb(line.previousOutgoingBytes)}</bdi>، مصرف فعلی <bdi>{formatTrafficTb(line.outgoingBytes)}</bdi>، سهمیه <bdi>{formatTrafficTb(line.includedBytes)}</bdi>
                     <br />هر یورو {formatCount(Number(line.fxRate))} ریال · {formatFaDateTime(line.fxAt, user?.timezone)}
                   </li>)}</ul>
                 </details> : null}</> : chargeReferences(row).paymentReference ?? '—'}</td>

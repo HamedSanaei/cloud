@@ -23,7 +23,7 @@ describe.skipIf(!dbAvailable)('hourly billing and grandfathered daily boundaries
   beforeAll(async () => {
     ctx = await getTestContext()
     await truncateAll(ctx.db)
-    await setFxRate(ctx.db, '620000')
+    await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
     const original = getProvider('leaseweb')
     registerProvider({
       ...original,
@@ -147,7 +147,7 @@ describe.skipIf(!dbAvailable)('hourly billing and grandfathered daily boundaries
     vi.useFakeTimers({ toFake: ['Date'] })
     for (let period = 0; period < 3; period++) {
       vi.setSystemTime(firstDue + period * 3600000 + (period + 1) * 60000)
-      await setFxRate(ctx.db, '620000')
+      await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
       await Promise.all([handleRenewalSweep(ctx), handleRenewalSweep(ctx)])
       const sub = (await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.id, purchase.subscription.id) }))!
       expect(sub.currentPeriodStart.getTime()).toBe(firstDue + period * 3600000)
@@ -172,34 +172,34 @@ describe.skipIf(!dbAvailable)('hourly billing and grandfathered daily boundaries
     } finally { await app.close() }
   })
   it('prices each new hour using fresh FX, with an exact immutable invoice and one debit on retries', async () => {
-    await setFxRate(ctx.db, '620000')
+    await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
     const purchase = await buy('hourly', 'changing-hour@test.local')
     const before = (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, purchase.wallet.id) }))!.balanceRial
     const due = new Date(Date.now() - 1000)
     await ctx.db.update(subscriptions).set({ currentPeriodEnd: due, nextInvoiceAt: due, nextDueAt: due }).where(eq(subscriptions.id, purchase.subscription.id))
-    await setFxRate(ctx.db, '1240000')
+    await setFxRate(ctx.db, '1240000', { source: 'market', note: euroMarketSource })
     await Promise.all([handleRenewalSweep(ctx), handleRenewalSweep(ctx)])
     const invoice = (await ctx.db.query.invoices.findMany({ where: t => eq(t.subscriptionId, purchase.subscription.id) }))[0]!
     expect(invoice.totalRial).toBe(8525)
     expect(before - (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, purchase.wallet.id) }))!.balanceRial).toBe(8525)
     expect(invoice.snapshot).toMatchObject({ fxRate: '1240000.000000', totalRial: 8525, ledgerPrecisionRial: 1 })
-    await setFxRate(ctx.db, '2480000')
+    await setFxRate(ctx.db, '2480000', { source: 'market', note: euroMarketSource })
     await handleRenewalSweep(ctx)
     expect((await ctx.db.query.invoices.findFirst({ where: t => eq(t.id, invoice.id) }))!.snapshot).toEqual(invoice.snapshot)
     const debits = (await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.walletId, purchase.wallet.id) })).filter(t => t.type === 'renewal')
     expect(debits).toHaveLength(1); expect(debits[0]!.amountRial).toBe(-invoice.totalRial)
   })
   it('keeps a prepaid monthly invoice and dates unchanged after FX rises; only the next paid month reprices', async () => {
-    await setFxRate(ctx.db, '620000')
+    await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
     const purchase = await buy('monthly', 'fixed-month@test.local')
     const before = (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, purchase.wallet.id) }))!.balanceRial
     const original = await ctx.db.query.invoices.findFirst({ where: t => eq(t.orderId, purchase.order.id) })
-    await setFxRate(ctx.db, '1860000')
+    await setFxRate(ctx.db, '1860000', { source: 'market', note: euroMarketSource })
     await handleRenewalSweep(ctx)
     expect((await ctx.db.query.subscriptions.findFirst({ where: t => eq(t.id, purchase.subscription.id) }))!.priceRial).toBe(purchase.order.totalRial)
     expect((await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, purchase.wallet.id) }))!.balanceRial).toBe(before)
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(purchase.subscription.currentPeriodEnd.getTime() + 1000)
-    await setFxRate(ctx.db, '1860000')
+    await setFxRate(ctx.db, '1860000', { source: 'market', note: euroMarketSource })
     await handleRenewalSweep(ctx)
     const next = (await ctx.db.query.invoices.findMany({ where: t => eq(t.subscriptionId, purchase.subscription.id) }))[0]!
     expect(next.totalRial).toBe(purchase.order.totalRial * 3)
@@ -210,7 +210,7 @@ describe.skipIf(!dbAvailable)('hourly billing and grandfathered daily boundaries
     const hour = Math.floor(Date.now() / 3_600_000) * 3_600_000 + 3_600_000
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(hour + 60_000)
-    await setFxRate(ctx.db, '620000')
+    await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
     const original = await updatePricingRules(ctx.db, 'hetzner', { markupPercent: 0, markupFixedRial: 0 })
     const purchase = await buy('hourly', 'hourly-historical-margin@test.local')
     vi.setSystemTime(hour + 3_600_000 + 60_000)
@@ -226,7 +226,7 @@ describe.skipIf(!dbAvailable)('hourly billing and grandfathered daily boundaries
     const hour = Math.floor(Date.now() / 3_600_000) * 3_600_000 + 7_200_000
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(hour + 60_000)
-    await setFxRate(ctx.db, '620000')
+    await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
     const blocked = await buy('hourly', 'missing-hour-fx@test.local')
     const healthy = await buy('hourly', 'eligible-hour-fx@test.local')
     const balance = async (id: string) => (await ctx.db.query.wallets.findFirst({ where: t => eq(t.id, id) }))!.balanceRial
@@ -261,7 +261,7 @@ describe.skipIf(!dbAvailable)('hourly billing and grandfathered daily boundaries
     const hour = Math.ceil(Date.now() / 3_600_000) * 3_600_000 + 3_600_000
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(hour + 60_000)
-    await setFxRate(ctx.db, '620000')
+    await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
     const purchase = await buy('hourly', 'hourly-approved-fallback@test.local')
     const id = purchase.subscription.id
     const due = purchase.subscription.currentPeriodEnd

@@ -39,7 +39,8 @@ The catalog reads `included_traffic` and `price_per_tb_traffic.gross` separately
 from the exact server type, location and project currency. Either field can
 come from the matched row in `/pricing.server_types` when the primary source
 lacks it. The catalog stores the original allowance in bytes. The storefront
-displays it in the Hetzner Console convention of 2^40 bytes per displayed TB.
+displays it in decimal TB, using 1,000,000,000,000 bytes per TB. The original
+byte allowance and usage evidence are preserved for billing and reporting.
 Public traffic prices carry the catalog observation time, FX time and pricing
 rule version. The public API exposes the retail indication and allowance.
 

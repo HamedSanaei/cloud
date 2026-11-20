@@ -18,7 +18,7 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { Stepper } from '../components/ui/Stepper'
 import { useToast } from '../components/ui/Toast'
 import { ApiError, isApiConfigured } from '../lib/apiClient'
-import { hetznerTrafficQuota } from '../../backend/src/contracts/home-tariffs'
+import { formatTrafficTb } from '../../backend/src/contracts/home-tariffs'
 import { HetznerTraffic } from '../components/servers/HetznerTraffic'
 import { checkDomainAvailability, createServer, findCheckoutOrder, getOfferImages, getStorefrontCatalog, listWallets, registerDomain, serverCreateIntent } from '../lib/endpoints'
 import { OperationEmail } from '../components/EmailConfirmation'
@@ -80,6 +80,13 @@ export function CreateServerPage() {
     navigate('/servers', { replace: true })
   }, [navigate, pendingKey, recovered, showToast, userId])
   const catalog = useApiQuery(getStorefrontCatalog)
+  const refreshCatalog = catalog.refetch
+  const catalogExpiry = Date.parse(catalog.data?.freshness?.validUntil ?? '')
+  useEffect(() => {
+    if (!Number.isFinite(catalogExpiry) || catalog.error || catalog.loading) return
+    const timer = window.setTimeout(refreshCatalog, Math.max(1_000, catalogExpiry - Date.now()))
+    return () => window.clearTimeout(timer)
+  }, [catalogExpiry, catalog.error, catalog.loading, refreshCatalog])
   useEffect(() => {
     if (pendingKey || !linkedOffer || appliedLink.current || catalog.loading || !catalog.data || catalog.error) return
     appliedLink.current = true
@@ -120,7 +127,8 @@ export function CreateServerPage() {
   const selectedOs = operatingSystems.find((item) => item.id === os)
   const price = offer?.prices.find((item) => item.period === billingPeriod)
   const wallet = wallets.data?.[0]
-  const catalogReady = isApiConfigured() && !catalog.loading && !catalog.error && !!catalog.data
+  const catalogReady = isApiConfigured() && !catalog.loading && !catalog.error && !!catalog.data &&
+    (!Number.isFinite(catalogExpiry) || catalogExpiry > Date.now())
   const locationValid = !!provider && !!selectedLocation
   const periodValid = billingPeriod !== '' && periods.includes(billingPeriod)
   const offerValid = !!offer && !!price
@@ -154,6 +162,7 @@ export function CreateServerPage() {
     setProviderId(''); setLocation(''); setBillingPeriod(''); resetOffer(); setStep(0); catalog.refetch()
   }
   const next = () => {
+    if (Number.isFinite(catalogExpiry) && catalogExpiry <= Date.now()) { refreshCatalog(); return }
     if (submitLock.current || emailOrder || !canContinue) return
     if (step < serverSteps.length - 1) { setStep((value) => value + 1); return }
     if (!allValid || !billingPeriod || !offer || !selectedOs || !wallet || !price) return
@@ -178,13 +187,21 @@ export function CreateServerPage() {
       clearCheckoutDraft(user?.id)
       navigate('/servers')
     } catch (error) {
+      const code = error instanceof ApiError ? (error.body as { error?: string } | null)?.error : undefined
+      const fxUnavailable = code === 'eur_rate_unavailable' || code === 'usdt_rate_unavailable' || code === 'fx_rate_stale'
       if (!emailOrder.pricing) {
-        if (!(error instanceof ApiError) || error.status === 0 || error.status >= 500) {
+        if (!fxUnavailable && (!(error instanceof ApiError) || error.status === 0 || error.status >= 500)) {
           setEmailOrder(null)
           setPendingKey(emailOrder.idempotencyKey)
           return
         }
         preserveOrder()
+      }
+      if (fxUnavailable) {
+        setSubmitError({ message: 'قیمت معتبر موقتاً در دسترس نیست. پس از به‌روزرسانی نرخ دوباره قیمت را تأیید کنید.' })
+        setEmailOrder(null)
+        refreshCatalog()
+        return
       }
       const problem = checkoutFailure(error)
       const changed = error instanceof ApiError && (error.body as { error?: string } | null)?.error === 'server_price_changed'
@@ -198,7 +215,7 @@ export function CreateServerPage() {
     }
   }
   const locationLabel = selectedLocation ? [selectedLocation.city, selectedLocation.country, selectedLocation.code].filter(Boolean).join(' · ') : 'انتخاب نشده'
-  const catalogState = catalog.loading ? 'در حال دریافت دیتاسنترها و قیمت‌های واقعی…' : catalog.error || (!datacenters.length ? 'در حال حاضر دیتاسنتر فعالی برای سفارش موجود نیست.' : '')
+  const catalogState = catalog.loading ? 'در حال به‌روزرسانی نرخ و دریافت قیمت‌های معتبر…' : catalog.error || (!datacenters.length ? 'در حال حاضر دیتاسنتر فعالی برای سفارش موجود نیست.' : '')
 
   if (pendingKey) return <div className="page-stack wizard-page" dir="rtl">
     <PageHeader title="پیگیری درخواست ساخت سرور" icon={<Server />} />
@@ -234,9 +251,13 @@ export function CreateServerPage() {
           {catalogState ? (
             <div className="storefront-state" role={catalog.error ? 'alert' : 'status'}>
               <Server size={30} /><p>{catalogState}</p>
-              {!catalog.loading ? <Button variant="secondary" onClick={reloadCatalog}>تلاش دوباره</Button> : null}
+              {!catalog.loading ? <Button variant="secondary" onClick={refreshCatalog}>تلاش دوباره</Button> : null}
             </div>
           ) : <>
+            {!!catalog.data?.pricingUnavailable?.length && <div className="info-box" role="status">
+              قیمت برخی پلن‌های {catalog.data.pricingUnavailable.map(item => item.name).join('، ')} موقتاً در دسترس نیست.
+              <Button variant="secondary" onClick={refreshCatalog}>بررسی دوبارهٔ قیمت‌ها</Button>
+            </div>}
             {step === 0 ? <div className="storefront-stack">
               <div className="choice-grid storefront-grid">
                 {datacenters.map((item) => (
@@ -269,8 +290,9 @@ export function CreateServerPage() {
                   <Cpu size={26} /><strong dir="auto">{item.name}</strong><span>{item.category === 'cloud' ? 'سرور ابری' : item.category === 'vps' ? 'سرور مجازی' : item.category}</span>
                   <span>{formatFaNumber(item.vcpu)} هسته · {formatFaNumber(item.memoryMb / 1024)} گیگابایت حافظه</span>
                   <span><Database size={14} />{formatFaNumber(item.diskGb)} گیگابایت دیسک</span>
-                  {item.provider === 'hetzner' ? <span>ترافیک ماهانهٔ مشمول: <bdi>{hetznerTrafficQuota(item.includedTrafficBytes ?? item.trafficOverage?.includedBytes)}</bdi></span>
-                    : item.trafficGb !== null ? <span>{formatFaNumber(item.trafficGb)} گیگابایت ترافیک</span> : null}
+                  {item.provider === 'hetzner' ? <span>ترافیک ماهانهٔ مشمول: <bdi>{formatTrafficTb(item.includedTrafficBytes ?? item.trafficOverage?.includedBytes)}</bdi></span>
+                    : item.includedTrafficBytes != null ? <span><bdi>{formatTrafficTb(item.includedTrafficBytes)}</bdi> ترافیک</span>
+                      : item.includedTrafficBytes === undefined && item.trafficGb != null ? <span><bdi>{formatTrafficTb(item.trafficGb * 1_000_000_000)}</bdi> ترافیک</span> : null}
                   <DualPrices prices={item.prices} selected={billingPeriod} />
                 </button>
               })}</div>
