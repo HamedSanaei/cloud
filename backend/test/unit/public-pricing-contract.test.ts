@@ -1,9 +1,18 @@
 import { expect, it } from 'vitest'
-import { embeddedPrices, isPublicHomePrices, renderHomeTariffs, sortHetznerOffers, type TariffSort } from '../../src/contracts/home-tariffs.js'
+import { decimalIranTariffs, embeddedPrices, formatTrafficTb, isPublicHomePrices, renderHomeTariffs, sortHetznerOffers, type TariffSort } from '../../src/contracts/home-tariffs.js'
 import { safeReturnPath } from '../../src/contracts/return-path.js'
 
 const plan = { id: 'fixture', name: '</script><img src=x onerror=alert(1)>', location: 'hel1', country: 'FI', city: 'Helsinki', vcpu: 2, memoryMb: 4096, diskGb: 40, diskType: 'Local', trafficGb: null, hourly: 123450, monthly: null }
 const meta = { checkedAt: '2026-11-17T10:00:00Z', validUntil: '2026-11-17T10:01:00Z', catalogUpdatedAt: null, fxUpdatedAt: null, status: 'available' as const }
+it('converts raw bytes and previously approved per-binary-unit tariffs for display', () => {
+  expect(formatTrafficTb(1_000_000_000_000)).toBe('۱ TB')
+  expect(formatTrafficTb(100_000_000)).toBe('۰٫۰۰۰۱ TB')
+  expect(formatTrafficTb(1)).toBe('۰٫۰۰۰۰۰۰۰۰۰۰۰۱ TB')
+  const legacy = { trafficUnit: 'TiB', tax: 'included', rates: { outbound: 123450, inbound: 0, cpu: 1000, ram: null } } as const
+  expect(decimalIranTariffs(legacy)).toEqual({ ...legacy, trafficUnit: 'TB', rates: { ...legacy.rates, outbound: 112277 } })
+  expect(renderHomeTariffs(legacy, null)).not.toContain('TiB')
+  expect(legacy.rates.outbound).toBe(123450)
+})
 it('includes all prices in SSR and keeps the extra TB rate indicative', () => {
   const priced = { ...plan, monthly: 6789000, trafficOverage: { perTbRial: 333450, includedBytes: 2 ** 39,
     source: 'hetzner-server-type-location' as const, observedAt: meta.checkedAt, fxAt: meta.checkedAt, ruleVersion: meta.checkedAt } }
@@ -11,7 +20,7 @@ it('includes all prices in SSR and keeps the extra TB rate indicative', () => {
   expect(html).toContain('۱۲٬۳۴۵ تومان')
   expect(html).toContain('۶۷۸٬۹۰۰ تومان')
   expect(html).toContain('۳۳٬۳۴۵ تومان')
-  expect(html).toContain('۰٫۵ TiB')
+  expect(html).toContain('۰٫۵۴۹۷۵۵۸۱۳۸۸۸ TB')
   expect(html).toContain('period=monthly&amp;location=hel1')
   expect(renderHomeTariffs(null, [priced], meta, 'hetzner', 'hourly')).toContain('period=hourly&amp;location=hel1')
   expect(html).toContain('هزینهٔ مازاد ساعتی محاسبه می‌شود')
@@ -21,10 +30,10 @@ it('includes all prices in SSR and keeps the extra TB rate indicative', () => {
   expect(embeddedPrices(html)?.hetzner).toEqual([priced])
   expect(isPublicHomePrices({ iran: null, hetzner: [{ ...priced, trafficOverage: { ...priced.trafficOverage, perTbRial: 0 } }], meta })).toBe(false)
 })
-it('shows the verified 20 TiB console quota independently of a missing overage price', () => {
+it('shows the verified byte allowance independently of a missing overage price', () => {
   const offer = { ...plan, trafficGb: 21_990, includedTrafficBytes: 20 * 2 ** 40, trafficOverage: null }
   const html = renderHomeTariffs(null, [offer], meta)
-  expect(html).toContain('۲۰ TiB')
+  expect(html).toContain('۲۱٫۹۹۰۲۳۲۵۵۵۵۲ TB')
   expect(html).not.toContain('۲۱٬۹۹۰')
   expect(html).toContain('نرخ معتبر در دسترس نیست')
   expect(embeddedPrices(html)?.hetzner).toEqual([offer])

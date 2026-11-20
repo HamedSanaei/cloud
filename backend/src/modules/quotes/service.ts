@@ -2,9 +2,9 @@ import { and, eq, lt } from 'drizzle-orm'
 import type { DbClient, DbOrTx } from '../../db/index.js'
 import { quotes } from '../../db/schema.js'
 import { getConfig } from '../../config.js'
-import { NotFoundError, ValidationError } from '../../lib/errors.js'
+import { AppError, NotFoundError, ValidationError } from '../../lib/errors.js'
 import { getOffer } from '../catalog/service.js'
-import { computePriceSnapshot } from '../pricing/service.js'
+import { computePriceSnapshot, fxMaxAgeMs } from '../pricing/service.js'
 import type { ProviderBillingOption, ProviderSlaOption } from '../providers/provider.interface.js'
 import { nativePeriod, retailBilling, type RetailPeriod } from '../pricing/periods.js'
 import { assertProviderPurchaseAllowed } from '../catalog/policy.js'
@@ -64,7 +64,10 @@ export async function createQuote(db: DbClient, input: CreateQuoteInput) {
   })
 
   const ttlMinutes = getConfig().QUOTE_TTL_MINUTES
-  const expiresAt = new Date(Math.min(Date.now() + ttlMinutes * 60 * 1000, retail.interval === 'HOURLY' ? (Math.floor(Date.now() / 3600000) + 1) * 3600000 : Infinity))
+  const now = Date.now()
+  const fxExpiresAt = Date.parse(snapshot.fxAt ?? '') + fxMaxAgeMs(snapshot.providerCurrency)
+  if (!Number.isFinite(fxExpiresAt) || fxExpiresAt <= now) throw new AppError(503, 'fx_rate_stale', 'نرخ ارز منقضی شد. برای دریافت قیمت تازه دوباره تلاش کنید.')
+  const expiresAt = new Date(Math.min(now + ttlMinutes * 60 * 1000, fxExpiresAt, retail.interval === 'HOURLY' ? (Math.floor(now / 3600000) + 1) * 3600000 : Infinity))
 
   const [quote] = await db
     .insert(quotes)
@@ -103,7 +106,9 @@ export async function getQuote(db: DbOrTx, userId: string, quoteId: string) {
 
 export async function assertQuoteValid(db: DbOrTx, quote: typeof quotes.$inferSelect) {
   if (quote.status !== 'valid') throw new ValidationError('استعلام قیمت دیگر معتبر نیست')
-  if (quote.expiresAt < new Date()) {
+  const now = Date.now()
+  const fxAt = Date.parse((quote.pricingSnapshot as { fxAt?: string } | null)?.fxAt ?? '')
+  if (quote.expiresAt.getTime() <= now || (Number.isFinite(fxAt) && fxAt + fxMaxAgeMs(quote.providerCurrency) <= now)) {
     await db.update(quotes).set({ status: 'expired' }).where(eq(quotes.id, quote.id))
     throw new ValidationError('استعلام قیمت منقضی شده است — لطفاً دوباره استعلام بگیرید')
   }

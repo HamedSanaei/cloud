@@ -11,7 +11,7 @@ import { registerProvider } from '../../src/modules/providers/registry.js'
 import { createSession, registerUser } from '../../src/modules/auth/service.js'
 import { creditWallet, ensureDefaultWallet } from '../../src/modules/wallets/service.js'
 import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
-import { setFxRate } from '../../src/modules/pricing/service.js'
+import { euroMarketSource, setFxRate } from '../../src/modules/pricing/service.js'
 import { handleProvision, handleReconcile, handleRenewalSweep, handleServerAction, handleServerSync } from '../../src/modules/provisioning/handlers.js'
 import { idempotencyKeys, providerOperations, servers, serverSecrets, settings, subscriptions, users, wallets } from '../../src/db/schema.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
@@ -119,7 +119,7 @@ describe.skipIf(!dbAvailable)('customer-owned Hetzner lifecycle and billing safe
     return json({ action: actions.get(actionId), ...(['reset_password', 'rebuild', 'enable_rescue'].includes(command ?? '') ? { root_password: 'Fixture-sensitive-root-password!' } : {}) })
   }
   beforeAll(async () => {
-    ctx = await getTestContext(); await truncateAll(ctx.db); await setFxRate(ctx.db, '620000')
+    ctx = await getTestContext(); await truncateAll(ctx.db); await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
     const provider = createHetznerProvider(config, { fetch: fetcher }); registerProvider(provider)
     await syncProviderCatalog(ctx.db, provider, { mode: 'live' }); await enableAllOffersForSale(ctx.db, 'hetzner')
     app = await buildApp({ db: ctx.db, queues: ctx.queues, logger: testLogger }); await app.ready()

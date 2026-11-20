@@ -10,6 +10,7 @@
  */
 import type { ServerPowerPolicy } from '../modules/billing/funding.js'
 import type { ServerTracking } from '../contracts/server-lifecycle.js'
+import { formatTrafficTb, hetznerTrafficBlockBytes } from '../contracts/home-tariffs.js'
 
 export function serverToDto(server: {
   id: string
@@ -85,10 +86,13 @@ export function transactionToDto(tx: {
   walletId?: string
   referenceType?: string | null
   referenceId?: string | null
+  metadata?: unknown
 }, wallet?: string) {
+  const traffic = tx.type === 'traffic_overage' ? tx.metadata as { blocks?: number; month?: string } | null : null
+  const billed = traffic?.blocks == null ? null : traffic.blocks * hetznerTrafficBlockBytes
   return {
     id: tx.id,
-    description: tx.description ?? tx.type,
+    description: tx.type === 'traffic_overage' ? `ترافیک مازاد هتزنر${traffic?.month ? ` (${traffic.month})` : ''}${billed === null ? '' : `، ${formatTrafficTb(billed)}`}` : tx.description ?? tx.type,
     amount: tx.amountRial / 10,
     amountRial: tx.amountRial,
     date: tx.createdAt.toISOString(),

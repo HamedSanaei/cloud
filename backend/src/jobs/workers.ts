@@ -8,7 +8,7 @@ import type { CloudQueues, JobName } from './queue.js'
 import { JOB_NAMES } from './queue.js'
 import { coordinationPool, sharedWriter } from '../modules/system/writer-gate.js'
 import { installEventSink, recordEvent } from '../modules/system/events.js'
-import { refreshEuroRate } from '../modules/pricing/service.js'
+import { refreshMarketRate } from '../modules/pricing/market-fx.js'
 import {
   handleCatalogSync,
   handleProvision,
@@ -87,7 +87,7 @@ export function createWorkers(opts: { db: DbClient; queues: CloudQueues; logger:
     if (result.pricingBlocked) opts.logger.warn({ queue: JOB_NAMES.RENEWAL_SWEEP, ...result }, 'renewals blocked on pricing evidence')
     return result
   })
-  makeWorker(JOB_NAMES.EUR_FX_REFRESH, () => refreshEuroRate(opts.db))
+  makeWorker(JOB_NAMES.EUR_FX_REFRESH, data => refreshMarketRate(opts.db, (data as { currency?: string })?.currency === 'USDT' ? 'USDT' : 'EUR'))
   // Initial failures reject readiness instead of reconnecting forever. Runtime
   // reconnects remain enabled once all worker connections are established.
   void Promise.allSettled(workers.map((worker) => worker.waitUntilReady())).then((results) => {

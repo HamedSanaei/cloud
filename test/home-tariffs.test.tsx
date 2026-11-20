@@ -50,12 +50,12 @@ it.each(['all', 'hetzner'] as const)('shows the same rounded money and exact all
   expect(within(location).getByText('hel1')).toBeTruthy()
   expect(within(location).getByText('کشور نامشخص')).toBeTruthy()
   expect(prices.map(cell => cell.textContent)).toEqual([
-    '۲', '۴', '۴۰', '۰٫۵ TiB', '۱۲۳٬۴۵۷ تومان', '۵٬۰۰۰٬۰۰۰ تومان', '۳۳۳٬۴۵۶ تومان',
+    '۲', '۴', '۴۰', '۰٫۵۴۹۷۵۵۸۱۳۸۸۸ TB', '۱۲۳٬۴۵۷ تومان', '۵٬۰۰۰٬۰۰۰ تومان', '۳۳۳٬۴۵۶ تومان',
   ])
   expect(within(table).getAllByRole('link')).toHaveLength(1)
   expect(within(table).getByRole('columnheader', { name: 'RAM (گیگابایت)' })).toBeTruthy()
   expect(within(table).getByRole('columnheader', { name: 'فضای دیسک (گیگابایت)' })).toBeTruthy()
-  expect(within(table).getByRole('columnheader', { name: /مشمول.*TiB/ })).toBeTruthy()
+  expect(within(table).getByRole('columnheader', { name: /مشمول.*TB/ })).toBeTruthy()
   expect(within(table).getByRole('columnheader', { name: /مازاد.*TB ده‌دهی/ })).toBeTruthy()
   expect(screen.getByRole('heading', { name: 'تعرفه سرور هتزنر', level: 3 })).toBeTruthy()
   expect(screen.getByText(/هزینهٔ مازاد ساعتی محاسبه می‌شود/)).toBeTruthy()

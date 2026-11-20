@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { pino } from 'pino'
 import { createLiveLeasewebProvider, type LiveLeasewebOptions } from '../../src/modules/providers/leaseweb/live.js'
-import { normalizeVpsDetail } from '../../src/modules/providers/leaseweb/catalog.js'
+import { leasewebTrafficBytes, normalizeVpsDetail } from '../../src/modules/providers/leaseweb/catalog.js'
 import { normalizeCloudTypes } from '../../src/modules/providers/leaseweb/cloud.js'
 import { ProviderPermanentError, ProviderRetryableError, ProviderUnknownError } from '../../src/lib/errors.js'
 
 const logger = pino({ level: 'silent' })
+it('preserves the provider traffic unit when reading legacy VPS catalog rows', () => {
+  expect(leasewebTrafficBytes({ traffic: '2 TB' }, 2048)).toBe(2_000_000_000_000)
+  expect(leasewebTrafficBytes({ traffic: '2 TiB' }, 2048)).toBe(2 * 2 ** 40)
+  expect(leasewebTrafficBytes({}, 30000)).toBe(30_000_000_000_000)
+})
 const options: LiveLeasewebOptions = {
   enabled: true, displayName: 'Leaseweb', baseUrl: 'https://api.leaseweb.com', orderingEnabled: true, logger,
   accounts: [

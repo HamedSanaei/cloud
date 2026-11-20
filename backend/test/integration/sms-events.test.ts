@@ -14,7 +14,7 @@ import { createOrderFromQuote, payOrder } from '../../src/modules/orders/service
 import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
 import { getProvider, registerProvider } from '../../src/modules/providers/registry.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
-import { setFxRate } from '../../src/modules/pricing/service.js'
+import { euroMarketSource, setFxRate } from '../../src/modules/pricing/service.js'
 import { handleProvision, handleRenewalSweep, handleServerAction } from '../../src/modules/provisioning/handlers.js'
 import { PARSGREEN_TEMPLATES, SMS_CATALOG, smsKeys, type SmsKey } from '../../src/modules/auth/parsgreen-templates.js'
 import { enqueueSms, dispatchSms, smsPreference, smsPatternHash, updateSmsPreference } from '../../src/modules/notifications/sms.js'
@@ -38,7 +38,7 @@ describe.skipIf(!dbAvailable)('durable SMS event producers and dispatcher (no re
   beforeEach(async () => {
     await truncateAll(ctx.db); send.mockClear(); ctx.mockProvider.reset()
     await ctx.db.insert(smsPreferences).values(smsKeys.map(key => ({ key, enabled: true, approval: SMS_CATALOG[key].approval, patternHash: smsPatternHash(key) })))
-    await setFxRate(ctx.db, '620000')
+    await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
     const mock = ctx.mockProvider
     registerProvider({ ...mock, async syncCatalog() {
       const catalog = await mock.syncCatalog()

@@ -1,76 +1,27 @@
-import { and, eq, lte, sql } from 'drizzle-orm'
+import { and, eq, lte } from 'drizzle-orm'
 import type { DbClient, DbOrTx } from '../../db/index.js'
-import { fxRates, pricingRules } from '../../db/schema.js'
+import { pricingRules } from '../../db/schema.js'
 import { AppError, ConflictError, NotFoundError, ValidationError } from '../../lib/errors.js'
-import { outboundFetch } from '../outbound/client.js'
 import { writeAudit } from '../audit/service.js'
 import type { ProviderBillingOption } from '../providers/provider.interface.js'
 import { exactProviderCents, scaledDecimal } from './periods.js'
 import { getConfig } from '../../config.js'
-import { z } from 'zod'
-import { recordEvent } from '../system/events.js'
 
-type FxRate = { rate: string; from: string; to: string; createdAt: Date; id?: number; source?: string }
-const usdtRefreshes = new WeakMap<DbClient, Promise<FxRate>>()
-const euroRefreshes = new WeakMap<DbClient, Promise<FxRate>>()
-export const euroRefreshIntervalMs = 30 * 60 * 1000
-export const euroMarketSource = 'AbanTether EURIRT buy_price (toman × 10)'
-/** Market USDT expires at the configured TTL; operator-set non-USDT rates last 24h. */
-export const fxMaxAgeMs = (currency: string) => (['USD', 'USDT'].includes(currency) ? getConfig().USDT_RATE_MAX_AGE_SECONDS : 86400) * 1000
-const marketTicker = (currency: 'USDT' | 'EUR') => z.object({
-  data: z.object({ markets: z.object({ [`${currency}IRT`]: z.object({
-    symbol: z.literal(currency), active: z.literal(true), buy_price: z.string().max(32).regex(/^\d+(?:\.\d{1,8})?$/),
-  }) }) }),
-})
+import { fxMaxAgeMs, getMarketRate, type FxRate } from './market-fx.js'
+export { euroMarketSource, euroRefreshIntervalMs, fxMaxAgeMs, refreshEuroRate } from './market-fx.js'
+export { saveFxRate as setFxRate } from './rate-history.js'
 
-
-// ---------------------------------------------------------------------------
-// FX rates (history rows; the latest per pair is active)
-// ---------------------------------------------------------------------------
 export async function getActiveFxRate(db: DbClient, currency = 'EUR'): Promise<FxRate> {
   if (currency === 'IRR') return { rate: '1', from: 'IRR', to: 'IRR', createdAt: new Date() }
-  const canonicalCurrency = currency === 'USD' ? 'USDT' : currency
+  if (currency === 'EUR') return getMarketRate(db, 'EUR')
+  if (currency === 'USD' || currency === 'USDT') return getMarketRate(db, 'USDT')
   const row = await db.query.fxRates.findFirst({
-    where: (t) => and(eq(t.fromCurrency, canonicalCurrency), eq(t.toCurrency, 'IRR'), lte(t.createdAt, new Date())),
+    where: t => and(eq(t.fromCurrency, currency), eq(t.toCurrency, 'IRR'), lte(t.createdAt, new Date())),
     orderBy: (t, { desc }) => [desc(t.createdAt), desc(t.id)],
   })
-  // Worker maintains EUR every 30 minutes; cold/stale readers can recover too.
-  // A still-valid historical approval retains the existing 24h maximum age.
-  if (currency === 'EUR' && (!row || Date.now() - row.createdAt.getTime() >= fxMaxAgeMs('EUR'))) return refreshEuroRate(db)
-  if (canonicalCurrency === 'USDT' && (!row || Date.now() - row.createdAt.getTime() >= getConfig().USDT_RATE_MAX_AGE_SECONDS * 1000)) {
-    let refresh = usdtRefreshes.get(db)
-    if (!refresh) {
-      refresh = refreshUsdtRate(db).finally(() => usdtRefreshes.delete(db))
-      usdtRefreshes.set(db, refresh)
-    }
-    return refresh
-  }
-  if (!row) {
-    throw new NotFoundError(
-      `نرخ ارز ${currency} به IRR تنظیم نشده است؛ ادمین باید نرخ این ارز را ثبت کند.`,
-    )
-  }
+  if (!row) throw new NotFoundError(`نرخ ارز ${currency} به IRR تنظیم نشده است`)
   if (Date.now() - row.createdAt.getTime() >= fxMaxAgeMs(currency)) throw new AppError(503, 'fx_rate_stale', 'نرخ معتبر ارز در دسترس نیست؛ نرخ تازه لازم است')
-  return { rate: row.rate, from: row.fromCurrency, to: row.toCurrency, createdAt: row.createdAt, id: row.id, source: row.note ?? (row.setBy ? 'operator-approved' : 'stored FX history') }
-}
-
-export async function setFxRate(db: DbOrTx, rate: string, opts: { actorId?: string | null; note?: string; currency?: string; source?: 'market' } = {}) {
-  const numeric = Number(rate)
-  if (!Number.isFinite(numeric) || numeric <= 0) {
-    throw new ValidationError('نرخ ارز باید عددی مثبت باشد')
-  }
-  const currency = opts.currency === 'USD' ? 'USDT' : opts.currency ?? 'EUR'
-  const [row] = await db
-    .insert(fxRates)
-    .values({ fromCurrency: currency, toCurrency: 'IRR', rate, setBy: opts.actorId ?? null, note: opts.note ?? null, createdAt: new Date() })
-    .returning()
-  if (!row) throw new Error('failed to set fx rate')
-  await writeAudit(db, {
-    actorId: opts.actorId ?? null,
-    action: opts.source === 'market' ? 'pricing.fx_rate.refreshed' : 'admin.fx_rate.changed',
-    metadata: { rate, from: currency, to: 'IRR', ...(opts.source === 'market' ? { source: opts.note } : {}) },
-  })
-  return row
+  return { rate: row.rate, from: row.fromCurrency, to: row.toCurrency, createdAt: row.createdAt, id: row.id, source: row.note ?? 'operator-approved' }
 }
 
 export async function listFxRateHistory(db: DbClient, limit = 20, currency = 'EUR') {
@@ -80,59 +31,6 @@ export async function listFxRateHistory(db: DbClient, limit = 20, currency = 'EU
     orderBy: (t, { desc }) => [desc(t.createdAt), desc(t.id)],
     limit,
   })
-}
-
-async function fetchMarketRate(currency: 'USDT' | 'EUR'): Promise<string> {
-  let rate: string
-  try {
-    const url = new URL('/api/v1/manager/otc/ticker', getConfig().USDT_RATE_API_BASE_URL)
-    url.searchParams.set('coin', currency)
-    const response = await outboundFetch('abantether', url, { headers: { accept: 'application/json' }, cache: 'no-store', signal: AbortSignal.timeout(10000) })
-    if (!response.ok) throw new Error(`USDT ticker HTTP ${response.status}`)
-    const ticker = marketTicker(currency).parse(await response.json())
-    const [whole, fraction = ''] = ticker.data.markets[`${currency}IRT`]!.buy_price.split('.')
-    const tomanScaled = BigInt(whole!) * 100000000n + BigInt(fraction.padEnd(8, '0'))
-    // IRT -> IRR (x10); round upwards only beyond the ledger's six FX decimals.
-    const rialMicros = (tomanScaled + 9n) / 10n
-    if (rialMicros <= 0n || rialMicros >= 100000000000000000000n) throw new Error('USDT rate is outside ledger precision')
-    rate = `${rialMicros / 1000000n}.${(rialMicros % 1000000n).toString().padStart(6, '0')}`
-  } catch {
-    throw new AppError(503, currency === 'EUR' ? 'eur_rate_unavailable' : 'usdt_rate_unavailable',
-      currency === 'EUR' ? 'نرخ معتبر یورو به ریال در دسترس نیست؛ دریافت نرخ تازه لازم است.' : 'نرخ معتبر تتر به ریال در دسترس نیست؛ قیمت‌گذاری دلاری تا دریافت نرخ تازه متوقف است.')
-  }
-  return rate
-}
-
-async function refreshUsdtRate(db: DbClient): Promise<FxRate> {
-  const rate = await fetchMarketRate('USDT')
-  const row = await setFxRate(db, rate, { currency: 'USDT', source: 'market', note: 'AbanTether USDTIRT buy_price (toman × 10); USD = USDT' })
-  return { rate: row.rate, from: row.fromCurrency, to: row.toCurrency, createdAt: row.createdAt, id: row.id, source: row.note ?? (row.setBy ? 'operator-approved' : 'stored FX history') }
-}
-
-/** One genuine EUR observation + audit per interval, shared across API/workers. */
-export function refreshEuroRate(db: DbClient): Promise<FxRate> {
-  const existing = euroRefreshes.get(db)
-  if (existing) return existing
-  const refresh = db.transaction(async tx => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('pricing.eur-refresh',0))`)
-    const row = await tx.query.fxRates.findFirst({
-      where: t => and(eq(t.fromCurrency, 'EUR'), eq(t.toCurrency, 'IRR'), lte(t.createdAt, new Date())),
-      orderBy: (t, { desc }) => [desc(t.createdAt), desc(t.id)],
-    })
-    // Coalesce simultaneous processes/retries, not the whole schedule interval:
-    // a 30-minute gate would skip the next run because of the prior HTTP latency.
-    if (row && Date.now() - row.createdAt.getTime() < 60_000) return {
-      id: row.id, rate: row.rate, from: 'EUR', to: 'IRR', createdAt: row.createdAt, source: row.note ?? 'operator-approved',
-    }
-    const rate = await fetchMarketRate('EUR')
-    const saved = await setFxRate(tx, rate, { currency: 'EUR', source: 'market', note: euroMarketSource })
-    return { id: saved.id, rate: saved.rate, from: 'EUR', to: 'IRR', createdAt: saved.createdAt, source: saved.note! }
-  }).catch(error => {
-    recordEvent('pricing.eur_refresh_failed', 'error', 'pricing', { code: 'eur_rate_unavailable' })
-    throw error
-  }).finally(() => euroRefreshes.delete(db))
-  euroRefreshes.set(db, refresh)
-  return refresh
 }
 
 // ---------------------------------------------------------------------------

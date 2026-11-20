@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { eq } from 'drizzle-orm'
 import type { DbClient } from '../../db/index.js'
-import { iranRateMaximum, type PublicHetznerOffer, type PublicTariffMeta } from '../../contracts/home-tariffs.js'
+import { decimalIranTariffs, iranRateMaximum, type PublicHetznerOffer, type PublicTariffMeta } from '../../contracts/home-tariffs.js'
 import { AppError } from '../../lib/errors.js'
 import { createLogger } from '../../logger.js'
 import { getStorefront } from './storefront.js'
@@ -9,14 +9,16 @@ import { isSiteAuthority } from '../integration/authority.js'
 
 export const iranTariffsKey = 'catalog.iran_monthly_tariffs'
 const rate = z.number().int().nonnegative().max(iranRateMaximum).nullable()
-export const iranTariffsSchema = z.object({
+const storedIranTariffsSchema = z.object({
   rates: z.object({ outbound: rate, inbound: rate, cpu: rate, ram: rate }).strict(),
   trafficUnit: z.enum(['TB', 'TiB']), tax: z.enum(['included', 'excluded']), published: z.boolean(),
 }).strict().refine(value => !value.published || Object.values(value.rates).some(rate => rate !== null), 'برای انتشار دست‌کم یک نرخ مصوب ثبت کنید.')
+export const iranTariffsSchema = storedIranTariffsSchema.safeExtend({ trafficUnit: z.literal('TB') })
 
 export async function iranTariffSettings(db: DbClient) {
   const row = await db.query.settings.findFirst({ where: t => eq(t.key, iranTariffsKey) })
-  return iranTariffsSchema.safeParse(row?.value).data ?? null
+  const value = storedIranTariffsSchema.safeParse(row?.value).data
+  return value ? { ...decimalIranTariffs(value), published: value.published } : null
 }
 
 export function publicHetznerOffers(catalog: Awaited<ReturnType<typeof getStorefront>>): PublicHetznerOffer[] {

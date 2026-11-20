@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getTestContext, truncateAll, dbAvailable, testLogger } from '../helpers.js'
 import { buildApp } from '../../src/app.js'
-import { setFxRate } from '../../src/modules/pricing/service.js'
+import { euroMarketSource, setFxRate } from '../../src/modules/pricing/service.js'
 import { syncProviderCatalog, enableAllOffersForSale, findOfferByProductAndLocation } from '../../src/modules/catalog/service.js'
 import { getProvider } from '../../src/modules/providers/registry.js'
 import type { FastifyInstance } from 'fastify'
@@ -23,7 +23,7 @@ describe.skipIf(skip)('auth + permissions (integration)', () => {
   beforeAll(async () => {
     ctx = await getTestContext()
     await truncateAll(ctx.db)
-    await setFxRate(ctx.db, '620000', { note: 'test fixture' })
+    await setFxRate(ctx.db, '620000', { source: 'market', note: euroMarketSource })
     await syncProviderCatalog(ctx.db, getProvider('leaseweb'))
     await enableAllOffersForSale(ctx.db)
     app = await buildApp({ db: ctx.db, queues: ctx.queues, logger: testLogger })

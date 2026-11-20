@@ -1,4 +1,4 @@
-import { hetznerTrafficQuota, indicativeOverageNotice, tariffTime, type IndicativeTrafficTariff } from '../../../backend/src/contracts/home-tariffs'
+import { formatTrafficTb, indicativeOverageNotice, tariffTime, type IndicativeTrafficTariff } from '../../../backend/src/contracts/home-tariffs'
 import { formatToman } from '../../lib/format'
 
 export function HetznerTraffic({ includedBytes, overage, className }: {
@@ -6,7 +6,7 @@ export function HetznerTraffic({ includedBytes, overage, className }: {
 }) {
   return <div className={className}>
     <div>
-      <div>ترافیک ماهانهٔ مشمول: <bdi>{hetznerTrafficQuota(includedBytes ?? overage?.includedBytes)}</bdi></div>
+      <div>ترافیک ماهانهٔ مشمول: <bdi>{formatTrafficTb(includedBytes ?? overage?.includedBytes)}</bdi></div>
       <div>قیمت هر ترابایت ترافیک مازاد: {overage ? <><bdi>{formatToman(overage.perTbRial / 10)}</bdi> <bdi>/ TB</bdi></> : 'نرخ معتبر در دسترس نیست'}</div>
       <small>{indicativeOverageNotice}{overage && <>
         {' تعرفهٔ کاتالوگ: '}<time dateTime={overage.observedAt}>{tariffTime.format(new Date(overage.observedAt))}</time>.

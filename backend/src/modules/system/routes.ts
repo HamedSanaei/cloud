@@ -22,6 +22,7 @@ import { acknowledgeRenewalAlert, listRenewalAlerts } from '../billing/renewal-a
 import { diagnoseGateway, gatewayStatus, updateGateway } from './gateway.js'
 import { adjustmentSchema, approveAdjustment, findFinancialUser, requestAdjustment } from './finance.js'
 import { linkRejectedProvisionRefund } from '../provisioning/rejection.js'
+import { readMarketFxHealth } from '../pricing/market-fx.js'
 import { approveRestore, backupFile, getBackupJob, importBackup, listBackupJobs, removeBackup, requestBackupJob, requestRestore, waitBackupJobs, initializeBackupJobs } from './backups.js'
 import { maxPrimaryIpv4FeeRial, primaryIpv4Pricing, setPrimaryIpv4Fee } from '../servers/primary-ip-pricing.js'
 import { confirmPrimaryIpv4Rollback } from '../servers/primary-ip-operation.js'
@@ -203,6 +204,7 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     await writeAudit(db, { actorId: requireAdmin(request).id, action: 'system.financial_user_searched', metadata: { result: 'success' } })
     return { data: result }
   })
+  app.get('/finance/fx-status', async () => ({ data: await readMarketFxHealth(db) }))
   app.get('/finance/adjustments', async request => {
     const q = parse(paging.extend({ walletId: z.string().uuid().optional() }), request.query)
     const where = q.walletId ? sql`${adminAdjustments.walletId} in (select id from wallets where id=${q.walletId} or merged_into=${q.walletId})` : undefined
