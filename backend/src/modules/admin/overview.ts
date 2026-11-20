@@ -2,6 +2,7 @@ import { desc, eq, sql } from 'drizzle-orm'
 import type { DbClient, DbOrTx } from '../../db/index.js'
 import { orders, providerOperations, servers, users, walletTransactions } from '../../db/schema.js'
 import { ConflictError } from '../../lib/errors.js'
+import { linkedRefundReason } from '../provisioning/rejection.js'
 
 const serverState = sql<string>`case when ${servers.terminatedAt} is not null or ${servers.terminationState} = 'terminated'
   then 'terminated' else ${servers.status}::text end`
@@ -9,13 +10,23 @@ const acceptableOrders = sql`('paid', 'queued', 'provisioning', 'active')`
 export const pendingOrderStatuses = ['awaiting_payment', 'requires_review', 'paid', 'queued', 'provisioning'] as const
 
 // Compare linked wallet postings with initial invoices independently of renewal invoices.
+const linkedRefunds = sql`
+  select e.order_id, w.id as transaction_id, w.user_id, w.amount_rial, w.created_at
+  from order_events e join wallet_transactions w on w.id::text = e.metadata->>'refundTransactionId'
+  where e.reason = ${linkedRefundReason} and w.type = 'manual_credit' and w.reference_type = 'admin_adjustment'
+`
 const orderEvidence = sql`
-  with ledger as (
+  with order_postings as (
+    select reference_id, user_id, id, type::text, amount_rial, created_at
+    from wallet_transactions where reference_type = 'order' and type in ('purchase', 'refund', 'adjustment', 'manual_credit', 'manual_debit')
+    union all
+    select order_id, user_id, transaction_id, 'refund', amount_rial, created_at from (${linkedRefunds}) linked
+  ), ledger as (
     select reference_id, user_id,
       coalesce(sum(-amount_rial) filter (where type = 'purchase' and amount_rial < 0), 0) as debit,
       coalesce(sum(amount_rial) filter (where type = 'refund' and amount_rial > 0), 0) as refund,
       array_agg(id order by created_at, id) as transactions
-    from wallet_transactions where reference_type = 'order' and type in ('purchase', 'refund', 'adjustment', 'manual_credit', 'manual_debit')
+    from order_postings
     group by reference_id, user_id
   ), receipts as (
     select order_id, user_id, coalesce(sum(total_rial) filter (where status = 'paid'),0) as paid,
@@ -77,11 +88,13 @@ export function readAdminOverview(db: DbClient, financialAccess: boolean) {
             and w.reference_type = 'order' and o.status in ${acceptableOrders}),0)::text as initial,
             coalesce(sum(-w.amount_rial) filter (where w.type = 'renewal' and w.amount_rial < 0),0)::text as renewals,
             coalesce(sum(-w.amount_rial) filter (where w.type = 'traffic_overage' and w.amount_rial < 0),0)::text as traffic,
-            coalesce(sum(w.amount_rial) filter (where w.type = 'refund' and w.amount_rial > 0 and w.reference_type in ('order','subscription','invoice')),0)::text as refunds,
+            coalesce(sum(w.amount_rial) filter (where w.amount_rial > 0 and
+              ((w.type = 'refund' and w.reference_type in ('order','subscription','invoice')) or l.transaction_id is not null)),0)::text as refunds,
             coalesce(sum(-w.amount_rial) filter (where (w.type in ('purchase','renewal','traffic_overage') and w.amount_rial < 0)
-              or (w.type = 'refund' and w.amount_rial > 0 and w.reference_type in ('order','subscription','invoice'))),0)::text as net,
+              or (w.amount_rial > 0 and ((w.type = 'refund' and w.reference_type in ('order','subscription','invoice')) or l.transaction_id is not null))),0)::text as net,
             coalesce(sum(w.amount_rial) filter (where w.type = 'deposit' and w.amount_rial > 0),0)::text as deposits
           from wallet_transactions w left join orders o on w.reference_type = 'order' and o.id = w.reference_id and o.user_id = w.user_id
+          left join (${linkedRefunds}) l on l.transaction_id = w.id
           join wallets v on v.id = w.wallet_id and v.currency = 'IRR'`)
       const exceptions = await tx.execute<EvidenceRow & { total: number }>(sql`${orderEvidence}
           select *, count(*) over()::int as total from evidence where unreturned or mismatch order by unreturned desc, created_at desc, id limit 20`)

@@ -25,7 +25,7 @@ export interface CreateServerRecordInput {
   trafficLimitGb?: number | null
 }
 
-export async function createServerRecord(db: DbClient, input: CreateServerRecordInput) {
+export async function createServerRecord(db: DbOrTx, input: CreateServerRecordInput) {
   const [server] = await db
     .insert(servers)
     .values({

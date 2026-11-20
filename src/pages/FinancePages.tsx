@@ -28,6 +28,7 @@ import { useAuth } from '../auth/AuthContext'
 import { WalletLedgerAmountCells, WalletLedgerDescription } from '../components/ui/WalletLedgerCells'
 import { emptyAmount, movementAmounts, movementHeaders, transactionsCsv, transactionStatus } from '../lib/walletHistory'
 import { chargeReferences } from '../lib/paymentHandoff'
+import { readCheckoutDraft } from '../lib/serverCheckout'
 
 const walletHistoryHeaders = ['شرح', 'کیف پول', ...movementHeaders, 'تاریخ', 'وضعیت']
 
@@ -38,9 +39,9 @@ function FinancialDate({ date, dueAt, paidAt, timezone, label }: { date: string;
 export function WalletPage() {
   const { user } = useAuth()
   const [searchParams] = useSearchParams()
-  const returnToCheckout = searchParams.get('returnTo') === 'server-checkout'
   const chargeId = searchParams.get('charge')
   const receiptId = chargeId ?? searchParams.get('payment')
+  const returnToCheckout = (searchParams.get('returnTo') === 'server-checkout' || !!receiptId) && !!readCheckoutDraft(user?.id)
   const [period, setPeriod] = useState<'24h' | '7d'>('24h')
   const [page, setPage] = useState(0)
 

@@ -7,7 +7,7 @@ import { setFxRate } from '../../src/modules/pricing/service.js'
 import { createQuote } from '../../src/modules/quotes/service.js'
 import { createOrderFromQuote } from '../../src/modules/orders/service.js'
 import { ensureDefaultWallet, creditWallet } from '../../src/modules/wallets/service.js'
-import { handleProvision, handleReconcile, resolveOperationByAdmin } from '../../src/modules/provisioning/handlers.js'
+import { handleProvision, handleReconcile, handleServerSync, resolveOperationByAdmin } from '../../src/modules/provisioning/handlers.js'
 import { getServerForUser, listServersForUser } from '../../src/modules/servers/service.js'
 import { getProvider } from '../../src/modules/providers/registry.js'
 import { NotFoundError } from '../../src/lib/errors.js'
@@ -329,6 +329,29 @@ describe.skipIf(skip)('provisioning safety + permissions (integration)', () => {
     expect(orderRow?.status).toBe('requires_review')
     const server = await ctx.db.query.servers.findFirst({ where: (t) => eq(t.orderId, order.id) })
     expect(server).toBeUndefined()
+  })
+
+  it('tracks a conclusively recovered pending server as provisioning until provider activation', async () => {
+    const { user, order } = await buyVps('confirmed-pending@test.local', 'confirmed-pending', 'confirmed-pending')
+    mock.setBehavior({ timeoutNextOrders: true })
+    await handleProvision(ctx, { orderId: order.id })
+    const op = (await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.referenceId, order.id) }))!
+    const providerServerId = mock._vpsList()[0]!.id
+    const active = await mock.getServer(providerServerId)
+    const getServer = vi.spyOn(mock, 'getServer').mockResolvedValue({ ...active, state: 'provisioning' })
+    vi.spyOn(mock, 'reconcileOrder').mockResolvedValue({ resolution: 'MATCHED', providerServerId })
+    expect((await handleReconcile(ctx, { operationId: op.id })).resolved).toBe(1)
+    await handleReconcile(ctx, { operationId: op.id })
+    const tracking = (await provisioningRow(ctx.db, user.id, order.id)).tracking
+    expect(tracking.state).toBe('provisioning')
+    expect(tracking.failure).toBeUndefined()
+    expect((await ctx.db.query.orders.findFirst({ where: t => eq(t.id, order.id) }))?.status).toBe('provisioning')
+    expect(await ctx.db.query.servers.findMany({ where: t => eq(t.orderId, order.id) })).toHaveLength(1)
+    getServer.mockResolvedValue(active)
+    await handleServerSync(ctx, { serverId: tracking.serverId! })
+    expect((await provisioningRow(ctx.db, user.id, order.id)).tracking.state).toBe('ready')
+    expect(mock._postCount()).toBe(1)
+    expect(await ledgerFor(order.id)).toHaveLength(1)
   })
 
   it('hostname matching can never cause cross-customer attachment', async () => {

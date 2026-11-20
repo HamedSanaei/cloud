@@ -411,6 +411,8 @@ export function AdminOrderPage() {
             </li>)}</ol> : <p className="admin-muted">تاریخچه‌ای ثبت نشده است.</p>}
           </Panel>
           {info.financialEvidence && <Panel title="مستندات تطبیق مالی" subtitle="شناسه‌ها و مبالغ ثبت‌شده برای بررسی این سفارش">
+            {info.order.status === 'failed' && info.financialEvidence.unreturned &&
+              <Link to={`/admin/settings/finance?refundOrder=${encodeURIComponent(id)}`}>اتصال بازپرداخت ثبت‌شده</Link>}
             <dl className="admin-fields">
               <Field label="فاکتور پرداخت‌شده" value={formatToman(info.financialEvidence.invoicedRial / 10)} />
               <Field label="برداشت خرید" value={formatToman(info.financialEvidence.debitRial / 10)} />

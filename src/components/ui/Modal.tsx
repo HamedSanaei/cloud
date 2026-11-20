@@ -10,6 +10,7 @@ export function Modal({
   children,
   footer,
   trapFocus = false,
+  dismissOnBackdrop = true,
   className = '',
 }: {
   open: boolean
@@ -19,6 +20,7 @@ export function Modal({
   children: ReactNode
   footer?: ReactNode
   trapFocus?: boolean
+  dismissOnBackdrop?: boolean
   className?: string
 }) {
   const dialog = useRef<HTMLElement>(null)
@@ -51,7 +53,7 @@ export function Modal({
   if (!open) return null
 
   return createPortal(
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="modal-backdrop" role="presentation" onMouseDown={dismissOnBackdrop ? onClose : undefined}>
       <section ref={dialog} className={`modal ${className}`} role="dialog" aria-modal="true" aria-labelledby="modal-title" onMouseDown={(event) => event.stopPropagation()}>
         <header className="modal__header">
           <div>

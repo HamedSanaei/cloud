@@ -17,6 +17,8 @@ import { hetznerPrepaidMonth } from '../../src/modules/pricing/periods.js'
 import { creditWallet, ensureDefaultWallet } from '../../src/modules/wallets/service.js'
 import { dbAvailable, getTestContext, testLogger, truncateAll } from '../helpers.js'
 import { operationEmailHeaders } from '../operation-email-fixture.js'
+import { ProviderUnknownError } from '../../src/lib/errors.js'
+import { readOrderFinancialEvidence } from '../../src/modules/admin/overview.js'
 
 describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3', () => {
   let ctx: Awaited<ReturnType<typeof getTestContext>>
@@ -100,6 +102,13 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
     const valid = await issue()
     const results = await Promise.all([invoke(valid), invoke(valid)])
     expect(results.map(response => response.statusCode).sort()).toEqual([201, 400])
+    const receiptPath = '/api/servers/provisioning/by-request/' + key
+    const receipt = await app.inject({ url: receiptPath, headers: a.headers })
+    expect(receipt.statusCode).toBe(200)
+    expect(receipt.headers['cache-control']).toBe('private, no-store')
+    expect(receipt.json().data.tracking.orderId).toBe(results.find(response => response.statusCode === 201)!.json().data.tracking.orderId)
+    expect((await app.inject({ url: receiptPath, headers: (await account()).headers })).json().data).toBeNull()
+    expect((await app.inject({ url: receiptPath })).statusCode).toBe(401)
     expect((await invoke(valid)).statusCode).toBe(400)
     expect(await ctx.db.query.orders.findMany({ where: t => eq(t.userId, a.user.id) })).toHaveLength(1)
     expect(await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.userId, a.user.id) })).toHaveLength(2)
@@ -153,7 +162,62 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
       }
       expect(await ctx.db.query.invoices.findMany({ where: t => eq(t.userId, customer.user.id) })).toEqual([])
       expect(await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.walletId, customer.wallet.id) })).toEqual([])
+      await creditWallet(ctx.db, customer.user.id, customer.wallet.id, quote.totalRial, { type: 'manual_credit' })
+      const { order } = await createOrderFromQuote(ctx.db, { userId: customer.user.id, quoteId: quote.id,
+        walletId: customer.wallet.id, payFromWallet: true, hostname: 'withdrawn-catalog' })
+      const create = vi.spyOn(getProvider('hetzner'), 'createServer').mockImplementation(live.createServer)
+      responses.server_types = { server_types: [] }
+      try {
+        expect((await handleProvision(ctx, { orderId: order.id })).status).toBe('permanent_failure')
+        await handleProvision(ctx, { orderId: order.id })
+        expect(create).toHaveBeenCalledOnce()
+        expect((await app.inject({ url: `/api/servers/provisioning/${order.id}`, headers: customer.headers })).json().data.tracking.failure)
+          .toMatchObject({ code: 'capacity_unavailable', billing: 'refunded' })
+        const ledger = await ctx.db.query.walletTransactions.findMany({ where: t => and(eq(t.referenceType, 'order'), eq(t.referenceId, order.id)) })
+        expect(ledger.map(row => row.amountRial).sort((a, b) => a - b)).toEqual([-quote.totalRial, quote.totalRial])
+      } finally { create.mockRestore() }
     } finally { await syncProviderCatalog(ctx.db, getProvider('hetzner'), { mode: 'live' }) }
+  })
+
+  it('lets only a superadmin link an already-posted credit to a rejected order without a second credit', async () => {
+    const customer = await account(), admin = await account(true), operator = await account(true)
+    await ctx.db.update(users).set({ role: 'super_admin' }).where(eq(users.id, operator.user.id))
+    const root = '/api/admin/settings'
+    const send = (url: string, headers: Record<string, string>, payload: object) => app.inject({ method: 'POST', url, headers, payload, remoteAddress: '127.0.0.42' })
+    const proof = async (action: string, payload: object) => {
+      const response = await send(root + '/authorize', operator.headers, { action, payload })
+      expect(response.statusCode).toBe(200)
+      return response.json().data.proof as string
+    }
+    const quote = await quoteFor(customer.user.id)
+    await creditWallet(ctx.db, customer.user.id, customer.wallet.id, minimumCreationBalanceRial(quote.totalRial, 'HOURLY'), { type: 'manual_credit' })
+    const { order } = await createOrderFromQuote(ctx.db, { userId: customer.user.id, quoteId: quote.id,
+      walletId: customer.wallet.id, payFromWallet: true, hostname: 'rejected-refund-link' })
+    const create = vi.spyOn(getProvider('hetzner'), 'createServer').mockRejectedValue(new ProviderUnknownError('fixture missing response'))
+    try {
+      expect((await handleProvision(ctx, { orderId: order.id })).status).toBe('unknown_scheduled_reconciliation')
+    } finally { create.mockRestore() }
+    const op = (await ctx.db.query.providerOperations.findFirst({ where: t => eq(t.referenceId, order.id) }))!
+    expect((await send(`/api/admin/provider-operations/${op.id}/mark-rejected`, operator.headers, { note: 'Fixture confirmed no server' })).statusCode).toBe(200)
+    const adjustment = { userId: customer.user.id, walletId: customer.wallet.id, direction: 'credit', amountRial: order.totalRial,
+      reason: 'Credit posted for the rejected order', reference: order.id, confirm: true }
+    const adjusted = await send(root + '/finance/adjustments', { ...operator.headers, 'idempotency-key': 'fixture-refund-link' },
+      { ...adjustment, proof: await proof('wallet.adjust', adjustment) })
+    expect(adjusted.statusCode).toBe(200)
+    const link = { orderId: order.id, adjustmentId: adjusted.json().data.id as string, confirm: true }
+    const linkPath = root + '/finance/order-refunds/link'
+    const track = async () => (await app.inject({ url: `/api/servers/provisioning/${order.id}`, headers: customer.headers })).json().data.tracking
+    expect((await track()).failure.billing).toBe('captured')
+    expect((await send(root + '/authorize', admin.headers, { action: 'wallet.link-refund', payload: link })).statusCode).toBe(403)
+    expect((await send(linkPath, operator.headers, { ...link, proof: crypto.randomUUID() })).statusCode).toBe(403)
+    const ledgerBefore = await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.userId, customer.user.id) })
+    const linkWithProof = async () => send(linkPath, operator.headers, { ...link, proof: await proof('wallet.link-refund', link) })
+    expect((await linkWithProof()).statusCode).toBe(200)
+    expect((await linkWithProof()).statusCode).toBe(200)
+    expect((await track()).failure.billing).toBe('refunded')
+    expect(await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.userId, customer.user.id) })).toEqual(ledgerBefore)
+    expect(await readOrderFinancialEvidence(ctx.db, order.id)).toMatchObject({ debitRial: order.totalRial, refundRial: order.totalRial, unreturned: false, mismatch: false })
+    expect((await send(`/api/admin/provider-operations/${op.id}/retry`, operator.headers, {})).statusCode).toBe(409)
   })
 
   it('limits Hetzner margin to the existing superadmin and persists a versioned change across retail periods', async () => {
@@ -267,6 +331,7 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
 
   it('returns structured shortfall and creates no order, invoice, debit, server or provider operation on insufficient balance', async () => {
     const a = await account()
+    const operationsBefore = await ctx.db.query.providerOperations.findMany({ columns: { id: true } })
     const q = await quoteFor(a.user.id)
     const required = minimumCreationBalanceRial(q.totalRial, 'HOURLY')
     await creditWallet(ctx.db, a.user.id, a.wallet.id, required - 1, { type: 'manual_credit' })
@@ -280,7 +345,7 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
     expect(await ctx.db.query.invoices.findMany({ where: t => eq(t.userId, a.user.id) })).toHaveLength(0)
     expect(await ctx.db.query.servers.findMany({ where: t => eq(t.userId, a.user.id) })).toHaveLength(0)
     expect(await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.userId, a.user.id) })).toHaveLength(1)
-    expect(await ctx.db.query.providerOperations.findMany()).toHaveLength(0)
+    expect(await ctx.db.query.providerOperations.findMany({ columns: { id: true } })).toEqual(operationsBefore)
     // Same failed command can succeed after funding, without consuming its key.
     await creditWallet(ctx.db, a.user.id, a.wallet.id, 1, { type: 'manual_credit' })
     const success = await app.inject(request)

@@ -17,7 +17,7 @@ import { getConfig } from '../../config.js'
  *    schedules reconciliation — never a blind re-order and never an
  *    automatic refund.
  */
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 import type { DbClient } from '../../db/index.js'
 import { invoices, invoiceItems, orderEvents, orders, providerOperations, renewalAttempts, servers, subscriptions, users } from '../../db/schema.js'
 import {
@@ -75,7 +75,7 @@ export async function handleProvision(ctx: HandlerContext, data: { orderId: stri
   // - succeeded => no-op (idempotent replay), whatever the order status is.
   if (op && op.status === 'succeeded') return { status: 'already_provisioned', skipped: true }
   // - unknown => ambiguous provider result; reconcile, never re-order.
-  if (op && op.status === 'unknown') {
+  if (op && (op.status === 'unknown' || op.status === 'needs_reconciliation')) {
     await queues.addReconcile(op.id)
     return { status: 'unknown_needs_reconciliation', skipped: true }
   }
@@ -127,7 +127,8 @@ export async function handleProvision(ctx: HandlerContext, data: { orderId: stri
   const claimed = await db
     .update(providerOperations)
     .set({ status: 'running', attemptCount: op.attemptCount + 1, updatedAt: new Date() })
-    .where(and(eq(providerOperations.id, op.id), inArray(providerOperations.status, ['pending', 'failed', 'needs_reconciliation'])))
+    .where(and(eq(providerOperations.id, op.id), eq(providerOperations.attemptCount, op.attemptCount),
+      isNull(providerOperations.completedAt), inArray(providerOperations.status, ['pending', 'failed'])))
     .returning({ id: providerOperations.id })
   if (!claimed[0]) {
     return { status: 'in_progress_or_done', skipped: true }
@@ -331,7 +332,7 @@ export async function handleReconcile(ctx: HandlerContext, data: { operationId?:
   const ops = data.operationId
     ? [await db.query.providerOperations.findFirst({ where: (t) => eq(t.id, data.operationId ?? '') })]
     : await db.query.providerOperations.findMany({
-        where: (t) => and(eq(t.status, 'unknown'), eq(t.kind, 'provision'), eq(t.referenceType, 'order')),
+        where: (t) => and(inArray(t.status, ['unknown', 'needs_reconciliation']), eq(t.kind, 'provision'), eq(t.referenceType, 'order')),
         orderBy: (t, { asc }) => [asc(t.createdAt)],
         limit: 20,
       })
@@ -339,7 +340,7 @@ export async function handleReconcile(ctx: HandlerContext, data: { operationId?:
   let resolved = 0
   let underReview = 0
   for (const op of ops) {
-    if (!op || op.status !== 'unknown' || op.kind !== 'provision' || op.referenceType !== 'order') continue
+    if (!op || !['unknown', 'needs_reconciliation'].includes(op.status) || op.kind !== 'provision' || op.referenceType !== 'order') continue
     const provider = getProvider(op.provider)
     if (!provider.supports('reconcile') || !provider.reconcileOrder) {
       await markUnderReview(db, op.id, 'provider does not support order reconciliation')
@@ -372,8 +373,7 @@ export async function handleReconcile(ctx: HandlerContext, data: { operationId?:
 
     if (result.resolution === 'MATCHED' && result.providerServerId) {
       // Conclusive proof — safe to attach.
-      await completeOrderFromRecovery(db, op, result)
-      resolved++
+      if (await completeOrderFromRecovery(db, op, result)) resolved++
       continue
     }
 
@@ -401,7 +401,7 @@ export async function handleReconcile(ctx: HandlerContext, data: { operationId?:
  *   conclusive MATCHED recovery).
  * - mark-rejected: the operator confirms no server was created; the order
  *   fails. Wallet funds are NOT touched automatically — refund is a
- *   separate explicit admin action (see refundOrderOperation).
+ *   separate explicit financial action.
  */
 export async function resolveOperationByAdmin(
   db: DbClient,
@@ -420,11 +420,12 @@ export async function resolveOperationByAdmin(
       throw new AppError(422, 'validation_error', 'برای تأیید تطابق، شناسه سرور سرویس‌دهنده (providerServerId) الزامی است')
     }
     // Operator-confirmed id — treat as conclusive proof.
-    await completeOrderFromRecovery(db, op, {
+    const attached = await completeOrderFromRecovery(db, op, {
       resolution: 'MATCHED',
       providerServerId: input.providerServerId,
       reason: `confirmed manually by operator (${input.actorId})`,
     })
+    if (!attached) throw new AppError(409, 'conflict', 'وضعیت عملیات یا سفارش تغییر کرده است')
     await writeAudit(db, {
       actorId: input.actorId,
       action: 'admin.provider_operation.mark_match',
@@ -435,30 +436,27 @@ export async function resolveOperationByAdmin(
     return
   }
 
-  // mark-rejected
-  await db
-    .update(providerOperations)
-    .set({
-      status: 'failed',
-      lastError: input.note ?? 'rejected manually by operator',
-      completedAt: new Date(),
-      updatedAt: new Date(),
-      responseMetadata: { ...((op.responseMetadata ?? {}) as object), permanent: true, rejectedByOperator: true, note: input.note ?? null },
-    })
-    .where(eq(providerOperations.id, op.id))
-  if (op.referenceType === 'order') {
-    await transitionOrder(db, op.referenceId, 'failed', {
+  await db.transaction(async tx => {
+    const [order] = await tx.select().from(orders).where(eq(orders.id, op.referenceId)).for('update')
+    const [current] = await tx.select().from(providerOperations).where(eq(providerOperations.id, op.id)).for('update')
+    if (order?.status !== 'requires_review' || !current || !['unknown', 'needs_reconciliation'].includes(current.status)
+      || await tx.query.servers.findFirst({ where: t => eq(t.orderId, order.id) })) {
+      throw new AppError(409, 'conflict', 'وضعیت عملیات یا سفارش تغییر کرده است')
+    }
+    const now = new Date()
+    await tx.update(providerOperations).set({
+      status: 'failed', lastError: input.note ?? 'rejected manually by operator', completedAt: now, updatedAt: now,
+      responseMetadata: { ...((current.responseMetadata ?? {}) as object), permanent: true, rejectedByOperator: true, note: input.note ?? null },
+    }).where(eq(providerOperations.id, op.id))
+    await transitionOrder(tx, order.id, 'failed', {
       actorId: input.actorId,
       reason: 'operator confirmed no provider server was created',
     })
-    await db.update(orders).set({ error: input.note ?? 'operator rejected the operation', updatedAt: new Date() }).where(eq(orders.id, op.referenceId))
-  }
-  await writeAudit(db, {
-    actorId: input.actorId,
-    action: 'admin.provider_operation.mark_rejected',
-    targetType: 'provider_operation',
-    targetId: op.id,
-    metadata: { note: input.note ?? null, businessKey: op.businessKey },
+    await tx.update(orders).set({ error: input.note ?? 'operator rejected the operation' }).where(eq(orders.id, order.id))
+    await writeAudit(tx, {
+      actorId: input.actorId, action: 'admin.provider_operation.mark_rejected', targetType: 'provider_operation', targetId: op.id,
+      metadata: { note: input.note ?? null, businessKey: op.businessKey },
+    })
   })
 }
 
@@ -484,7 +482,9 @@ async function markUnderReview(db: DbClient, opId: string, reason: string, candi
     },
     updatedAt: new Date(),
   }
-  await db.update(providerOperations).set(next).where(eq(providerOperations.id, opId))
+  const [updated] = await db.update(providerOperations).set(next)
+    .where(and(eq(providerOperations.id, opId), inArray(providerOperations.status, ['unknown', 'needs_reconciliation']))).returning({ id: providerOperations.id })
+  if (!updated) return
   await writeAudit(db, {
     action: 'provider.order.needs_manual_review',
     targetType: 'provider_operation',
@@ -495,16 +495,21 @@ async function markUnderReview(db: DbClient, opId: string, reason: string, candi
 
 /** Complete the order from a conclusively MATCHED recovery result. */
 export async function completeOrderFromRecovery(db: DbClient, op: typeof providerOperations.$inferSelect, result: RecoveryResult) {
-  const order = op.referenceType === 'order' ? await db.query.orders.findFirst({ where: (t) => eq(t.id, op.referenceId) }) : null
-  const serverId = result.providerServerId!
-
-  if (order && order.status === 'requires_review') {
-    const offer = await findOfferByProductAndLocation(db, order.provider, order.providerProductId, order.providerLocation)
-    const server = await createServerRecord(db, {
+  const serverId = result.providerServerId
+  if (op.kind !== 'provision' || op.referenceType !== 'order' || result.resolution !== 'MATCHED' || !serverId) return false
+  const recoveredServer = await db.transaction(async tx => {
+    const [order] = await tx.select().from(orders).where(eq(orders.id, op.referenceId)).for('update')
+    const [current] = await tx.select().from(providerOperations).where(eq(providerOperations.id, op.id)).for('update')
+    if (order?.status !== 'requires_review' || !current || !['unknown', 'needs_reconciliation'].includes(current.status)) return null
+    const existing = await tx.query.servers.findFirst({ where: t => eq(t.orderId, order.id) })
+    if (existing && existing.providerServerId !== serverId) return null
+    const offer = await findOfferByProductAndLocation(tx, order.provider, order.providerProductId, order.providerLocation)
+    const metadata = (current.responseMetadata ?? {}) as Record<string, unknown>
+    const server = existing ?? await createServerRecord(tx, {
       userId: order.userId,
       orderId: order.id,
       provider: op.provider,
-      providerOrderId: result.providerOrderId ?? (asString(((op.responseMetadata ?? {}) as Record<string, unknown>).providerOrderId) as string | undefined),
+      providerOrderId: result.providerOrderId ?? asString(metadata.providerOrderId),
       providerServerId: serverId,
       providerProductId: order.providerProductId,
       providerLocation: order.providerLocation,
@@ -515,33 +520,22 @@ export async function completeOrderFromRecovery(db: DbClient, op: typeof provide
       diskGb: offer?.diskGb ?? 0,
       trafficLimitGb: offer?.trafficGb ?? null,
     })
-    // Best-effort view refresh (server must exist — MATCHED proof).
-    let view
-    try {
-      view = await getProvider(op.provider).getServer(serverId)
-    } catch {
-      view = undefined
-    }
-    if (view?.state === 'active') await finishServerActivation(db, server.id, view)
-    await db
+    await transitionOrder(tx, order.id, 'provisioning', { reason: 'provider server was conclusively matched' })
+    const now = new Date()
+    await tx
       .update(providerOperations)
-      .set({ status: 'succeeded', lastError: null, responseMetadata: { ...((op.responseMetadata ?? {}) as object), reconciled: true, providerServerId: serverId, providerOrderId: result.providerOrderId }, completedAt: new Date(), updatedAt: new Date() })
+      .set({ status: 'succeeded', lastError: null, responseMetadata: { ...metadata, reconciled: true, outcome: 'matched', providerServerId: serverId, providerOrderId: result.providerOrderId ?? asString(metadata.providerOrderId) }, completedAt: now, updatedAt: now })
       .where(eq(providerOperations.id, op.id))
-    await writeAudit(db, {
-      action: 'provider.order.completed',
-      targetType: 'order',
-      targetId: order.id,
+    await writeAudit(tx, {
+      action: 'provider.order.completed', targetType: 'order', targetId: order.id,
       metadata: { providerServerId: serverId, via: 'reconciliation' },
     })
-    return
-  }
-
-  // Order missing or not in requires_review — record the resolved op only.
-  const responseMeta = (op.responseMetadata ?? {}) as Record<string, unknown>
-  await db
-    .update(providerOperations)
-    .set({ status: 'succeeded', responseMetadata: { ...responseMeta, reconciled: true, providerServerId: serverId, providerOrderId: result.providerOrderId }, completedAt: new Date(), updatedAt: new Date() })
-    .where(eq(providerOperations.id, op.id))
+    return server
+  })
+  if (!recoveredServer) return false
+  const view = await getProvider(op.provider).getServer(serverId).catch(() => undefined)
+  if (view?.state === 'active') await finishServerActivation(db, recoveredServer.id, view)
+  return true
 }
 
 // ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ import { useToast } from '../components/ui/Toast'
 import { ApiError, isApiConfigured } from '../lib/apiClient'
 import { hetznerTrafficQuota } from '../../backend/src/contracts/home-tariffs'
 import { HetznerTraffic } from '../components/servers/HetznerTraffic'
-import { checkDomainAvailability, createServer, getOfferImages, getStorefrontCatalog, listWallets, registerDomain, serverCreateIntent } from '../lib/endpoints'
+import { checkDomainAvailability, createServer, findCheckoutOrder, getOfferImages, getStorefrontCatalog, listWallets, registerDomain, serverCreateIntent } from '../lib/endpoints'
 import { OperationEmail } from '../components/EmailConfirmation'
 import type { EmailProof } from '../lib/operationEmail'
 import { claimLifecycleNotice, rememberAcceptedServer } from '../lib/serverLifecycle'
@@ -39,10 +39,13 @@ const priceLabel = (totalRial: number) => `${formatFaNumber(totalRial / 10)} ت�
 export function CreateServerPage() {
   const { user } = useAuth()
   const [params] = useSearchParams()
-  const linkedOffer = params.get('offer'), linkedPeriod = params.get('period')
+  const linkedOffer = params.get('offer'), linkedPeriod = params.get('period'), linkedLocation = params.get('location')
   const appliedLink = useRef(false)
   const [linkUnavailable, setLinkUnavailable] = useState(false)
+  const [changedLocation, setChangedLocation] = useState<{ requested: string; current: string } | null>(null)
   const [draft] = useState(() => readCheckoutDraft(user?.id))
+  const [pendingKey, setPendingKey] = useState(draft?.submitted ? draft.purchaseKey : null)
+  const handledReceipt = useRef<string | null>(null)
   const [step, setStep] = useState(draft?.step ?? 0)
   const [providerId, setProviderId] = useState(draft?.providerId ?? '')
   const [location, setLocation] = useState(draft?.location ?? '')
@@ -65,19 +68,42 @@ export function CreateServerPage() {
   const submitLock = useRef(false)
   const navigate = useNavigate()
   const { showToast } = useToast()
+  const recovery = useApiQuery(() => pendingKey ? findCheckoutOrder(pendingKey) : Promise.resolve(null), [pendingKey])
+  const recovered = recovery.data
+  const userId = user?.id
+  useEffect(() => {
+    if (!pendingKey || !recovered?.id || handledReceipt.current === pendingKey) return
+    handledReceipt.current = pendingKey
+    clearCheckoutDraft(userId)
+    rememberAcceptedServer(userId ?? '', recovered)
+    showToast('درخواست قبلی پیدا شد. وضعیت آن در فهرست سرورها نمایش داده می‌شود.', 'info', `accepted:${recovered.tracking?.reference ?? recovered.id}`)
+    navigate('/servers', { replace: true })
+  }, [navigate, pendingKey, recovered, showToast, userId])
   const catalog = useApiQuery(getStorefrontCatalog)
   useEffect(() => {
-    if (!linkedOffer || appliedLink.current || catalog.loading || !catalog.data || catalog.error) return
+    if (pendingKey || !linkedOffer || appliedLink.current || catalog.loading || !catalog.data || catalog.error) return
     appliedLink.current = true
     const selected = catalog.data.offers.find(item => item.id === linkedOffer && item.provider === 'hetzner')
-    if (!selected || (linkedPeriod !== 'hourly' && linkedPeriod !== 'monthly') || !selected.prices.some(price => price.period === linkedPeriod)) {
-      setLinkUnavailable(true); setStep(0); setProviderId(''); setLocation(''); setBillingPeriod(''); setOfferId(''); setOs('')
+    const mismatch = selected && linkedLocation !== null && selected.location !== linkedLocation
+    if (mismatch || !selected || (linkedPeriod !== 'hourly' && linkedPeriod !== 'monthly') || !selected.prices.some(price => price.period === linkedPeriod)) {
+      if (mismatch) {
+        const locations = catalog.data.datacenters.find(item => item.id === selected.provider)?.locations
+        const describeLocation = (code: string) => {
+          const item = locations?.find(candidate => candidate.code === code)
+          return item ? [item.city, item.country, item.code].filter(Boolean).join(' · ') : code
+        }
+        setChangedLocation({ requested: describeLocation(linkedLocation), current: describeLocation(selected.location) })
+      }
+      else setLinkUnavailable(true)
+      if (draft?.offerId === linkedOffer) clearCheckoutDraft(userId)
+      purchaseKey.current = crypto.randomUUID()
+      setStep(0); setProviderId(''); setLocation(''); setBillingPeriod(''); setOfferId(''); setOs('')
       return
     }
-    if (draft?.offerId === linkedOffer && draft.billingPeriod === linkedPeriod) return
+    if (draft?.offerId === linkedOffer && draft.billingPeriod === linkedPeriod && draft.location === selected.location) return
     setProviderId(selected.provider); setLocation(selected.location); setBillingPeriod(linkedPeriod); setOfferId(selected.id)
     setOs(''); purchaseKey.current = crypto.randomUUID(); setStep(3)
-  }, [catalog.data, catalog.error, catalog.loading, draft, linkedOffer, linkedPeriod])
+  }, [catalog.data, catalog.error, catalog.loading, draft, linkedOffer, linkedLocation, linkedPeriod, pendingKey, userId])
   const wallets = useApiQuery(listWallets)
   const datacenters = catalog.data?.datacenters ?? []
   const provider = datacenters.find((item) => item.id === providerId)
@@ -117,7 +143,7 @@ export function CreateServerPage() {
     allValid,
   ][step]
   const resetOffer = () => { setOfferId(''); setOs(''); setSubmitError(null); purchaseKey.current = crypto.randomUUID() }
-  const preserveOrder = () => saveCheckoutDraft(user?.id, { step, providerId, location, offerId, os, name, billingPeriod, purchaseKey: purchaseKey.current })
+  const preserveOrder = (submitted = false) => saveCheckoutDraft(userId, { step, providerId, location, offerId, os, name, billingPeriod, purchaseKey: purchaseKey.current, ...(submitted ? { submitted } : {}) })
   const refreshWallets = wallets.refetch
   useEffect(() => {
     const refresh = () => { refreshWallets(); setSubmitError(null) }
@@ -128,7 +154,7 @@ export function CreateServerPage() {
     setProviderId(''); setLocation(''); setBillingPeriod(''); resetOffer(); setStep(0); catalog.refetch()
   }
   const next = () => {
-    if (submitLock.current || !canContinue) return
+    if (submitLock.current || emailOrder || !canContinue) return
     if (step < serverSteps.length - 1) { setStep((value) => value + 1); return }
     if (!allValid || !billingPeriod || !offer || !selectedOs || !wallet || !price) return
     setEmailOrder({ name: name.trim(), offerId: offer.id, os: selectedOs.id, billingPeriod, pricing: offer.canonicalPricing,
@@ -139,6 +165,7 @@ export function CreateServerPage() {
     setSubmitting(true)
     submitLock.current = true
     setSubmitError(null)
+    if (!emailOrder.pricing) preserveOrder(true)
     try {
       const result = await createServer(emailOrder, proof)
       setEmailOrder(null)
@@ -151,6 +178,14 @@ export function CreateServerPage() {
       clearCheckoutDraft(user?.id)
       navigate('/servers')
     } catch (error) {
+      if (!emailOrder.pricing) {
+        if (!(error instanceof ApiError) || error.status === 0 || error.status >= 500) {
+          setEmailOrder(null)
+          setPendingKey(emailOrder.idempotencyKey)
+          return
+        }
+        preserveOrder()
+      }
       const problem = checkoutFailure(error)
       const changed = error instanceof ApiError && (error.body as { error?: string } | null)?.error === 'server_price_changed'
       if (!changed && !problem.funding) throw error
@@ -165,13 +200,26 @@ export function CreateServerPage() {
   const locationLabel = selectedLocation ? [selectedLocation.city, selectedLocation.country, selectedLocation.code].filter(Boolean).join(' · ') : 'انتخاب نشده'
   const catalogState = catalog.loading ? 'در حال دریافت دیتاسنترها و قیمت‌های واقعی…' : catalog.error || (!datacenters.length ? 'در حال حاضر دیتاسنتر فعالی برای سفارش موجود نیست.' : '')
 
+  if (pendingKey) return <div className="page-stack wizard-page" dir="rtl">
+    <PageHeader title="پیگیری درخواست ساخت سرور" icon={<Server />} />
+    <Card>
+      <p role="status">{recovery.loading ? 'در حال بررسی نتیجهٔ درخواست قبلی…' : recovery.error ? 'بررسی نتیجهٔ درخواست انجام نشد.' : 'هنوز سفارشی برای این درخواست پیدا نشده است.'}</p>
+      <div className="server-inline-actions">
+        <Button disabled={recovery.loading} onClick={recovery.refetch}>بررسی دوبارهٔ درخواست</Button>
+        {!recovery.loading && !recovery.error && !recovered && <Button variant="secondary" onClick={() => { setPendingKey(null); catalog.refetch(); wallets.refetch() }}>ادامه با همان درخواست</Button>}
+        <LinkButton to="/servers" variant="secondary">مشاهدهٔ سرورها</LinkButton>
+      </div>
+    </Card>
+  </div>
+
   return (
     <div className="page-stack wizard-page server-storefront" dir="rtl">
-      {emailOrder && <OperationEmail intent={serverCreateIntent(emailOrder)} execute={submitOrder} close={() => setEmailOrder(null)}>
+      {emailOrder && <OperationEmail intent={serverCreateIntent(emailOrder)} execute={submitOrder} close={() => setEmailOrder(null)} dismissOnBackdrop={false}>
         <p>ساخت سرور <bdi>{emailOrder.name || offer?.name}</bdi> · {locationLabel} · {periodLabels[emailOrder.billingPeriod]} · {priceLabel(emailOrder.expectedTotalRial)}</p>
         <p>{offer?.name} · <bdi>{selectedOs?.label || emailOrder.os}</bdi></p>
       </OperationEmail>}
       {linkUnavailable && <p className="info-box" role="status">پلن لینک‌شده دیگر برای این دوره در دسترس نیست. از فهرست فعلی انتخاب کنید.</p>}
+      {changedLocation && <p className="info-box" role="status">موقعیت درخواستی <bdi>{changedLocation.requested || 'نامشخص'}</bdi> است. این پلن اکنون در <bdi>{changedLocation.current}</bdi> عرضه می‌شود. موقعیت را از فهرست انتخاب کنید.</p>}
       <PageHeader title="ایجاد سرور جدید" subtitle="دیتاسنتر، دوره پرداخت و منابع را از کاتالوگ زنده انتخاب کنید." icon={<Server />}
         actions={<LinkButton to="/servers" variant="secondary" icon={<ArrowLeft size={18} />}>بازگشت</LinkButton>} />
       <Card padding="none" className="wizard-card">
@@ -271,7 +319,7 @@ export function CreateServerPage() {
               <strong>موجودی کیف پول شما کافی نیست.</strong>
               <p>{monthly ? 'برای ساخت سرور، پیش‌پرداخت دورهٔ ماهانه لازم است.' : 'برای ساخت سرور، اعتبار حداقل یک هفتهٔ آینده لازم است.'}</p>
               <div className="review-list"><ReviewRow label="موجودی کیف پول" value={priceLabel(shortfall.balanceRial)} /><ReviewRow label="مبلغ پرداخت سفارش" value={priceLabel(shortfall.orderTotalRial)} /><ReviewRow label="حداقل موجودی موردنیاز" value={priceLabel(shortfall.requiredBalanceRial)} /><ReviewRow label="مبلغ افزایش موجودی" value={priceLabel(shortfall.shortfallRial)} /></div>
-              <LinkButton to="/wallet?returnTo=server-checkout" onClick={preserveOrder}>افزایش موجودی کیف پول</LinkButton>
+              <LinkButton to="/wallet?returnTo=server-checkout" onClick={() => preserveOrder()}>افزایش موجودی کیف پول</LinkButton>
               <Button variant="secondary" onClick={() => { setSubmitError(null); wallets.refetch() }}>بررسی دوباره موجودی</Button>
             </div> : null}
           </>}

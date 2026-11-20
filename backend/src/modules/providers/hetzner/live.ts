@@ -174,7 +174,9 @@ export function createHetznerProvider(config: HetznerConfig, options: HetznerPro
         }
       }
       if (capacity) throw capacity
-      throw new ProviderPermanentError('Hetzner has no active account with this available product, image and exact price')
+      throw new ProviderPermanentError('Hetzner has no active account with this available product, image and exact price', {
+        providerCode: 'resource_unavailable', definitiveRejection: true,
+      })
     },
     async getServer(providerServerId) {
       const route = owner(providerServerId)

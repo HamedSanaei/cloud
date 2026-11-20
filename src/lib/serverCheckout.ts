@@ -4,6 +4,7 @@ import type { BillingPeriod } from './types'
 export interface CheckoutDraft {
   step: number; providerId: string; location: string; offerId: string; os: string; name: string
   billingPeriod: BillingPeriod | ''; purchaseKey: string
+  submitted?: boolean
 }
 const storageKey = (userId: string) => `server-checkout:${userId}`
 export function readCheckoutDraft(userId?: string): CheckoutDraft | null {
@@ -16,6 +17,7 @@ export function readCheckoutDraft(userId?: string): CheckoutDraft | null {
       if (typeof data[key] !== 'string' || data[key].length > 200) return null
     }
     if (!['', 'hourly', 'monthly'].includes(data.billingPeriod)) return null
+    if (data.submitted !== undefined && typeof data.submitted !== 'boolean') return null
     return data as CheckoutDraft
   } catch { return null }
 }

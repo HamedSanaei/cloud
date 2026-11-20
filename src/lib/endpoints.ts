@@ -107,6 +107,10 @@ export async function getServerTracking(tracking: ServerTracking, signal?: Abort
   return (await apiGet<{ data: Server }>(`/servers/provisioning/${encodeURIComponent(path ?? '').replace('%2F', '/')}`, { signal })).data
 }
 
+export async function findCheckoutOrder(key: string): Promise<Server | null> {
+  return (await apiGet<{ data: Server | null }>(`/servers/provisioning/by-request/${encodeURIComponent(key)}`)).data
+}
+
 export async function changeServerPower(serverId: string, action: 'power-on' | 'power-off'): Promise<void> {
   if (noApi()) throw new Error('اتصال به کنترل سرور پیکربندی نشده است.')
   await apiPost(`/servers/${encodeURIComponent(serverId)}/actions/${action}`, {})

@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { CreateServerPage } from '../src/pages/WizardPages'
 import { WalletPage } from '../src/pages/FinancePages'
+import { HetznerTraffic } from '../src/components/servers/HetznerTraffic'
 import { ToastProvider } from '../src/components/ui/Toast'
 import { createServer } from '../src/lib/endpoints'
 import { ApiError } from '../src/lib/apiClient'
@@ -19,13 +20,26 @@ const catalog = { datacenters: [{ id: 'hetzner', name: 'Hetzner', logo: '/provid
 let posts: Array<{ body: Record<string, unknown>; key?: string }>
 let balance: number
 let availableCatalog: typeof catalog
+let acceptedOrder: { id: string; name: string } | null
+let holdOrderResponse: boolean
+let releaseOrderResponse: ((response: Response) => void) | undefined
 beforeEach(() => {
   sessionStorage.clear(); balance = 0; posts = []; availableCatalog = catalog
+  acceptedOrder = null; holdOrderResponse = false; releaseOrderResponse = undefined
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     if (init?.method === 'POST') {
+      if (url.endsWith('/auth/operation-email/start')) {
+        return Response.json({ data: { token: 'fixture', destination: 'qa@test.local', expiresIn: 120, resendAfter: 60 } })
+      }
       posts.push({ body: JSON.parse(String(init.body)), key: (init.headers as Record<string, string>)['idempotency-key'] })
+      if (holdOrderResponse && url.endsWith('/servers')) {
+        acceptedOrder = { id: 'accepted-fixture', name: 'qa-recovery' }
+        return new Promise<Response>(resolve => { releaseOrderResponse = resolve })
+      }
       return new Response(JSON.stringify({ data: { id: 'created-server' } }), { headers: { 'content-type': 'application/json' } })
     }
+    if (url.includes('/servers/provisioning/by-request/')) return Response.json({ data: acceptedOrder })
+    if (url.endsWith('/wallets/recharges/receipt-fixture')) return Response.json({ data: { id: 'receipt-fixture', status: 'succeeded' } })
     const data = url.includes('/catalog/storefront') ? availableCatalog : url.endsWith('/wallets') ? [{ id: 'wallet', name: 'Test wallet', balance }] : url.includes('integration/status') ? { enabled: false, linked: false } : []
     return new Response(JSON.stringify({ data }), { headers: { 'content-type': 'application/json' } })
   }))
@@ -88,6 +102,58 @@ describe('Issue #3 server checkout', () => {
     open('/servers/create?offer=Cheap&period=monthly')
     expect(await screen.findByText(/پلن لینک‌شده دیگر/)).toBeTruthy()
     expect(await screen.findByRole('button', { name: /Hetzner/ })).toBeTruthy()
+  })
+
+  it('shows both locations and returns to the first step if a public link no longer matches', async () => {
+    open('/servers/create?offer=Cheap&period=hourly&location=hel1')
+    const warning = await screen.findByText(/موقعیت درخواستی/)
+    expect(warning.textContent).toMatch(/hel1.*nbg1/)
+    expect(screen.getByRole('heading', { name: 'دیتاسنتر و موقعیت' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Ubuntu/ })).toBeNull()
+    expect(posts).toEqual([])
+  })
+
+  it('lets the same user return to checkout from a payment receipt with no returnTo query', async () => {
+    saveCheckoutDraft('checkout-user', { step: 4, providerId: 'hetzner', location: 'nbg1', offerId: 'Cheap', os: 'ubuntu',
+      name: '', billingPeriod: 'hourly', purchaseKey: crypto.randomUUID() })
+    const user = userEvent.setup()
+    open('/wallet?payment=receipt-fixture')
+    expect(await screen.findByText('پرداخت تأیید شد و کیف پول شارژ شد.')).toBeTruthy()
+    await user.click(screen.getByRole('link', { name: 'بازگشت به سفارش سرور' }))
+    expect(await screen.findByText('موجودی کیف پول شما کافی نیست.')).toBeTruthy()
+  })
+
+  it('keeps one confirmation open on a second mouse press and recovers a committed order after refresh', async () => {
+    balance = 168000
+    holdOrderResponse = true
+    const page = open()
+    const user = await configure()
+    await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
+    await user.type(screen.getByRole('textbox', { name: /نام سرور/ }), 'qa-recovery')
+    await user.click(screen.getByRole('button', { name: 'تایید و ایجاد سرور' }))
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement!, { detail: 2 })
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    await user.click(screen.getByRole('button', { name: 'ارسال کد به ایمیل' }))
+    await user.type(await screen.findByRole('textbox', { name: 'کد تأیید ایمیل' }), '123456')
+    await user.click(screen.getByRole('button', { name: 'تأیید کد و ادامه' }))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(readCheckoutDraft('checkout-user')).toMatchObject({ submitted: true, step: 5, purchaseKey: posts[0]!.key })
+    page.unmount()
+    balance -= 1000
+    open()
+    expect(screen.queryByText('موجودی کیف پول شما کافی نیست.')).toBeNull()
+    expect(await screen.findByRole('link', { name: 'ایجاد سرور جدید' })).toBeTruthy()
+    expect(readCheckoutDraft('checkout-user')).toBeNull()
+    expect(posts).toHaveLength(1)
+    await act(async () => { releaseOrderResponse?.(Response.json({ data: acceptedOrder })) })
+  })
+
+  it('labels included Hetzner traffic TiB and excess pricing decimal TB', () => {
+    const stamp = '2026-11-18T00:00:00Z'
+    render(<HetznerTraffic includedBytes={20 * 2 ** 40} overage={{ perTbRial: 100000, includedBytes: null,
+      source: 'hetzner-server-type-location', observedAt: stamp, fxAt: stamp, ruleVersion: stamp }} />)
+    expect(screen.getByText('۲۰ TiB')).toBeTruthy()
+    expect(screen.getByText('/ TB')).toBeTruthy()
   })
   it('sends idempotency only in the header accepted by the strict API', async () => {
     await createServer({ name: 'test-server', offerId: 'offer', os: 'ubuntu', billingPeriod: 'hourly', walletId: 'wallet', idempotencyKey: 'stable-key' })
