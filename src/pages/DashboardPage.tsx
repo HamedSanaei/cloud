@@ -20,6 +20,7 @@ import { useApiQuery } from '../hooks/useApiQuery'
 import { getDashboardSummary, getRecentServers, getRecentTickets } from '../lib/endpoints'
 import { formatCount, formatToman } from '../lib/format'
 import { ServerStatus } from '../components/servers/ServerPrimitives'
+import { ticketStatusLabel } from '../lib/tickets'
 
 const quickLinks = [
   { label: 'ایجاد سرور', icon: HardDrive, path: '/servers/create', accent: 'blue' },
@@ -126,7 +127,7 @@ export function DashboardPage() {
               {tickets.data.map((ticket) => (
                 <tr key={ticket.id}>
                   <td>{ticket.title}</td>
-                  <td><Badge tone={statusTone(ticket.status)}>{ticket.status}</Badge></td>
+                  <td><Badge tone={statusTone(ticket.status)}>{ticketStatusLabel(ticket.status)}</Badge></td>
                 </tr>
               ))}
             </Table>

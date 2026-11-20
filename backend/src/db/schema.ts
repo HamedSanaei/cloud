@@ -836,7 +836,8 @@ export const ticketReplies = pgTable('ticket_replies', {
   requestId: uuid('request_id').notNull().unique(),
   body: text('body').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-})
+  customerReadAt: timestamp('customer_read_at', { withTimezone: true }),
+}, t => [index('ticket_replies_ticket_idx').on(t.ticketId, t.createdAt)])
 
 export const chargeRequests = pgTable(
   'charge_requests',

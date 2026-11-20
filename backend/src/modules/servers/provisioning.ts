@@ -6,6 +6,7 @@ import { NotFoundError } from '../../lib/errors.js'
 import { provisionState, type ServerTracking, type ProvisioningFailure } from '../../contracts/server-lifecycle.js'
 import { loadFundingFleet, serverPowerPolicy } from '../billing/funding.js'
 import { linkedRefundReason } from '../provisioning/rejection.js'
+import { containsSearch } from '../../lib/list-search.js'
 
 export async function provisioningRow(db: DbClient, userId: string, orderId: string) {
   const order = await db.query.orders.findFirst({ where: t => and(eq(t.id, orderId), eq(t.userId, userId)) })
@@ -50,9 +51,10 @@ export async function provisioningRow(db: DbClient, userId: string, orderId: str
     power: { canPowerOn: false, canPowerOff: false, canReboot: false, billingBlocked: false, requiredBalanceToman: null, pendingAction: null } }
 }
 
-export async function pendingProvisioningRows(db: DbClient, userId: string, limit = 50) {
+export async function pendingProvisioningRows(db: DbClient, userId: string, limit = 50, reference?: string) {
   const rows = await db.select({ id: orders.id }).from(orders).leftJoin(servers, eq(servers.orderId, orders.id))
-    .where(and(eq(orders.userId, userId), isNull(servers.id), inArray(orders.status, ['paid', 'queued', 'provisioning', 'requires_review', 'failed', 'cancelled', 'refunded'])))
-    .orderBy(desc(orders.createdAt)).limit(limit)
+    .where(and(eq(orders.userId, userId), isNull(servers.id), inArray(orders.status, ['paid', 'queued', 'provisioning', 'requires_review', 'failed', 'cancelled', 'refunded']),
+      reference ? containsSearch(orders.orderNumber, reference) : undefined))
+    .orderBy(desc(orders.createdAt), desc(orders.id)).limit(limit)
   return Promise.all(rows.map(row => provisioningRow(db, userId, row.id)))
 }

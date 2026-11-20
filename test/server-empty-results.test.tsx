@@ -15,14 +15,16 @@ const history = [
 ]
 let rows: Record<string, unknown>[] = history
 let fail = false
+let oldRows: Record<string, unknown>[] = []
 beforeEach(() => {
-  rows = history; fail = false
+  rows = history; fail = false; oldRows = []
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     const path = url.replace(/^\/api/, '').split('?')[0]
     if (path === '/servers') {
       if (fail) throw new Error('fixture unavailable')
       return Response.json({ data: rows })
     }
+    if (path === '/servers/provisioning/search') return Response.json({ data: oldRows })
     return Response.json(fixture(path))
   }))
 })
@@ -46,7 +48,7 @@ describe('server list empty states', () => {
     await user.selectOptions(screen.getByRole('combobox', { name: 'وضعیت' }), 'failed')
     expect(screen.getByRole('cell', { name: /Failed lookup node/ })).toBeTruthy()
     await user.selectOptions(screen.getByRole('combobox', { name: 'دیتاسنتر' }), 'Hetzner')
-    expect(emptyCard().getByText('سروری با این جستجو یا فیلترها یافت نشد')).toBeTruthy()
+    expect(await screen.findByText('سروری با این جستجو یا فیلترها یافت نشد')).toBeTruthy()
   })
 
   it('filters failed lifecycle and tracking-only records while preserving search, datacenter and reset', async () => {
@@ -73,7 +75,9 @@ describe('server list empty states', () => {
     expect(nameCell('Failed order')).toBeNull()
     await user.type(screen.getByRole('textbox', { name: 'جستجو' }), 'no-match')
     expect(emptyCard().getByText('سروری با این جستجو یا فیلترها یافت نشد')).toBeTruthy()
-    await user.click(emptyCard().getByRole('button', { name: 'پاک کردن فیلترها' }))
+    emptyCard().getByRole('button', { name: 'پاک کردن فیلترها' }).focus()
+    await user.keyboard('{Enter}')
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'جستجو' }))
     expect(nameCell('Failed order')).toBeTruthy()
     expect(nameCell('Ready server')).toBeTruthy()
     expect((status as HTMLSelectElement).value).toBe('all')
@@ -118,6 +122,25 @@ describe('server list empty states', () => {
     await screen.findByText('هنوز سروری نساخته‌اید')
     expect(emptyCard().getByRole('link', { name: 'ساخت اولین سرور' }).getAttribute('href')).toBe('/servers/create')
     expect(emptyCard().queryByRole('button', { name: 'پاک کردن فیلترها' })).toBeNull()
+  })
+
+  it.each(['192.0.2.10', '2001:DB8::10'])('finds a server from its displayed address %s', async term => {
+    rows = [...history, { ...history[0], id: 'address-node', name: 'Address node', lifecycle: 'ready', ip: '192.0.2.10', ipv6: '2001:db8::10' }]
+    open()
+    await screen.findByText('Address node')
+    await userEvent.type(screen.getByRole('textbox', { name: 'جستجو' }), term)
+    expect(screen.getByText('Address node')).toBeTruthy()
+    expect(screen.queryByText('Past server A')).toBeNull()
+  })
+
+  it.each(['ORD-۲۰۲۶-۱۲۳۴۵۶', 'ORD-٢٠٢٦-١٢٣٤٥٦'])('finds an old pending order by %s', async term => {
+    oldRows = [{ ...history[0], id: 'order:old', name: 'Needs review', lifecycle: 'requires_review',
+      tracking: { source: 'site', state: 'requires_review', reference: 'old', orderId: 'old' } }]
+    open()
+    await screen.findByText('Past server A')
+    await userEvent.type(screen.getByRole('textbox', { name: 'جستجو' }), term)
+    expect(await screen.findByRole('cell', { name: 'Needs review', exact: true })).toBeTruthy()
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url))).toContain('/api/servers/provisioning/search?reference=ord-2026-123456')
   })
 
   it('does not present a failed request as a first-server or empty-results state', async () => {

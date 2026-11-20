@@ -5,7 +5,7 @@ import { buildApp } from '../../src/app.js'
 import * as configuration from '../../src/config.js'
 import { authChallenges, providerProducts, providers, settings, users } from '../../src/db/schema.js'
 import { createSession, registerUser } from '../../src/modules/auth/service.js'
-import { minimumCreationBalanceRial } from '../../src/modules/billing/creation-funding.js'
+import { assertCreationFunding, minimumCreationBalanceRial } from '../../src/modules/billing/creation-funding.js'
 import { enableAllOffersForSale, findOfferByProductAndLocation, syncProviderCatalog } from '../../src/modules/catalog/service.js'
 import { createOrderFromQuote, payOrder } from '../../src/modules/orders/service.js'
 import { handleProvision } from '../../src/modules/provisioning/handlers.js'
@@ -424,6 +424,53 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
     expect(await ctx.db.query.providerOperations.findMany({ where: t => eq(t.referenceId, first.order.id) })).toHaveLength(1)
   })
 
+  it('persists and audits coverage for admins, enforces policy changes and serializes concurrent orders at three days', async () => {
+    const owner = await account(true), admin = await account(true), customer = await account()
+    await ctx.db.update(users).set({ role: 'super_admin' }).where(eq(users.id, owner.user.id))
+    const key = 'billing.minimum_creation_coverage_days'
+    const path = '/api/admin/settings/creation-funding'
+    const save = (headers: Record<string, string>, minimumCoverageDays: number) => app.inject({ method: 'POST', url: path, headers, payload: { minimumCoverageDays } })
+    const read = async () => (await app.inject(path.replace('/admin/settings/creation-funding', '/catalog/storefront'))).json().data.minimumCoverageDays
+    expect(await read()).toBe(7)
+    expect((await app.inject({ url: path, headers: admin.headers })).statusCode).toBe(403)
+    expect((await save(admin.headers, 3)).statusCode).toBe(403)
+    expect((await save(customer.headers, 3)).statusCode).toBe(403)
+    for (const days of [0, 1.5, 31]) expect((await save(owner.headers, days)).statusCode).toBe(422)
+    const [old, second] = await Promise.all([quoteFor(customer.user.id), quoteFor(customer.user.id)])
+    const args = { userId: customer.user.id, walletId: customer.wallet.id }
+    try {
+      for (const days of [1, 7, 30, 3]) {
+        expect((await save(owner.headers, days)).statusCode).toBe(200)
+        expect(await read()).toBe(days)
+        expect((await app.inject({ url: path, headers: owner.headers })).json().data.minimumCoverageDays).toBe(days)
+        for (const [billingInterval, periods] of [['HOURLY', days * 24], ['DAILY', days], ['MONTHLY', 1]] as const) {
+          await expect(ctx.db.transaction(tx => assertCreationFunding(tx, { ...args, totalRial: 100, billingInterval })))
+            .rejects.toMatchObject({ code: 'insufficient_funds', details: { requiredBalanceRial: periods * 100, minimumCoverageDays: days } })
+        }
+      }
+      expect((await ctx.db.query.settings.findFirst({ where: t => eq(t.key, key) }))?.value).toBe(3)
+      const audit = await ctx.db.query.auditLogs.findMany({ where: t => eq(t.action, 'billing.creation_coverage_changed') })
+      expect(audit).toContainEqual(expect.objectContaining({ actorId: owner.user.id, metadata: { previousDays: 30, minimumCoverageDays: 3 } }))
+      expect(await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.userId, customer.user.id) })).toHaveLength(0)
+      const payload = { ...body(customer.wallet.id), expectedTotalRial: old.totalRial, expectedCoverageDays: 7 }
+      const headers = await operationEmailHeaders(app, ctx.db, customer.user.id, customer.headers, { action: 'create', key: 'coverage-changed', payload })
+      const response = await app.inject({ method: 'POST', url: '/api/servers', headers, payload })
+      expect(response.statusCode).toBe(409)
+      expect(response.json()).toMatchObject({ error: 'funding_policy_changed', details: { minimumCoverageDays: 3 } })
+      expect(await ctx.db.query.orders.findMany({ where: t => eq(t.userId, customer.user.id) })).toHaveLength(0)
+      await creditWallet(ctx.db, customer.user.id, customer.wallet.id, old.totalRial * 72, { type: 'manual_credit' })
+      const orders = await Promise.allSettled([old, second].map(q => createOrderFromQuote(ctx.db, {
+        ...args, quoteId: q.id, hostname: 'coverage-race', expectedCoverageDays: 3,
+      })))
+      expect(orders.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+      expect(orders.find(result => result.status === 'rejected')).toMatchObject({ reason: { code: 'insufficient_funds', details: { minimumCoverageDays: 3 } } })
+      const ledger = await ctx.db.query.walletTransactions.findMany({ where: t => eq(t.userId, customer.user.id) })
+      expect(ledger.filter(row => row.type === 'purchase').map(row => row.amountRial)).toEqual([-old.totalRial])
+    } finally {
+      await ctx.db.delete(settings).where(eq(settings.key, key))
+    }
+  })
+
   it('keeps sales changes admin-only, audited, sync-stable and enforced on stale quotes while allowing admin purchases', async () => {
     const admin = await account(true)
     await ctx.db.update(users).set({ role: 'super_admin' }).where(eq(users.id, admin.user.id))
@@ -438,7 +485,9 @@ describe.skipIf(!dbAvailable)('checkout funding, datacenter sales and Issue #3',
     expect((await app.inject({ ...request, headers: admin.headers })).statusCode).toBe(200)
     expect(await ctx.db.query.auditLogs.findMany({ where: t => eq(t.action, 'provider.sales_changed') })).toHaveLength(1)
     expect((await app.inject('/api/catalog/storefront')).json().data.datacenters).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: 'hetzner' })]))
-    const adminCatalog = await app.inject({ url: '/api/catalog/storefront', headers: admin.headers })
+    const customerCatalog = await app.inject({ url: '/api/catalog/storefront', headers: admin.headers })
+    expect(customerCatalog.json().data.datacenters).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: 'hetzner' })]))
+    const adminCatalog = await app.inject({ url: '/api/catalog/storefront?adminPreview=true', headers: admin.headers })
     expect(adminCatalog.json().data.datacenters).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'hetzner' })]))
     expect(adminCatalog.headers['cache-control']).toBe('private, no-store')
     expect(adminCatalog.headers.vary).toContain('Authorization')

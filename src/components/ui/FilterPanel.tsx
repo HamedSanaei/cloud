@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { ReactNode, Ref } from 'react'
 import { RotateCcw } from 'lucide-react'
 import { Button } from './Button'
 import { Card } from './Card'
@@ -10,16 +10,19 @@ export function FilterPanel({
   placeholder = 'جستجو...',
   children,
   onReset,
+  searchRef,
 }: {
   query: string
   onQueryChange: (value: string) => void
   placeholder?: string
   children?: ReactNode
   onReset?: () => void
+  searchRef?: Ref<HTMLInputElement>
 }) {
   return (
     <Card className="filter-panel" padding="sm">
       <Input
+        inputRef={searchRef}
         search
         aria-label="جستجو"
         value={query}

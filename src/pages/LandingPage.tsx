@@ -1,5 +1,5 @@
 import { ArrowLeft, Check, ChevronDown, Clock3, Globe2, Menu, Network, Settings2, X } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { BRAND_NAME, BrandMark } from '../components/Brand'
@@ -11,7 +11,7 @@ const HETZNER_ACCOUNT_URL = 'https://pluspremium.ir/'
 const kalamehVersion = import.meta.env.VITE_KALAMEH_VERSION
 const kalamehStylesheet = /^[a-f0-9]{64}$/.test(kalamehVersion ?? '') ? `/kalameh/${kalamehVersion}/home.css` : '/kalameh/home.css'
 
-const providers = [
+const providerCards = [
   { id: 'asiatech', name: 'آسیاتک', logo: '/providers/asiatech.svg', region: 'ایران', title: 'خرید سرور ایران', tone: 'blue', link: '#iran-server', action: 'وضعیت عرضه و تعرفهٔ ایران', bullets: ['میزبانی در ایران برای مخاطبان داخل کشور', 'تعرفهٔ ماهانهٔ منابع پس از تأیید منتشر می‌شود'] },
   { id: 'hetzner', name: 'Hetzner', logo: '/providers/hetzner.svg', region: 'اروپا، آمریکا و سنگاپور', title: 'خرید سرور هتزنر', tone: 'rose', link: '/hetzner#tariffs', action: 'مشاهدهٔ پلن‌های هتزنر', bullets: ['مقایسهٔ موقعیت، منابع و ترافیک مشمول', 'دوره‌های پرداخت مطابق پلن‌های قابل سفارش'] },
   { id: 'leaseweb', name: 'Leaseweb', logo: '/providers/leaseweb.svg', region: 'خارج', title: 'سرور ابری لیزوب', tone: 'cyan', link: '/servers/create', action: 'بررسی موجودی لیزوب در پنل', bullets: ['موقعیت و دورهٔ پرداخت در پنل سفارش مشخص می‌شود'] },
@@ -23,7 +23,30 @@ function ProviderLogo({ provider, alt }: { provider: string; alt: string }) {
 
 export function LandingPage({ initialTariffs }: { initialTariffs?: string } = {}) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [saleProviderIds, setSaleProviderIds] = useState<string[]>([])
   const { user } = useAuth()
+  useEffect(() => {
+    let current: AbortController | undefined
+    const refresh = async () => {
+      current?.abort()
+      const controller = new AbortController()
+      current = controller
+      try {
+        const response = await fetch('/api/public/sale-providers', { credentials: 'omit', cache: 'no-store',
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]) })
+        if (!response.ok) throw new Error('Sales availability unavailable')
+        const { data } = await response.json() as { data?: string[] }
+        if (!controller.signal.aborted) setSaleProviderIds(Array.isArray(data) ? data : [])
+      } catch {
+        if (!controller.signal.aborted) setSaleProviderIds([])
+      }
+    }
+    void refresh()
+    const interval = window.setInterval(refresh, 30_000)
+    window.addEventListener('focus', refresh)
+    return () => { current?.abort(); window.clearInterval(interval); window.removeEventListener('focus', refresh) }
+  }, [])
+  const providers = providerCards.filter(provider => provider.id === 'asiatech' || saleProviderIds.includes(provider.id))
   return (
     <div className="landing-page landing-home" dir="rtl">
       <link rel="stylesheet" href={kalamehStylesheet} precedence="default" />
@@ -50,7 +73,7 @@ export function LandingPage({ initialTariffs }: { initialTariffs?: string } = {}
           </div>
           <div className="hero-console" aria-label="نمایی از کنسول مدیریت سرور">
             <div className="console-window-bar"><span><i /><i /><i /></span><b>کنسول مدیریت سرور</b></div>
-            <div className="console-summary"><strong>۳</strong><span>نمایش شماتیک پنل</span><i /></div>
+            <div className="console-summary"><strong>{providers.length.toLocaleString('fa-IR')}</strong><span>نمایش شماتیک پنل</span><i /></div>
             {providers.map((provider) => <div className="console-server" key={provider.id}><ProviderLogo alt="" provider={provider.id} /><span><b>{provider.name}</b><small>{provider.region}</small></span><i /></div>)}
             <ul className="console-capabilities" aria-label="امکانات سرویس">
               <li><Clock3 aria-hidden="true" /><span><strong>پرداخت ساعتی</strong><small>متناسب با مصرف شما</small></span></li>

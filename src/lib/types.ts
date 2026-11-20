@@ -46,6 +46,7 @@ export interface Server {
 
 export interface CreateServerPayload {
   expectedTotalRial?: number
+  expectedCoverageDays?: number
   name: string
   offerId: string
   os: string
@@ -87,6 +88,8 @@ export interface StorefrontCatalog {
   offers: StorefrontOffer[]
   freshness?: { validUntil: string }
   pricingUnavailable?: Array<{ id: string; name: string }>
+  saleProviderIds?: string[]
+  minimumCoverageDays?: number
   source?: 'platform'
 }
 
@@ -195,7 +198,7 @@ export type TicketStatus = 'pending' | 'review' | 'answered' | 'closed'
 export type TicketDepartment = 'technical' | 'finance' | 'sales'
 
 export interface Ticket {
-  replies?: Array<{ id: string; body: string; createdAt: string }>
+  replies?: Array<{ id: string; body: string; createdAt: string; read?: boolean }>
   id: string
   title: string
   department: string

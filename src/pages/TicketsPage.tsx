@@ -1,10 +1,11 @@
 import { Clock3, Inbox, LifeBuoy, MessageCircleReply, Plus, SearchCheck } from 'lucide-react'
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { CopyableIp } from '../components/ui/CopyableIp'
 import { useSearchParams } from 'react-router-dom'
 import { Button } from '../components/ui/Button'
 import { Card, SectionHeading } from '../components/ui/Card'
 import { FilterPanel } from '../components/ui/FilterPanel'
+import { HistoryPagination } from '../components/ui/HistoryPagination'
 import { Input, Select } from '../components/ui/FormControls'
 import { MetricCard } from '../components/ui/MetricCard'
 import { Modal } from '../components/ui/Modal'
@@ -13,10 +14,12 @@ import { EmptyState, LoadingState, QueryError } from '../components/ui/States'
 import { Badge, Table } from '../components/ui/Table'
 import { useToast } from '../components/ui/Toast'
 import { useApiQuery } from '../hooks/useApiQuery'
+import { useCustomerHistory } from '../hooks/useCustomerHistory'
 import { isApiConfigured } from '../lib/apiClient'
-import { createTicket, getTicket, getTicketSummary, listTickets, listTicketServers } from '../lib/endpoints'
-import type { Ticket } from '../lib/types'
+import { createTicket, getTicket, getTicketSummary, listTickets, listTicketServers, markTicketRepliesRead } from '../lib/endpoints'
+import { ticketDepartmentLabel, ticketDepartmentLabels, ticketStatusLabel, ticketStatusLabels } from '../lib/tickets'
 import { formatCount } from '../lib/format'
+import { normalizeSearchText } from '../../backend/src/contracts/search-text'
 
 export function TicketsPage() {
   const [query, setQuery] = useState('')
@@ -27,29 +30,39 @@ export function TicketsPage() {
   const [ticketDepartment, setTicketDepartment] = useState('technical')
   const [description, setDescription] = useState('')
   const [serverId, setServerId] = useState('')
-  const [detail, setDetail] = useState<Ticket | null>(null)
   const [search, setSearch] = useSearchParams()
   const linkedId = search.get('ticket')
   const linked = useApiQuery(() => linkedId ? getTicket(linkedId) : Promise.resolve(null), [linkedId])
-  const selected = linkedId ? linked.data?.id === linkedId ? linked.data : null : detail
-  const closeDetail = () => { setDetail(null); if (linkedId) setSearch({}, { replace: true }) }
+  const selected = linkedId && linked.data?.id === linkedId ? linked.data : null
+  const closeDetail = () => setSearch({}, { replace: true })
   const [submitting, setSubmitting] = useState(false)
   const { showToast } = useToast()
 
   const summary = useApiQuery(getTicketSummary)
-  const tickets = useApiQuery(listTickets)
+  const tickets = useCustomerHistory(listTickets, { search: query, status, department }, 'tickets')
+  const { search: queryText, resetPage } = tickets
   const servers = useApiQuery(() => modalOpen ? listTicketServers() : Promise.resolve([]), [modalOpen])
+  const refreshTickets = tickets.refetch
+  const refreshSummary = summary.refetch
+  useEffect(() => {
+    if (!selected?.unread) return
+    const ids = selected.replies?.filter(reply => reply.read === false).map(reply => reply.id) ?? []
+    if (ids.length) void markTicketRepliesRead(selected.id, ids).then(() => {
+      refreshTickets()
+      refreshSummary()
+    }).catch(() => { /* Leave the replies unread if the receipt fails. */ })
+  }, [selected, refreshTickets, refreshSummary])
 
   const filtered = useMemo(() => {
-    const items = tickets.data ?? []
-    const normalized = query.trim()
+    const items = tickets.data?.items ?? []
+    if (tickets.data?.pagination) return items
     return items.filter((ticket) => {
-      const matchesQuery = !normalized || ticket.title.includes(normalized)
+      const matchesQuery = !queryText || normalizeSearchText(ticket.title).includes(queryText)
       const matchesStatus = status === 'all' || ticket.status === status
       const matchesDepartment = department === 'all' || ticket.department === department
       return matchesQuery && matchesStatus && matchesDepartment
     })
-  }, [tickets.data, query, status, department])
+  }, [tickets.data, queryText, status, department])
 
   const submitTicket = async (event: FormEvent) => {
     event.preventDefault()
@@ -87,7 +100,7 @@ export function TicketsPage() {
       />
 
       <div className="metrics-grid metrics-grid--five">
-        <MetricCard label="کل تیکت‌ها" value={formatCount(summary.data?.total ?? tickets.data?.length ?? 0)} icon={LifeBuoy} />
+        <MetricCard label="کل تیکت‌ها" value={formatCount(summary.data?.total ?? tickets.data?.items.length ?? 0)} icon={LifeBuoy} />
         <MetricCard label="باز" value={formatCount(summary.data?.open ?? 0)} icon={Inbox} accent="amber" />
         <MetricCard label="در حال بررسی" value={formatCount(summary.data?.reviewing ?? 0)} icon={Clock3} accent="cyan" />
         <MetricCard label="پاسخ داده شده" value={formatCount(summary.data?.answered ?? 0)} icon={MessageCircleReply} accent="green" />
@@ -96,15 +109,17 @@ export function TicketsPage() {
 
       <FilterPanel
         query={query}
-        onQueryChange={setQuery}
+        onQueryChange={value => { setQuery(value); resetPage() }}
         placeholder="جستجو در تیکت‌ها..."
-        onReset={() => { setQuery(''); setStatus('all'); setDepartment('all') }}
+        onReset={() => { setQuery(''); setStatus('all'); setDepartment('all'); resetPage() }}
       >
-        <Select aria-label="وضعیت" value={status} onChange={(event) => setStatus(event.target.value)}>
-          <option value="all">همه وضعیت‌ها</option><option value="pending">در انتظار</option><option value="review">در حال بررسی</option><option value="answered">پاسخ داده شده</option><option value="closed">بسته شده</option>
+        <Select aria-label="وضعیت" value={status} onChange={(event) => { setStatus(event.target.value); resetPage() }}>
+          <option value="all">همه وضعیت‌ها</option>
+          {Object.entries(ticketStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </Select>
-        <Select aria-label="بخش" value={department} onChange={(event) => setDepartment(event.target.value)}>
-          <option value="all">همه بخش‌ها</option><option value="technical">فنی</option><option value="finance">مالی</option><option value="sales">فروش</option>
+        <Select aria-label="بخش" value={department} onChange={(event) => { setDepartment(event.target.value); resetPage() }}>
+          <option value="all">همه بخش‌ها</option>
+          {Object.entries(ticketDepartmentLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </Select>
       </FilterPanel>
 
@@ -125,15 +140,16 @@ export function TicketsPage() {
           <Table headers={['عنوان', 'بخش', 'سرور مربوطه', 'وضعیت', 'جزئیات']}>
             {filtered.map((ticket) => (
               <tr key={ticket.id}>
-                <td>{ticket.title}</td>
-                <td>{ticket.department}</td>
+                <td>{ticket.title}{ticket.unread && <> <Badge tone="info">پاسخ خوانده‌نشده</Badge></>}</td>
+                <td>{ticketDepartmentLabel(ticket.department)}</td>
                 <td>{ticket.relatedServer?.name ?? 'سفارشی ندارم'}</td>
-                <td><Badge>{ticket.status}</Badge></td>
+                <td><Badge>{ticketStatusLabel(ticket.status)}</Badge></td>
                 <td><Button variant="secondary" size="sm" onClick={() => setSearch({ ticket: ticket.id })}>مشاهده تیکت</Button></td>
               </tr>
             ))}
           </Table>
         )}
+        {!tickets.loading && !tickets.error && <HistoryPagination label="صفحه‌بندی تیکت‌ها" {...tickets} />}
       </Card>
 
       <Modal

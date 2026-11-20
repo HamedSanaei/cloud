@@ -14,6 +14,7 @@ export function NotificationCenter({ userId }: { userId: string }) {
   const anchor = useRef<HTMLDivElement>(null)
   const bell = useRef<HTMLButtonElement>(null)
   const { data, loading, error, refetch } = useApiQuery(getNotifications)
+  const items = data?.items
   const { showToast } = useToast()
 
   useEffect(() => {
@@ -36,9 +37,9 @@ export function NotificationCenter({ userId }: { userId: string }) {
   }, [loading, refetch])
 
   useEffect(() => {
-    if (!data?.length) return
+    if (!items?.length) return
     let active = true
-    void claimNotificationToasts(userId, data, () => active).then(fresh => {
+    void claimNotificationToasts(userId, items, () => active).then(fresh => {
       if (!active) return
       if (fresh.length > 3) { setOpen(true); return }
       for (const item of [...fresh].reverse()) {
@@ -47,7 +48,7 @@ export function NotificationCenter({ userId }: { userId: string }) {
       }
     })
     return () => { active = false }
-  }, [data, showToast, userId])
+  }, [items, showToast, userId])
 
   useEffect(() => {
     if (!open) return
@@ -61,8 +62,8 @@ export function NotificationCenter({ userId }: { userId: string }) {
     }
   }, [open])
 
-  const unread = (data ?? []).filter(item => !item.read)
-  const read = async (ids: string[]) => {
+  const unread = (data?.unreadCount ?? 0) > 0
+  const read = async (ids?: string[]) => {
     setSaving(true)
     setSaveError('')
     try { await markNotificationsRead(ids); refetch() }
@@ -72,9 +73,9 @@ export function NotificationCenter({ userId }: { userId: string }) {
 
   return <div className="menu-anchor" ref={anchor}>
     <button ref={bell} type="button" className="icon-button" onClick={() => setOpen(value => !value)}
-      aria-label="اعلان‌ها" aria-expanded={open} aria-controls="notification-center">
+      aria-label={unread ? 'اعلان‌ها، اعلان خوانده‌نشده دارید' : 'اعلان‌ها'} aria-expanded={open} aria-controls="notification-center">
       <Bell size={20} />
-      {unread.length > 0 && <span className="notification-dot" aria-label="اعلان خوانده‌نشده" />}
+      {unread && <span className="notification-dot" aria-hidden="true" />}
     </button>
     {open && <section className="popover popover--notifications" id="notification-center" aria-label="مرکز اعلان‌ها" dir="rtl">
       <header className="notification-center__heading">
@@ -84,10 +85,10 @@ export function NotificationCenter({ userId }: { userId: string }) {
       {error && <p role="alert">دریافت اعلان‌ها ناموفق بود. <button type="button" onClick={refetch}>تلاش دوباره</button></p>}
       {saveError && <p role="alert">{saveError}</p>}
       {loading && !data && <p>در حال دریافت…</p>}
-      {data?.length === 0 && <p>اعلانی ندارید.</p>}
-      {unread.length > 0 && <button type="button" className="notification-center__read" disabled={saving}
-        onClick={() => void read(unread.map(item => item.id))}>خواندن همه</button>}
-      {data?.map(item => <article className="notification-item" key={item.id}>
+      {items?.length === 0 && <p>اعلانی ندارید.</p>}
+      {unread && <button type="button" className="notification-center__read" disabled={saving}
+        onClick={() => void read()}>خواندن همه</button>}
+      {items?.map(item => <article className="notification-item" key={item.id}>
         <strong>{item.title}</strong>
         {item.body && <p>{item.body}</p>}
         <footer>

@@ -83,6 +83,21 @@ const snapshot = (offers: PublicHetznerOffer[] = [plan]) => ({ iran: null, hetzn
   status: 'available' as const, checkedAt: new Date().toISOString(), validUntil: new Date(Date.now() + 60_000).toISOString(), catalogUpdatedAt: null, fxUpdatedAt: null,
 } })
 
+it('renders provider sales cards only while the public sales switch allows them', async () => {
+  let active = ['hetzner', 'leaseweb']
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => Response.json({
+    data: url.endsWith('/public/sale-providers') ? active : snapshot(),
+  })))
+  render(<MemoryRouter><AuthProvider><LandingPage /></AuthProvider></MemoryRouter>)
+  expect(screen.queryByRole('link', { name: /بررسی موجودی لیزوب/ })).toBeNull()
+  expect(await screen.findByRole('link', { name: /بررسی موجودی لیزوب/ })).toBeTruthy()
+  active = ['hetzner']
+  await act(async () => { fireEvent.focus(window) })
+  expect(screen.queryByRole('link', { name: /بررسی موجودی لیزوب/ })).toBeNull()
+  expect(screen.queryByText('Leaseweb')).toBeNull()
+  expect(screen.getByRole('link', { name: /مشاهدهٔ پلن‌های هتزنر/ })).toBeTruthy()
+})
+
 it('preserves a valid SSR snapshot on null/malformed responses and immediately removes withdrawn inventory', async () => {
   const next = vi.fn().mockResolvedValueOnce(Response.json({ data: { ...snapshot(), hetzner: null } }))
     .mockResolvedValueOnce(Response.json({ data: { ...snapshot(), hetzner: [{ ...plan, hourly: 'fake' }] } }))

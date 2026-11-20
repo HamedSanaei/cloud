@@ -10,6 +10,7 @@ import { Input, Select, Toggle } from '../components/ui/FormControls'
 import { Modal } from '../components/ui/Modal'
 import { formatToman } from '../lib/format'
 import { iranResources, iranRateMaximum, type IranResource, type IranTariffs } from '../../backend/src/contracts/home-tariffs'
+import { isCreationCoverageDays, maxCreationCoverageDays } from '../../backend/src/contracts/creation-funding'
 import './system-settings.css'
 
 const base = '/admin/settings'
@@ -268,6 +269,40 @@ function LinkOrderRefund() {
     {notice && <p role="status">{notice}</p>}
   </Card>
 }
+function CreationFundingSettings() {
+  const query = useApiQuery(() => get<{ minimumCoverageDays: number }>('/creation-funding'))
+  const [input, setInput] = useState<string>()
+  const [saving, setSaving] = useState(false)
+  const [notice, setNotice] = useState<{ text: string; error?: boolean }>()
+  const saved = query.data?.minimumCoverageDays
+  const value = input ?? (saved === undefined ? '' : String(saved))
+  const days = Number(value)
+  return <Card>
+    <h2>سیاست پوشش کیف پول</h2>
+    <p>این تنظیم شرط موجودی ایجاد سرور و پوشش تعهدات کیف پول را تعیین می‌کند. پیش‌پرداخت ماهانه و برداشت دوره‌ای طبق دورهٔ پرداخت باقی می‌مانند.</p>
+    {query.error && <p role="alert">{query.error} <Button variant="secondary" onClick={query.refetch}>تلاش دوباره</Button></p>}
+    <form className="system-search" onSubmit={async event => {
+      event.preventDefault()
+      if (!isCreationCoverageDays(days) || days === saved || saving || query.loading || query.error) return
+      setSaving(true); setNotice(undefined)
+      try {
+        await post('/creation-funding', { minimumCoverageDays: days })
+        setNotice({ text: 'سیاست پوشش کیف پول ذخیره شد.' })
+        query.refetch()
+      } catch (error) {
+        setNotice({ text: errorText(error), error: true })
+      } finally {
+        setSaving(false)
+      }
+    }}>
+      <Input label="حداقل پوشش کیف پول برای ایجاد سرور (روز)" type="number" min={1} max={maxCreationCoverageDays} step={1}
+        value={value} required disabled={saving || query.loading || !!query.error} onChange={event => { setInput(event.target.value); setNotice(undefined) }} />
+      <Button type="submit" disabled={saving || query.loading || !!query.error || !isCreationCoverageDays(days) || days === saved}>ذخیره سیاست</Button>
+    </form>
+    {notice && <p role={notice.error ? 'alert' : 'status'}>{notice.text}</p>}
+  </Card>
+}
+
 export function SystemFinance() {
   const [search, setSearch] = useState(''), [results, setResults] = useState<FinancialUser[]>([]), [user, setUser] = useState<FinancialUser | null>(null), [direction, setDirection] = useState('credit'), [amount, setAmount] = useState(''), [reason, setReason] = useState(''), [reference, setReference] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false), [page, setPage] = useState(1)
   const key = useRef(crypto.randomUUID()), sensitive = useSensitive()
@@ -275,7 +310,7 @@ export function SystemFinance() {
   const history = useApiQuery(() => get<Page<Adjustment>>('/finance/adjustments?' + new URLSearchParams({ page: String(page), ...(walletId ? { walletId } : {}) })), [page, walletId])
   const wallet = user?.wallets[0], value = Number(amount), after = wallet ? wallet.balanceRial + (direction === 'credit' ? 1 : -1) * value : 0
   const changed = () => { key.current = crypto.randomUUID() }
-  return <div className="page-stack"><MarketFxStatus /><Card><h2>یافتن دقیق حساب</h2><form className="system-search" onSubmit={async e => { e.preventDefault(); setBusy(true); setNotice(''); setUser(null); setResults([]); try { const found = await get<FinancialUser[]>('/finance/users?' + new URLSearchParams({ search })); setResults(found); if (!found.length) setNotice('حسابی پیدا نشد.') } catch (e) { setNotice(errorText(e)) } finally { setBusy(false) } }}>
+  return <div className="page-stack"><CreationFundingSettings /><MarketFxStatus /><Card><h2>یافتن دقیق حساب</h2><form className="system-search" onSubmit={async e => { e.preventDefault(); setBusy(true); setNotice(''); setUser(null); setResults([]); try { const found = await get<FinancialUser[]>('/finance/users?' + new URLSearchParams({ search })); setResults(found); if (!found.length) setNotice('حسابی پیدا نشد.') } catch (e) { setNotice(errorText(e)) } finally { setBusy(false) } }}>
     <Input label="شمارهٔ موبایل یا ایمیل کامل" required value={search} onChange={e => setSearch(e.target.value)} /><Button type="submit" disabled={busy}>جست‌وجوی حساب</Button></form>
     {results.map(item => <button type="button" className={'system-user ' + (user?.id === item.id ? 'is-selected' : '')} aria-pressed={user?.id === item.id} key={item.id} onClick={() => { setUser(item); setPage(1); changed() }}><strong>{item.name || 'بدون نام'} · {label(item.status)}</strong><span dir="ltr">{item.email} · {item.mobile}</span><small dir="ltr">{item.id}</small></button>)}
   </Card>{user ? <Card><h2>تعدیل کیف پول حساب</h2><p>{user.name} · <bdi>{user.email}</bdi></p><p>همهٔ مبالغ این فرم دقیقاً به ریال هستند. تعدیل بزرگ نیاز به بررسی درخواست قدیمی دارد؛ برداشت نباید پوشش تعهدات فعال را کم کند.</p>

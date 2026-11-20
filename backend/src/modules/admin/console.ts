@@ -19,7 +19,7 @@ import { NotFoundError, ConflictError } from '../../lib/errors.js'
 import { rialToToman } from '../../lib/money.js'
 import { isSiteAuthority } from '../integration/authority.js'
 import { writeAudit } from '../audit/service.js'
-import { listProviders } from '../providers/registry.js'
+import { providerOrderingConfigured } from '../catalog/policy.js'
 import { findBlockingManagementOperation, isOrphanedPowerOperation, managementDto } from '../servers/management.js'
 import { inspectLegacyPowerOperation, resolveLegacyPowerOperation } from '../servers/power-reconciliation.js'
 import { isErasedAccount, manageUserData, userDataActions } from './user-data.js'
@@ -112,12 +112,11 @@ export const registerAdminConsoleRoutes: FastifyPluginAsync<{ ctx: AppContext }>
   app.get('/providers', async () => {
     const rows = await ctx.db.query.providers.findMany()
     const config = getConfig()
-    const registered = new Set(listProviders().map(p => p.id))
     return { data: (['hetzner', 'leaseweb'] as const).map(id => {
       const settings = config.PROVIDERS[id]
       const row = rows.find(p => p.id === id)
       return { id, name: settings.displayName, enabled: row?.enabled ?? false,
-        configured: settings.enabled && settings.orderingEnabled && registered.has(id) && row?.mode === 'live' }
+        configured: providerOrderingConfigured(id) && row?.mode === 'live' }
     }) }
   })
 

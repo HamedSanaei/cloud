@@ -1,32 +1,40 @@
 # Server checkout and datacenter sales
 
 `/admin/datacenters` controls retail availability of Hetzner and Leaseweb using
-the existing `providers.enabled` column. Only an authenticated, active website
-admin may change it. Changes are transactional, idempotent and recorded as
+the existing `providers.enabled` column. Only an active superadmin may change
+it. Changes are transactional, idempotent and recorded as
 `provider.sales_changed` with the provider ID and before/after flags in audit
 metadata. Catalog synchronization preserves this choice.
 
-Disabling sales hides the datacenter from the public/user storefront and blocks
-new quotes, stale-quote checkout and deferred order payments. An active admin
-can still purchase. Provider registration, provisioning capability, credentials,
+Disabling sales hides the datacenter from the public landing and customer
+storefront, including when an administrator opens the customer wizard. The wizard
+revalidates restored selections, and the API rejects stale customer checkout.
+The authenticated admin catalog preview uses `?adminPreview=true`. Existing
+operator tools can still buy where the provider's runtime ordering policy permits.
+Provider registration, provisioning capability, credentials,
 runtime ordering switches, product approval/availability and catalog freshness
 remain mandatory. Existing servers and their renewals are unaffected.
 
-## Seven-day funding gate
+## Minimum wallet coverage for new servers
 
-The payment wallet must cover the new server for at least seven days:
+In site mode, **Super Admin → Settings → Finance** saves the creation coverage
+policy in `billing.minimum_creation_coverage_days` (1–30 whole days, default 7).
+The effective value is read from PostgreSQL, returned by the storefront, and
+audited with the previous and new values. The payment wallet must cover:
 
-- Hourly: 168 times the frozen per-hour quote total.
-- Daily: 7 times the frozen per-day quote total.
+- Hourly: configured days × 24 × the frozen per-hour quote total.
+- Daily: configured days × the frozen per-day quote total for historical
+  daily billing commitments.
 - Monthly: the full prepaid monthly quote total.
 
 Existing paid/queued/provisioning/ambiguous orders and active server renewals
-falling within the next seven days are included for the **same payment wallet**.
+falling within the configured horizon are included for the **same payment wallet**.
+For already-paid orders, only uncharged periods count toward the commitment.
 The check runs under that wallet's row lock, before any order/invoice/debit or
 provisioning enqueue. Failed checkout rolls back, leaving no purchase or charge.
 Deferred payments use the same gate and persist the selected payment wallet.
-No additional seven-day charge or ledger hold is created; normal period billing
-continues unchanged. Admin purchases follow the same funding requirement.
+This check creates no extra charge or ledger hold. Normal period billing continues,
+and admin purchases use the same funding requirement.
 
 ## Issue #3
 
@@ -41,7 +49,8 @@ the queue job ID is derived from the order and provider-operation claims still
 guard the actual provider call.
 
 Insufficient funds is a distinct `insufficient_funds` response with integer-rial
-balance, order total, required balance, shortfall and seven-day coverage fields.
+balance, order total, required balance, shortfall and effective coverage days.
+`funding_policy_changed` asks the user to review fresh terms before retrying.
 Checkout renders Persian guidance, not arbitrary validation/provider messages.
 Plans are sorted by the selected billing period's final retail price. Location
 cards show full names and local flag assets for Hetzner countries.

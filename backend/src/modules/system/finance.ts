@@ -5,7 +5,7 @@ import { adminAdjustments, wallets } from '../../db/schema.js'
 import type { SessionUser } from '../auth/service.js'
 import { normalizeIranMobile } from '../auth/delivery.js'
 import { creditWallet, debitWallet, getWallet, listWallets } from '../wallets/service.js'
-import { walletCommitments } from '../billing/creation-funding.js'
+import { creationCoverageDays, walletCommitments } from '../billing/creation-funding.js'
 import { writeAudit } from '../audit/service.js'
 import { consumeAuthorization, canonical, systemAdmin } from './security.js'
 import { ConflictError, ForbiddenError, InsufficientFundsError, NotFoundError, ValidationError } from '../../lib/errors.js'
@@ -29,7 +29,12 @@ async function execute(tx: DbOrTx, adjustment: typeof adminAdjustments.$inferSel
   if (!wallet || wallet.userId !== adjustment.userId) throw new NotFoundError('کیف پول متعلق به کاربر انتخابی نیست.')
   const after = wallet.balanceRial + (adjustment.direction === 'credit' ? 1 : -1) * adjustment.amountRial
   if (!Number.isSafeInteger(after)) throw new ValidationError('موجودی خارج از محدودهٔ مجاز است.')
-  if (adjustment.direction === 'debit' && after < await walletCommitments(tx, { userId: adjustment.userId, walletId: wallet.id })) throw new InsufficientFundsError('برداشت، موجودی قابل برداشت یا پوشش تعهدات هفت روز آینده را نقض می‌کند.')
+  if (adjustment.direction === 'debit') {
+    const days = await creationCoverageDays(tx, true)
+    if (after < await walletCommitments(tx, { userId: adjustment.userId, walletId: wallet.id }, days)) {
+      throw new InsufficientFundsError(`برداشت، موجودی قابل برداشت یا پوشش تعهدات ${days.toLocaleString('fa-IR')} روز آینده را نقض می‌کند.`)
+    }
+  }
   const input = { type: adjustment.direction === 'credit' ? 'manual_credit' as const : 'manual_debit' as const,
     referenceType: 'admin_adjustment', referenceId: adjustment.id, idempotencyKey: `adjustment:${adjustment.id}`,
     description: adjustment.reason, metadata: { adminId: adjustment.actorId, approvedBy: actorId, reference: adjustment.reference } }

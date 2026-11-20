@@ -19,6 +19,7 @@ import { Stepper } from '../components/ui/Stepper'
 import { useToast } from '../components/ui/Toast'
 import { ApiError, isApiConfigured } from '../lib/apiClient'
 import { formatTrafficTb } from '../../backend/src/contracts/home-tariffs'
+import { isCreationCoverageDays, minimumCreationPeriods } from '../../backend/src/contracts/creation-funding'
 import { HetznerTraffic } from '../components/servers/HetznerTraffic'
 import { checkDomainAvailability, createServer, findCheckoutOrder, getOfferImages, getStorefrontCatalog, listWallets, registerDomain, serverCreateIntent } from '../lib/endpoints'
 import { OperationEmail } from '../components/EmailConfirmation'
@@ -29,7 +30,7 @@ import { useApiQuery } from '../hooks/useApiQuery'
 import type { BillingPeriod, CreateServerPayload, DomainAvailability } from '../lib/types'
 import { useAuth } from '../auth/AuthContext'
 import { LocationCards } from '../components/ui/LocationCards'
-import { checkoutFailure, clearCheckoutDraft, minimumCreationBalance, readCheckoutDraft, saveCheckoutDraft } from '../lib/serverCheckout'
+import { checkoutFailure, clearCheckoutDraft, readCheckoutDraft, saveCheckoutDraft } from '../lib/serverCheckout'
 
 const serverSteps = ['دیتاسنتر و موقعیت', 'دوره پرداخت', 'نوع و منابع سرور', 'سیستم عامل', 'کیف پول', 'تایید نهایی']
 const periodLabels: Record<BillingPeriod, string> = { hourly: 'ساعتی', monthly: 'ماهانه' }
@@ -88,6 +89,10 @@ export function CreateServerPage() {
     return () => window.clearTimeout(timer)
   }, [catalogExpiry, catalog.error, catalog.loading, refreshCatalog])
   useEffect(() => {
+    window.addEventListener('focus', refreshCatalog)
+    return () => window.removeEventListener('focus', refreshCatalog)
+  }, [refreshCatalog])
+  useEffect(() => {
     if (pendingKey || !linkedOffer || appliedLink.current || catalog.loading || !catalog.data || catalog.error) return
     appliedLink.current = true
     const selected = catalog.data.offers.find(item => item.id === linkedOffer && item.provider === 'hetzner')
@@ -133,24 +138,39 @@ export function CreateServerPage() {
   const periodValid = billingPeriod !== '' && periods.includes(billingPeriod)
   const offerValid = !!offer && !!price
   const walletValid = !wallets.loading && !wallets.error && !!wallet
-  const requiredBalanceRial = price && billingPeriod ? minimumCreationBalance(price.totalRial, billingPeriod) : 0
-  const walletBalanceRial = wallet?.balanceRial ?? (wallet?.balance ?? 0) * 10
-  const shortfall = wallet && price && walletBalanceRial < requiredBalanceRial ? {
-    balanceRial: walletBalanceRial, requiredBalanceRial, orderTotalRial: price.totalRial, shortfallRial: requiredBalanceRial - walletBalanceRial,
-  } : submitError?.funding
+  const coverage = catalog.data?.minimumCoverageDays
+  const coverageDays = isCreationCoverageDays(coverage) ? coverage : null
   const monthly = billingPeriod === 'monthly'
-  const fundingLabel = monthly ? 'پیش‌پرداخت دورهٔ ماهانه' : 'حداقل اعتبار برای ۷ روز'
+  const periodsToCover = shared ? 1 : coverageDays !== null ? minimumCreationPeriods(billingPeriod.toUpperCase(), coverageDays) : NaN
+  const minimum = price ? price.totalRial * periodsToCover : NaN
+  const requiredBalanceRial = Number.isSafeInteger(minimum) && minimum > 0 ? minimum : null
+  const walletBalanceRial = wallet?.balanceRial ?? (wallet?.balance ?? 0) * 10
+  const shortfall = submitError?.funding ?? (wallet && price && requiredBalanceRial !== null && walletBalanceRial < requiredBalanceRial ? {
+    balanceRial: walletBalanceRial, requiredBalanceRial, orderTotalRial: price.totalRial, shortfallRial: requiredBalanceRial - walletBalanceRial,
+  } : undefined)
+  const coverageLabel = coverageDays === null ? '' : `${formatFaNumber(coverageDays)} روز`
+  const fundingLabel = monthly ? 'پیش‌پرداخت دورهٔ ماهانه' : shared ? 'مبلغ قابل پرداخت' : `حداقل اعتبار برای ${coverageLabel}`
   const nameValid = shared || /^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]$/.test(name.trim())
-  const allValid = catalogReady && locationValid && periodValid && offerValid && !!selectedOs && walletValid && nameValid && !shortfall
+  const funded = walletValid && requiredBalanceRial !== null && !shortfall
+  const allValid = catalogReady && locationValid && periodValid && offerValid && !!selectedOs && funded && nameValid
   const canContinue = catalogReady && [
     locationValid,
     locationValid && periodValid,
     locationValid && periodValid && offerValid,
     locationValid && periodValid && offerValid && !!selectedOs,
-    locationValid && periodValid && offerValid && !!selectedOs && walletValid,
+    locationValid && periodValid && offerValid && !!selectedOs && funded,
     allValid,
   ][step]
-  const resetOffer = () => { setOfferId(''); setOs(''); setSubmitError(null); purchaseKey.current = crypto.randomUUID() }
+  const resetOffer = useCallback(() => { setOfferId(''); setOs(''); setSubmitError(null); purchaseKey.current = crypto.randomUUID() }, [])
+  const [selectionUnavailable, setSelectionUnavailable] = useState(false)
+  const invalidateProvider = useCallback(() => {
+    clearCheckoutDraft(userId)
+    setSelectionUnavailable(true); setEmailOrder(null); setStep(0); setProviderId(''); setLocation(''); setBillingPeriod(''); resetOffer()
+  }, [userId, resetOffer])
+  useEffect(() => {
+    if (pendingKey || submitting || !catalogReady || !providerId || provider || catalog.data?.saleProviderIds?.includes(providerId)) return
+    invalidateProvider()
+  }, [pendingKey, submitting, catalogReady, providerId, provider, catalog.data?.saleProviderIds, invalidateProvider])
   const preserveOrder = (submitted = false) => saveCheckoutDraft(userId, { step, providerId, location, offerId, os, name, billingPeriod, purchaseKey: purchaseKey.current, ...(submitted ? { submitted } : {}) })
   const refreshWallets = wallets.refetch
   useEffect(() => {
@@ -167,7 +187,8 @@ export function CreateServerPage() {
     if (step < serverSteps.length - 1) { setStep((value) => value + 1); return }
     if (!allValid || !billingPeriod || !offer || !selectedOs || !wallet || !price) return
     setEmailOrder({ name: name.trim(), offerId: offer.id, os: selectedOs.id, billingPeriod, pricing: offer.canonicalPricing,
-      expectedTotalRial: price.totalRial, idempotencyKey: purchaseKey.current })
+      expectedTotalRial: price.totalRial, ...(coverageDays === null || monthly ? {} : { expectedCoverageDays: coverageDays }),
+      idempotencyKey: purchaseKey.current })
   }
   const submitOrder = async (proof: EmailProof) => {
     if (submitLock.current || !emailOrder) return
@@ -190,7 +211,7 @@ export function CreateServerPage() {
       const code = error instanceof ApiError ? (error.body as { error?: string } | null)?.error : undefined
       const fxUnavailable = code === 'eur_rate_unavailable' || code === 'usdt_rate_unavailable' || code === 'fx_rate_stale'
       if (!emailOrder.pricing) {
-        if (!fxUnavailable && (!(error instanceof ApiError) || error.status === 0 || error.status >= 500)) {
+        if (!fxUnavailable && code !== 'funding_policy_unavailable' && (!(error instanceof ApiError) || error.status === 0 || error.status >= 500)) {
           setEmailOrder(null)
           setPendingKey(emailOrder.idempotencyKey)
           return
@@ -203,19 +224,28 @@ export function CreateServerPage() {
         refreshCatalog()
         return
       }
+      if (code === 'provider_sales_unavailable') {
+        invalidateProvider()
+        refreshCatalog()
+        return
+      }
       const problem = checkoutFailure(error)
-      const changed = error instanceof ApiError && (error.body as { error?: string } | null)?.error === 'server_price_changed'
+      const changed = code === 'server_price_changed' || code === 'funding_policy_changed' || code === 'funding_policy_unavailable'
       if (!changed && !problem.funding) throw error
       setSubmitError(problem)
       setEmailOrder(null)
-      if (changed) catalog.refetch()
+      if (changed || problem.funding) catalog.refetch()
+      if (changed) wallets.refetch()
     } finally {
       setSubmitting(false)
       submitLock.current = false
     }
   }
   const locationLabel = selectedLocation ? [selectedLocation.city, selectedLocation.country, selectedLocation.code].filter(Boolean).join(' · ') : 'انتخاب نشده'
-  const catalogState = catalog.loading ? 'در حال به‌روزرسانی نرخ و دریافت قیمت‌های معتبر…' : catalog.error || (!datacenters.length ? 'در حال حاضر دیتاسنتر فعالی برای سفارش موجود نیست.' : '')
+  const catalogState = catalog.loading ? 'در حال به‌روزرسانی نرخ و دریافت قیمت‌های معتبر…' :
+    catalog.error ? (step === 0 ? catalog.error : 'کاتالوگ در دسترس نیست. برای ادامه دوباره تلاش کنید.') :
+      !datacenters.length ? 'در حال حاضر دیتاسنتر فعالی برای سفارش موجود نیست.' : ''
+  const pricingWarnings = step === 0 ? (catalog.data?.pricingUnavailable ?? []).filter(item => !providerId || item.id === providerId) : []
 
   if (pendingKey) return <div className="page-stack wizard-page" dir="rtl">
     <PageHeader title="پیگیری درخواست ساخت سرور" icon={<Server />} />
@@ -236,6 +266,7 @@ export function CreateServerPage() {
         <p>{offer?.name} · <bdi>{selectedOs?.label || emailOrder.os}</bdi></p>
       </OperationEmail>}
       {linkUnavailable && <p className="info-box" role="status">پلن لینک‌شده دیگر برای این دوره در دسترس نیست. از فهرست فعلی انتخاب کنید.</p>}
+      {selectionUnavailable && <p className="info-box" role="status">دیتاسنتر انتخاب‌شده دیگر برای سفارش در دسترس نیست. دیتاسنتر دیگری انتخاب کنید.</p>}
       {changedLocation && <p className="info-box" role="status">موقعیت درخواستی <bdi>{changedLocation.requested || 'نامشخص'}</bdi> است. این پلن اکنون در <bdi>{changedLocation.current}</bdi> عرضه می‌شود. موقعیت را از فهرست انتخاب کنید.</p>}
       <PageHeader title="ایجاد سرور جدید" subtitle="دیتاسنتر، دوره پرداخت و منابع را از کاتالوگ زنده انتخاب کنید." icon={<Server />}
         actions={<LinkButton to="/servers" variant="secondary" icon={<ArrowLeft size={18} />}>بازگشت</LinkButton>} />
@@ -254,15 +285,15 @@ export function CreateServerPage() {
               {!catalog.loading ? <Button variant="secondary" onClick={refreshCatalog}>تلاش دوباره</Button> : null}
             </div>
           ) : <>
-            {!!catalog.data?.pricingUnavailable?.length && <div className="info-box" role="status">
-              قیمت برخی پلن‌های {catalog.data.pricingUnavailable.map(item => item.name).join('، ')} موقتاً در دسترس نیست.
+            {!!pricingWarnings.length && <div className="info-box" role="status">
+              قیمت برخی پلن‌های {pricingWarnings.map(item => item.name).join('، ')} موقتاً در دسترس نیست.
               <Button variant="secondary" onClick={refreshCatalog}>بررسی دوبارهٔ قیمت‌ها</Button>
             </div>}
             {step === 0 ? <div className="storefront-stack">
               <div className="choice-grid storefront-grid">
                 {datacenters.map((item) => (
                   <button type="button" aria-pressed={providerId === item.id} className={`choice-card provider-card ${providerId === item.id ? 'choice-card--selected' : ''}`} key={item.id}
-                    onClick={() => { if (providerId !== item.id) { setProviderId(item.id); setLocation(''); setBillingPeriod(''); resetOffer() } }}>
+                    onClick={() => { if (providerId !== item.id) { setSelectionUnavailable(false); setProviderId(item.id); setLocation(''); setBillingPeriod(''); resetOffer() } }}>
                     <span className="provider-card__logo"><img src={item.logo} alt={item.name} /></span>
                     <strong>{item.name}</strong><span>{formatFaNumber(item.locations.length)} موقعیت قابل سفارش</span>
                   </button>
@@ -311,10 +342,12 @@ export function CreateServerPage() {
               {wallets.loading ? <div className="storefront-state" role="status">در حال دریافت کیف پول…</div> : wallet && !wallets.error
                 ? <ReviewRow label="موجودی کیف پول" value={`${formatFaNumber(wallet.balance)} تومان`} />
                 : <div className="storefront-state" role="alert"><p>{wallets.error || 'کیف پول در دسترس نیست.'}</p><Button variant="secondary" onClick={wallets.refetch}>تلاش دوباره</Button></div>}
-              <div className="info-box"><WalletCards size={20} /><span>{price ? monthly
+              <div className="info-box"><WalletCards size={20} /><span>{price && requiredBalanceRial !== null ? monthly
                 ? `پیش‌پرداخت دورهٔ ماهانه: ${priceLabel(requiredBalanceRial)}.`
-                : `مبلغ ${priceLabel(price.totalRial)} برای دورهٔ ساعتی پرداخت می‌شود. حداقل اعتبار این سرور برای ۷ روز: ${priceLabel(requiredBalanceRial)}. تعهد سرورهای دیگر هنگام ثبت سفارش بررسی می‌شود؛ اعتبار اضافه برداشت نمی‌شود.`
-                : 'ابتدا محصول و دوره پرداخت معتبر انتخاب کنید.'}</span></div>
+                : shared ? `مبلغ دورهٔ ساعتی در سرویس مشترک: ${priceLabel(price.totalRial)}.`
+                  : `مبلغ ${priceLabel(price.totalRial)} برای دورهٔ ساعتی پرداخت می‌شود. حداقل اعتبار این سرور برای ${coverageLabel}: ${priceLabel(requiredBalanceRial)}. تعهد سرورهای دیگر هنگام ثبت سفارش بررسی می‌شود؛ اعتبار اضافه برداشت نمی‌شود.`
+                : 'حداقل موجودی فعلاً مشخص نیست. برای ادامه کاتالوگ را به‌روزرسانی کنید.'}</span>
+                {price && requiredBalanceRial === null && <Button variant="secondary" onClick={refreshCatalog}>بررسی دوبارهٔ کاتالوگ</Button>}</div>
             </div> : null}
             {step === 5 ? <div className="review-grid">
               {billingPeriod && <p className="info-box billing-period-explanation">{periodExplanation[billingPeriod]}</p>}
@@ -332,14 +365,14 @@ export function CreateServerPage() {
                 <ReviewRow label="سیستم عامل" value={selectedOs?.label || selectedOs?.id || 'انتخاب نشده'} />
                 <ReviewRow label="کیف پول" value={wallet?.name ?? 'انتخاب نشده'} />
                 <ReviewRow label="مبلغ پرداخت" value={price ? priceLabel(price.totalRial) : 'انتخاب نشده'} />
-                <ReviewRow label={fundingLabel} value={price ? priceLabel(requiredBalanceRial) : 'انتخاب نشده'} />
+                <ReviewRow label={fundingLabel} value={requiredBalanceRial === null ? 'در دسترس نیست' : priceLabel(requiredBalanceRial)} />
               </div>
               {!locationValid || !periodValid || !offerValid || !selectedOs || !walletValid ? <div className="storefront-state" role="alert"><p>انتخاب‌های سفارش معتبر نیست؛ کاتالوگ را دوباره دریافت و مراحل را تکمیل کنید.</p><Button variant="secondary" onClick={reloadCatalog}>انتخاب دوباره</Button></div> : null}
               {submitError && !shortfall ? <div className="storefront-state" role="alert"><p>{submitError.message}</p><LinkButton to="/servers" variant="secondary">بررسی سرورهای من</LinkButton><Button variant="secondary" onClick={() => setStep(0)}>بررسی انتخاب‌های سفارش</Button></div> : null}
             </div> : null}
             {step >= 4 && shortfall ? <div className="checkout-funding" role="alert">
               <strong>موجودی کیف پول شما کافی نیست.</strong>
-              <p>{monthly ? 'برای ساخت سرور، پیش‌پرداخت دورهٔ ماهانه لازم است.' : 'برای ساخت سرور، اعتبار حداقل یک هفتهٔ آینده لازم است.'}</p>
+              <p>{monthly ? 'برای ساخت سرور، پیش‌پرداخت دورهٔ ماهانه لازم است.' : shared ? 'اعتبار کیف پول را برای ثبت سفارش افزایش دهید.' : `برای ساخت سرور، اعتبار ${coverageLabel} آینده لازم است.`}</p>
               <div className="review-list"><ReviewRow label="موجودی کیف پول" value={priceLabel(shortfall.balanceRial)} /><ReviewRow label="مبلغ پرداخت سفارش" value={priceLabel(shortfall.orderTotalRial)} /><ReviewRow label="حداقل موجودی موردنیاز" value={priceLabel(shortfall.requiredBalanceRial)} /><ReviewRow label="مبلغ افزایش موجودی" value={priceLabel(shortfall.shortfallRial)} /></div>
               <LinkButton to="/wallet?returnTo=server-checkout" onClick={() => preserveOrder()}>افزایش موجودی کیف پول</LinkButton>
               <Button variant="secondary" onClick={() => { setSubmitError(null); wallets.refetch() }}>بررسی دوباره موجودی</Button>

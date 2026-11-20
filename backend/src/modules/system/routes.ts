@@ -27,6 +27,8 @@ import { approveRestore, backupFile, getBackupJob, importBackup, listBackupJobs,
 import { maxPrimaryIpv4FeeRial, primaryIpv4Pricing, setPrimaryIpv4Fee } from '../servers/primary-ip-pricing.js'
 import { confirmPrimaryIpv4Rollback } from '../servers/primary-ip-operation.js'
 import { requireOutboundAdmin, outboundStatus, profileInput, routeInput, deleteInput, testInput, saveProfile, saveRoute, deleteProfile, testConnection } from '../outbound/settings.js'
+import { creationCoverageDays, setCreationCoverageDays } from '../billing/creation-funding.js'
+import { maxCreationCoverageDays } from '../../contracts/creation-funding.js'
 
 const idParam = z.object({ id: z.string().uuid() })
 const proofSchema = z.string().uuid()
@@ -153,6 +155,13 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     return { data: await testConnection(db, requireAdmin(request), input, proof) }
   })
   app.get('/gateway', async () => ({ data: await gatewayStatus(db) }))
+  app.get('/creation-funding', async () => ({ data: { minimumCoverageDays: await creationCoverageDays(db) } }))
+  app.post('/creation-funding', async request => {
+    const { minimumCoverageDays } = parse(z.object({
+      minimumCoverageDays: z.number().int().min(1).max(maxCreationCoverageDays),
+    }).strict(), request.body)
+    return { data: await setCreationCoverageDays(db, requireAdmin(request).id, minimumCoverageDays) }
+  })
   app.get('/iran-tariffs', async () => ({ data: await iranTariffSettings(db) }))
   app.post('/iran-tariffs', async request => {
     const actor = requireAdmin(request)

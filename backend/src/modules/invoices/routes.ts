@@ -3,17 +3,21 @@ import { z } from 'zod'
 import type { AppContext } from '../../app.js'
 import { parse } from '../../http/validate.js'
 import { requireUser } from '../../http/auth.js'
-import { getInvoice, listInvoices } from './service.js'
+import { customerInvoiceStatuses, getInvoice, listInvoices } from './service.js'
 import { invoiceToDto } from '../../lib/dto.js'
+import { historyPage, historyQuery } from '../../lib/list-search.js'
+
+const invoiceQuery = historyQuery.extend({ status: z.enum(customerInvoiceStatuses).default('all') })
 
 export const registerInvoiceRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
   const { db } = ctx
 
   app.get('/invoices', async (request) => {
     const user = requireUser(request)
-    const query = parse(z.object({ limit: z.coerce.number().int().positive().max(200).optional() }), request.query)
-    const rows = await listInvoices(db, user.id, { limit: query.limit ?? 50 })
-    return { data: rows.map(invoiceToDto) }
+    const query = parse(invoiceQuery, request.query)
+    const now = new Date()
+    const rows = await listInvoices(db, user.id, { ...query, limit: query.limit + 1, now })
+    return historyPage(rows.map(row => invoiceToDto(row, now)), query.limit, query.offset)
   })
 
   app.get('/invoices/:id', async (request) => {

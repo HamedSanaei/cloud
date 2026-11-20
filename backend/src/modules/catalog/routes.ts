@@ -5,12 +5,15 @@ import { eq } from 'drizzle-orm'
 import type { AppContext } from '../../app.js'
 import { parse } from '../../http/validate.js'
 import { requireUser } from '../../http/auth.js'
-import { getOffer, listCatalogProviders, listLocations, listOffers } from './service.js'
+import { getOffer, listLocations, listOffers } from './service.js'
 import { offerToDto } from '../../lib/dto.js'
 import { NotFoundError } from '../../lib/errors.js'
 import { getStorefront } from './storefront.js'
 import { getHomeTariffs } from './home-tariffs.js'
 import { renderHomeTariffs } from '../../contracts/home-tariffs.js'
+import { saleProviders } from './policy.js'
+import { creationCoverageDays } from '../billing/creation-funding.js'
+import { isSiteAuthority } from '../integration/authority.js'
 
 export const registerCatalogRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
   const { db } = ctx
@@ -25,16 +28,25 @@ export const registerCatalogRoutes: FastifyPluginAsync<{ ctx: AppContext }> = as
     reply.header('Cache-Control', 'no-store')
     return { data: await getHomeTariffs(db) }
   })
+  app.get('/public/sale-providers', async (_request, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    return { data: isSiteAuthority() ? (await saleProviders(db)).map(provider => provider.id) : [] }
+  })
 
   // Public catalog projection contains no credentials or provider account ids.
   app.get('/catalog/storefront', async (request, reply) => {
     // Admin sales visibility must never enter a shared/public cache.
     reply.header('Cache-Control', 'private, no-store').header('Vary', 'Cookie, Authorization')
-    return { data: await getStorefront(db, isActiveAdmin(request.user)) }
+    const { adminPreview } = parse(z.object({ adminPreview: z.enum(['true', 'false']).optional() }), request.query)
+    const [catalog, minimumCoverageDays] = await Promise.all([
+      getStorefront(db, adminPreview === 'true' && isActiveAdmin(request.user)), creationCoverageDays(db),
+    ])
+    return { data: { ...catalog, minimumCoverageDays } }
   })
 
-  app.get('/catalog/providers', async () => {
-    const rows = await listCatalogProviders(db)
+  app.get('/catalog/providers', async (_request, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const rows = await saleProviders(db)
     return {
       data: rows.map((p) => ({
         id: p.id,
@@ -48,15 +60,18 @@ export const registerCatalogRoutes: FastifyPluginAsync<{ ctx: AppContext }> = as
     }
   })
 
-  app.get('/catalog/locations', async (request) => {
+  app.get('/catalog/locations', async (request, reply) => {
     requireUser(request)
+    reply.header('Cache-Control', 'no-store')
     const query = parse(z.object({ provider: z.string().default('leaseweb') }), request.query)
+    if (!(await saleProviders(db)).some(provider => provider.id === query.provider)) return { data: [] }
     const rows = await listLocations(db, query.provider)
     return { data: rows.map((l) => ({ id: l.id, code: l.code, country: l.country, city: l.city })) }
   })
 
-  app.get('/catalog/vps', async (request) => {
+  app.get('/catalog/vps', async (request, reply) => {
     requireUser(request)
+    reply.header('Cache-Control', 'no-store')
     const query = parse(
       z.object({
         provider: z.string().optional(),
@@ -67,15 +82,16 @@ export const registerCatalogRoutes: FastifyPluginAsync<{ ctx: AppContext }> = as
         monthlyOnly: z.coerce.boolean().optional(),
         // true (default): only admin-approved offers; false: include catalog
         // rows that are not yet approved for retail sale (admin only).
-        enabledOnly: z.coerce.boolean().optional(),
+        enabledOnly: z.enum(['true', 'false']).optional(),
       }),
       request.query,
     )
+    if (!(await saleProviders(db)).some(provider => provider.id === (query.provider ?? 'leaseweb'))) return { data: [] }
     const rows = await listOffers(db, {
       provider: query.provider ?? 'leaseweb',
       location: query.location,
       monthlyOnly: query.monthlyOnly ?? (query.billingInterval === 'monthly'),
-      enabledOnly: query.enabledOnly,
+      enabledOnly: !(query.enabledOnly === 'false' && isActiveAdmin(request.user)),
     })
     if (query.provider === 'hetzner') {
       const ids = new Set(rows.map(row => row.id))
@@ -86,11 +102,13 @@ export const registerCatalogRoutes: FastifyPluginAsync<{ ctx: AppContext }> = as
     return { data: rows.map((r) => offerToDto(r, codeById.get(r.locationId ?? '') ?? undefined)) }
   })
 
-  app.get('/catalog/vps/:id', async (request) => {
+  app.get('/catalog/vps/:id', async (request, reply) => {
     requireUser(request)
+    reply.header('Cache-Control', 'no-store')
     const { id } = parse(z.object({ id: z.string().uuid() }), request.params)
     const offer = await getOffer(db, id)
-    if (!offer.available) throw new NotFoundError('محصول یافت نشد')
+    if (!offer.available || (!offer.enabled && !isActiveAdmin(request.user)) ||
+      !(await saleProviders(db)).some(provider => provider.id === offer.provider)) throw new NotFoundError('محصول یافت نشد')
     if (offer.provider === 'hetzner') {
       const retail = (await getStorefront(db, false, 'hetzner')).offers.find(row => row.id === id)
       if (!retail) throw new NotFoundError('محصول یافت نشد')
