@@ -1,8 +1,6 @@
 const FA_DIGITS = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹']
 
-export function toAsciiDigits(value: string) {
-  return value.replace(/[۰-۹٠-٩]/g, digit => String(digit.charCodeAt(0) & 15))
-}
+export { toAsciiDigits } from '../../backend/src/contracts/search-text'
 
 export function toFaDigits(value: string | number): string {
   return String(value).replace(/[0-9]/g, (digit) => FA_DIGITS[Number(digit)])

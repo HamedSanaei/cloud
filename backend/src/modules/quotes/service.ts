@@ -17,12 +17,13 @@ export interface CreateQuoteInput {
   operatingSystem?: string
   serviceLevel?: ProviderSlaOption
   billingPeriod?: RetailPeriod
+  retailOnly?: boolean
 }
 
 export async function createQuote(db: DbClient, input: CreateQuoteInput) {
   const offer = await getOffer(db, input.offerId)
   if (!offer.enabled || !offer.available) throw new ValidationError('این محصول فعلاً قابل سفارش نیست')
-  await assertProviderPurchaseAllowed(db, offer.provider, input.userId)
+  await assertProviderPurchaseAllowed(db, offer.provider, input.userId, input.retailOnly)
   const location = offer.locationId
     ? await db.query.providerLocations.findFirst({ where: (t) => eq(t.id, offer.locationId!) })
     : null

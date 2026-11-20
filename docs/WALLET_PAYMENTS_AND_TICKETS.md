@@ -95,6 +95,12 @@ is owner-only. `/api/admin/console/tickets` is admin-only and provides paginated
 support access with owner email, description and the saved server association;
 the admin UI links to the server when it still exists.
 
+Customer search and filters apply across the account before pagination. The
+conversation records which support replies the customer has opened. Migration
+`0018_ticket-read-state` adds that receipt. Historical replies have no receipt
+until the customer opens the conversation. A receipt acknowledges only the
+replies already loaded by the browser.
+
 `src/dropdown.css` applies shared light/dark surface, foreground, border,
 highlight, selected, disabled, focus and scrollbar colors globally to native
 selects/options. It inherits the app's explicit color-scheme, retains native RTL

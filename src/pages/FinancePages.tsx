@@ -12,6 +12,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Button, LinkButton } from '../components/ui/Button'
 import { Card, SectionHeading } from '../components/ui/Card'
 import { FilterPanel } from '../components/ui/FilterPanel'
+import { HistoryPagination } from '../components/ui/HistoryPagination'
 import { Select } from '../components/ui/FormControls'
 import { MetricCard } from '../components/ui/MetricCard'
 import { PageHeader } from '../components/ui/PageHeader'
@@ -19,8 +20,10 @@ import { EmptyState, LoadingState, QueryError } from '../components/ui/States'
 import { Badge, Table } from '../components/ui/Table'
 import { useApiQuery } from '../hooks/useApiQuery'
 import { ApiError } from '../lib/apiClient'
-import { getWalletSummary, listChargeRequests, listInvoices, listTransactions } from '../lib/endpoints'
-import { formatCount, formatFaDateTime, formatToman, toAsciiDigits } from '../lib/format'
+import { getWalletSummary, listFinancialDocuments, listTransactions } from '../lib/endpoints'
+import { formatCount, formatFaDateTime, formatToman } from '../lib/format'
+import { normalizeSearchText } from '../../backend/src/contracts/search-text'
+import { useCustomerHistory } from '../hooks/useCustomerHistory'
 import type { Invoice } from '../lib/types'
 import { WalletRecharge } from '../components/ui/WalletRecharge'
 import { WalletPaymentStatus } from '../components/ui/WalletPaymentStatus'
@@ -118,7 +121,7 @@ interface FinancialListProps {
   type: 'invoice' | 'charge'
 }
 
-const invoiceStatusLabels: Record<string, string> = { pending: 'در انتظار پرداخت', paid: 'پرداخت شده', cancelled: 'لغو شده', refunded: 'مسترد شده' }
+const invoiceStatusLabels: Record<string, string> = { pending: 'در انتظار پرداخت', overdue: 'سررسیدگذشته', paid: 'پرداخت شده', cancelled: 'لغو شده', refunded: 'مسترد شده' }
 const invoicePeriods: Record<string, string> = { HOURLY: 'ساعتی', DAILY: 'روزانه', MONTHLY: 'ماهانه' }
 const invoiceDescription = (text = '') => text.replace(/^(تمدید .*?[-—–]\s*)(HOURLY|DAILY|MONTHLY)\s*$/, (_match, prefix, period) => prefix + invoicePeriods[period])
 const chargeStatusLabels: Record<string, string> = {
@@ -132,48 +135,50 @@ function FinancialList({ type }: FinancialListProps) {
   const isInvoice = type === 'invoice'
   const Icon = isInvoice ? FileText : CreditCard
 
-  const active = useApiQuery(async () => {
-    try { return { items: isInvoice ? await listInvoices() : await listChargeRequests(), unavailable: '' } }
+  const active = useCustomerHistory(async filters => {
+    try { return { ...await listFinancialDocuments(type, filters), unavailable: '' } }
     catch (error) {
-      if (isInvoice && error instanceof ApiError && error.status === 501) return { items: [], unavailable: error.message }
+      if (isInvoice && error instanceof ApiError && error.status === 501) return { items: [], pagination: undefined, unavailable: error.message }
       throw error
     }
-  }, [type])
+  }, { search: query, status }, type)
+  const { search, loading, resetPage } = active
 
   const rows = useMemo(() => {
     const items = (active.data?.items ?? []) as Array<Partial<Pick<Invoice, 'description' | 'traffic' | 'dueAt' | 'paidAt'>> & {
       number: string; invoiceNumber?: string; paymentReference?: string; status: string; amount: number; formattedAmount?: string; date: string; id: string
     }>
-    const normalized = toAsciiDigits(query.trim())
+    if (active.data?.pagination) return items
+    // Older platform APIs return a single page. Preserve client-side filtering for those responses.
     return items.filter((item) => {
-      const haystack = toAsciiDigits(`${item.number} ${item.description ?? ''} ${item.invoiceNumber ?? ''} ${item.paymentReference ?? ''} ${isInvoice ? invoiceDescription(item.description) : ''}`)
-      const matchesQuery = !normalized || haystack.includes(normalized)
+      const haystack = normalizeSearchText(`${item.number} ${item.description ?? ''} ${item.invoiceNumber ?? ''} ${item.paymentReference ?? ''} ${isInvoice ? invoiceDescription(item.description) : ''}`)
+      const matchesQuery = !search || haystack.includes(search)
       const matchesStatus = status === 'all' || item.status === status
       return matchesQuery && matchesStatus
     })
-  }, [active.data, query, status, isInvoice])
+  }, [active.data, search, status, isInvoice])
 
   return (
     <div className="page-stack financial-list-page">
       <PageHeader
         title={isInvoice ? 'فاکتورها 📄' : 'درخواست‌های شارژ 💳'}
-        subtitle={isInvoice ? 'مشاهده و مدیریت فاکتورهای شما' : 'مشاهده وضعیت آخرین درخواست‌های واریز به کیف پول (حداکثر ۵۰ مورد در سرویس مشترک)'}
+        subtitle={isInvoice ? 'مشاهده و مدیریت فاکتورهای شما' : 'مشاهده وضعیت درخواست‌های واریز به کیف پول'}
         icon={<Icon />}
       />
       <FilterPanel
         query={query}
-        onQueryChange={setQuery}
+        onQueryChange={value => { setQuery(value); resetPage() }}
         placeholder={isInvoice ? 'جستجو در شماره فاکتور یا توضیحات...' : 'جستجو در شماره درخواست، پیگیری پرداخت یا فاکتور...'}
-        onReset={() => { setQuery(''); setStatus('all') }}
+        onReset={() => { setQuery(''); setStatus('all'); resetPage() }}
       >
-        <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="وضعیت">
+        <Select value={status} onChange={(event) => { setStatus(event.target.value); resetPage() }} aria-label="وضعیت">
           <option value="all">همه وضعیت‌ها</option>
           {Object.entries(isInvoice ? invoiceStatusLabels : chargeStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </Select>
       </FilterPanel>
-      <Card className={!active.loading && !active.error && !active.data?.unavailable && !rows.length ? 'resource-empty-card' : undefined}>
+      <Card className={!loading && !active.error && !active.data?.unavailable && !rows.length ? 'resource-empty-card' : undefined}>
         <SectionHeading title={isInvoice ? 'لیست فاکتورها' : 'لیست درخواست‌ها'} />
-        {active.loading ? (
+        {loading ? (
           <LoadingState label="در حال دریافت..." />
         ) : active.error ? (
           <QueryError message={active.error} onRetry={active.refetch} />
@@ -202,12 +207,13 @@ function FinancialList({ type }: FinancialListProps) {
                 {!isInvoice && <td>{chargeReferences(row).invoiceNumber ?? '—'}</td>}
                 <td>{row.formattedAmount ?? formatToman(row.amount)}</td>
                 <td><FinancialDate label={isInvoice ? 'صدور' : undefined} date={row.date} dueAt={isInvoice ? row.dueAt : undefined} paidAt={isInvoice ? row.paidAt : undefined} timezone={user?.timezone} /></td>
-                <td><Badge>{(isInvoice ? invoiceStatusLabels : chargeStatusLabels)[row.status] ?? 'نامشخص'}</Badge></td>
+                <td><Badge tone={isInvoice && row.status === 'overdue' ? 'warning' : undefined}>{(isInvoice ? invoiceStatusLabels : chargeStatusLabels)[row.status] ?? 'نامشخص'}</Badge></td>
                 {!isInvoice && <td><LinkButton to={`/wallet?charge=${encodeURIComponent(row.id)}`} variant="secondary">پیگیری درخواست</LinkButton></td>}
               </tr>
             ))}
           </Table>
         )}
+        {!loading && !active.error && <HistoryPagination label="صفحه‌بندی سوابق مالی" {...active} />}
       </Card>
     </div>
   )

@@ -117,7 +117,7 @@ export function invoiceToDto(invoice: {
   dueAt: Date
   paidAt?: Date | null
   snapshot?: unknown
-}) {
+}, now = new Date()) {
   const entries = (invoice.snapshot as { traffic?: unknown } | null)?.traffic
   const traffic = Array.isArray(entries) ? entries.map(entry => ({ month: entry.month, previousOutgoingBytes: entry.previousOutgoingBytes,
     outgoingBytes: entry.outgoingBytes, includedBytes: entry.includedBytes, blocks: entry.blocks, fxRate: entry.fxRate, fxAt: entry.fxAt,
@@ -128,7 +128,7 @@ export function invoiceToDto(invoice: {
     description: invoice.description ?? '',
     amount: invoice.totalRial / 10,
     amountRial: invoice.totalRial,
-    status: mapInvoiceStatus(invoice.status),
+    status: mapInvoiceStatus(invoice.status, invoice.dueAt, now),
     date: invoice.createdAt.toISOString(),
     dueAt: invoice.dueAt.toISOString(),
     paidAt: invoice.paidAt?.toISOString() ?? null,
@@ -136,22 +136,24 @@ export function invoiceToDto(invoice: {
   }
 }
 
-export function mapInvoiceStatus(status: string): 'pending' | 'paid' | 'cancelled' | 'refunded' {
+export function mapInvoiceStatus(status: string, dueAt?: Date, now = new Date()): 'pending' | 'paid' | 'cancelled' | 'refunded' | 'overdue' {
   if (status === 'paid') return 'paid'
   if (status === 'void') return 'cancelled'
   if (status === 'refunded') return 'refunded'
+  if (status === 'overdue' || (status === 'open' && dueAt && dueAt < now)) return 'overdue'
   return 'pending'
 }
 
 export function ticketToDto(ticket: { id: string; title: string; department: string; status: string; updatedAt: Date | null; createdAt: Date;
-  description?: string | null; serverId?: string | null; serverSnapshot?: { id: string; name: string; ip: string | null; provider: string } | null }) {
+  description?: string | null; serverId?: string | null; serverSnapshot?: { id: string; name: string; ip: string | null; provider: string } | null;
+  unread?: boolean }) {
   return {
     id: ticket.id,
     title: ticket.title,
     department: ticket.department,
     status: ticket.status,
     updatedAt: (ticket.updatedAt ?? ticket.createdAt).toISOString(),
-    unread: false,
+    unread: ticket.unread ?? false,
     description: ticket.description ?? '',
     serverId: ticket.serverId ?? null,
     relatedServer: ticket.serverSnapshot ?? null,

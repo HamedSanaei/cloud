@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { isIP } from 'node:net'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { and, eq, ne, notInArray } from 'drizzle-orm'
 import { z } from 'zod'
@@ -142,6 +143,14 @@ async function linkedToken(ctx: AppContext, request: FastifyRequest): Promise<st
 }
 
 interface PlatformServer { server_id: string; state: string; display_name?: string; provider_key?: string; location_label?: string; ip?: string; operating_system?: string; cpu?: number; ram_gb?: number; storage_gb?: number }
+const platformAddresses = (servers: PlatformServer[]) => servers.flatMap(server => {
+  const version = server.ip ? isIP(server.ip) : 0
+  return version && server.state !== 'terminated' && server.state !== 'cancelled' ? [{
+    id: server.server_id, address: server.ip, version: version === 6 ? 'IPv6' : 'IPv4',
+    status: server.state === 'running' ? 'active' : 'inactive',
+    server: server.display_name ?? server.server_id.slice(0, 8), datacenter: server.location_label ?? server.provider_key ?? '',
+  }] : []
+})
 export function serverProjection(s: PlatformServer) {
   if (!z.string().uuid().safeParse(s.server_id).success) throw new AppError(502, 'platform_server_identity_invalid', 'شناسه سرور در پاسخ پلتفرم معتبر نیست')
   const state = s.state === 'running' || s.state === 'stopped' ? 'ready' : s.state === 'failed' ? 'failed' : s.state === 'requires_review' ? 'requires_review' : s.state === 'outcome_unknown' || s.state === 'unknown' ? 'outcome_unknown' : s.state === 'cancelled' || s.state === 'terminated' ? 'cancelled' : s.state === 'queued' ? 'queued' : 'provisioning'
@@ -247,11 +256,15 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
         })
       }
       reply.header('Cache-Control', 'no-store')
-      return reply.send({ data: await listNotifications(ctx.db, user.id) })
+      return reply.send(await listNotifications(ctx.db, user.id))
     }
     const economic = /^\/api\/(wallets|servers|catalog|quotes|orders|subscriptions|invoices|charge-requests|dashboard|notifications|admin)(\/|$)/.test(pathname)
+      || (pathname === '/api/ips' && request.method === 'GET')
     if (!economic) return
     const token = await linkedToken(ctx, request)
+    if (request.method === 'GET' && pathname === '/api/servers/provisioning/search') {
+      return reply.header('Cache-Control', 'no-store').send({ data: [] })
+    }
     if (request.method === 'GET' && /^\/api\/servers\/provisioning\/platform\/[a-f0-9-]{36}$/.test(pathname)) {
       const id = parse(z.string().uuid(), pathname.split('/').pop())
       const result = await platformRequest<{ data: PlatformServer | { server: PlatformServer } }>(token, `/servers/${id}`)
@@ -283,6 +296,10 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
       const data = await platformRequest<{ data: PlatformServer[] }>(token, '/servers')
       return reply.send({ data: data.data.map(serverProjection) })
     }
+    if (pathname === '/api/ips') {
+      const { data } = await platformRequest<{ data: PlatformServer[] }>(token, '/servers')
+      return reply.send({ data: platformAddresses(data) })
+    }
     if (['/api/wallets', '/api/wallets/summary', '/api/wallets/transactions'].includes(pathname)) {
       const { data } = await platformRequest<{ data: { balance: { balance_minor: number; currency: string }; history: { items: Array<{
         entry_id: string; amount_minor: number; currency: string; formatted: string; description: string; entry_type: string; created_at: string;
@@ -313,7 +330,7 @@ export function installPlatformIntegration(app: FastifyInstance, ctx: AppContext
         platformRequest<{ data: PlatformServer[] }>(token, '/servers'),
         platformRequest<{ data: { balance: { currency: string; balance_minor: number } } }>(token, '/wallet'),
       ])
-      return reply.send({ data: { activeServers: fleet.filter(s => s.state === 'running').length, ips: fleet.filter(s => s.ip).length, domains: 0, trafficPackages: 0, openTickets: 0, unpaidInvoices: 0, walletBalance: requireToman(wallet.balance) } })
+      return reply.send({ data: { activeServers: fleet.filter(s => s.state === 'running').length, ips: platformAddresses(fleet).length, domains: 0, trafficPackages: 0, openTickets: 0, unpaidInvoices: 0, walletBalance: requireToman(wallet.balance) } })
     }
     throw new ConflictError('این گزارش در قرارداد فعلی سرویس مرجع پشتیبانی نمی‌شود')
   })

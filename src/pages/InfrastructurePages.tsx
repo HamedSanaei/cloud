@@ -8,7 +8,7 @@ import {
   RefreshCw,
   ServerCog,
 } from 'lucide-react'
-import { useId, useMemo, useState } from 'react'
+import { useId, useMemo, useRef, useState } from 'react'
 import { Button, LinkButton } from '../components/ui/Button'
 import { Card, SectionHeading } from '../components/ui/Card'
 import { FilterPanel } from '../components/ui/FilterPanel'
@@ -28,6 +28,7 @@ import {
   listDomains,
   listIps,
   listTrafficPackages,
+  searchServerOrders,
   transferDomain,
 } from '../lib/endpoints'
 import { formatCount } from '../lib/format'
@@ -39,8 +40,11 @@ import { getIntegrationStatus } from '../lib/platformClient'
 import { useServerFleet } from '../hooks/useServerFleet'
 import { ServerTableRow } from '../components/servers/ServerPrimitives'
 import { serverRowKey } from '../lib/serverLifecycle'
+import { normalizeSearchText } from '../../backend/src/contracts/search-text'
+import { useDebouncedValue } from '../hooks/useDebouncedValue'
 
 type ResourceKind = 'server' | 'ip'
+const ipStatusLabels = { inactive: 'غیرفعال', active: 'فعال', reserved: 'رزرو شده' }
 
 function useInfrastructurePurchase(service: 'ips' | 'trafficPackages' | null) {
   const query = useApiQuery(() => service ? getInfrastructureCapabilities() : Promise.resolve(null), [service])
@@ -76,36 +80,50 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
   const ips = useApiQuery(listIps, [kind])
   const active = server ? servers : ips
   const refreshServers = servers.refetch
-  const resetFilters = () => { setQuery(''); setStatus('all'); setSecondary('all') }
-
+  const searchRef = useRef<HTMLInputElement>(null)
+  const resetFilters = () => { setQuery(''); setStatus('all'); setSecondary('all'); searchRef.current?.focus() }
+  const term = normalizeSearchText(query)
+  const hasFilters = !!term || status !== 'all' || secondary !== 'all'
+  const reference = server && /^ord-.{1,36}$/.test(term) ? term : ''
+  const lookup = useDebouncedValue(reference)
+  const orderSearch = useApiQuery(async () => ({ reference: lookup, rows: lookup ? await searchServerOrders(lookup) : [] }), [lookup])
+  const waitingForOrderSearch = !!reference && (reference !== lookup || orderSearch.loading ||
+    (orderSearch.data?.reference !== reference && !orderSearch.error))
 
   const filteredServers = useMemo(() => {
     if (!server) return []
-    const items = (servers.data ?? []).filter((item) => {
-      const term = query.trim().toLowerCase()
+    const fleet = new Map(servers.data.map(item => [serverRowKey(item), item]))
+    const matchingOrders = new Set<string>()
+    if (reference && orderSearch.data?.reference === reference) {
+      for (const item of orderSearch.data.rows) {
+        const key = serverRowKey(item)
+        matchingOrders.add(key)
+        if (!fleet.has(key)) fleet.set(key, item)
+      }
+    }
+    return [...fleet.entries()].filter(([key, item]) => {
       const matchesQuery = !term || [item.name, item.datacenter, item.id, item.platformServerId, item.serverId, item.orderId,
-        item.tracking?.reference, item.tracking?.serverId, item.tracking?.orderId, item.tracking?.failure?.reference]
-        .some(value => value?.toLowerCase().includes(term))
+        item.ip, item.ipv6, item.tracking?.reference, item.tracking?.serverId, item.tracking?.orderId, item.tracking?.failure?.reference]
+        .some(value => value != null && normalizeSearchText(value).includes(term)) || matchingOrders.has(key)
       const matchesStatus = status === 'all' || (status === 'failed'
         ? (item.lifecycle ?? item.tracking?.state) === 'failed'
         : item.status === status)
       const matchesDatacenter = secondary === 'all' || item.datacenter === secondary
       return matchesQuery && matchesStatus && matchesDatacenter
-    })
-    return items
-  }, [server, servers.data, query, status, secondary])
+    }).map(([, item]) => item)
+  }, [server, servers.data, reference, orderSearch.data, term, status, secondary])
 
   const filteredIps = useMemo(() => {
     if (server) return []
     const items = (ips.data ?? []).filter((item) => {
-      const haystack = `${item.address} ${item.server ?? ''} ${item.datacenter}`
-      const matchesQuery = !query.trim() || haystack.includes(query.trim())
+      const haystack = normalizeSearchText(`${item.address} ${item.server ?? ''} ${item.datacenter}`)
+      const matchesQuery = !term || haystack.includes(term)
       const matchesStatus = status === 'all' || item.status === status
       const matchesVersion = secondary === 'all' || item.version === secondary
       return matchesQuery && matchesStatus && matchesVersion
     })
     return items
-  }, [server, ips.data, query, status, secondary])
+  }, [server, ips.data, term, status, secondary])
 
   const handleBuyIp = async () => {
     if (!purchase.enabled || buying) return
@@ -125,18 +143,21 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
     <div className={`page-stack resource-list-page${server ? ' server-list-page' : ''}`}>
       <PageHeader
         title={server ? 'مدیریت سرورها' : 'مدیریت آی‌پی‌ها'}
-        subtitle={server ? 'سرورهای خود را مدیریت کنید و سرورهای جدید ایجاد کنید.' : 'لیست تمام آی‌پی‌های شما و سرورهای متصل به آن‌ها'}
+        subtitle={server ? 'سرورهای خود را مدیریت کنید و سرورهای جدید ایجاد کنید.' : 'نشانی‌های آی‌پی متصل به سرورهای شما'}
         icon={server ? <HardDrive /> : <Globe2 />}
         actions={
           <>
             {server ? <LinkButton to="/servers/create" icon={<Plus size={18} />}>ایجاد سرور جدید</LinkButton> : <Button icon={<Plus size={18} />} disabled={buying || !purchase.enabled} aria-describedby={purchase.message ? purchase.messageId : undefined} onClick={handleBuyIp}>{buying ? 'در حال ثبت...' : 'خرید آی‌پی'}</Button>}
-            <Button variant="secondary" icon={<RefreshCw size={17} />} onClick={() => { active.refetch(); if (!server) purchase.refetch() }}>بروزرسانی</Button>
+            <Button variant="secondary" icon={<RefreshCw size={17} />} onClick={() => { active.refetch(); if (reference) orderSearch.refetch(); if (!server) purchase.refetch() }}>بروزرسانی</Button>
           </>
         }
       />
       {!server && <PurchaseAvailability purchase={purchase} />}
-      <FilterPanel query={query} onQueryChange={setQuery} placeholder={server ? 'جستجو در سرورها...' : 'جستجو در آی‌پی، سرور یا دیتاسنتر...'} onReset={resetFilters}>
-        <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="وضعیت"><option value="all">همه وضعیت‌ها</option><option value="inactive">غیرفعال</option><option value="active">فعال</option>{server ? <option value="failed">خطای ساخت</option> : <option value="reserved">رزرو شده</option>}</Select>
+      <FilterPanel query={query} onQueryChange={setQuery} searchRef={searchRef} placeholder={server ? 'جستجو در سرورها...' : 'جستجو در آی‌پی، سرور یا دیتاسنتر...'} onReset={resetFilters}>
+        <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="وضعیت"><option value="all">همه وضعیت‌ها</option>
+          {Object.entries(ipStatusLabels).filter(([value]) => !server || value !== 'reserved').map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          {server && <option value="failed">خطای ساخت</option>}
+        </Select>
         <Select value={secondary} onChange={(event) => setSecondary(event.target.value)} aria-label={server ? 'دیتاسنتر' : 'نوع آی‌پی'}>
           <option value="all">{server ? 'همه دیتاسنترها' : 'همه انواع'}</option>
           {server ? [...new Set((servers.data ?? []).map(item => item.datacenter))].map(name => <option key={name} value={name}>{name}</option>) : <><option value="IPv4">IPv4</option><option value="IPv6">IPv6</option></>}
@@ -144,6 +165,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
       </FilterPanel>
       {server && servers.error && servers.data.length > 0 && <p className="server-notice" role="status">{servers.error}</p>}
       {server && servers.paused && <p className="server-notice" role="status">زمان بررسی خودکار به پایان رسید. وضعیت حل‌نشده حفظ شده است؛ برای ادامه «بروزرسانی» را بزنید.</p>}
+      {reference && reference === lookup && orderSearch.error && <QueryError message={orderSearch.error} onRetry={orderSearch.refetch} />}
       <Card className={!active.loading && !active.error && (server ? filteredServers : filteredIps).length === 0 ? 'resource-empty-card' : undefined}>
         <SectionHeading title={server ? 'لیست سرورها' : 'لیست آی‌پی‌ها'} />
         {active.loading && !active.data?.length ? (
@@ -157,12 +179,12 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
                 <ServerTableRow key={serverRowKey(item)} server={item} onPlatformManage={integration.data?.enabled && item.platformServerId ? () => setManagedId(item.platformServerId!) : undefined} />
               ))}
             </Table>
-          ) : (
+          ) : waitingForOrderSearch ? <LoadingState label="در حال جستجوی سوابق سفارش..." /> : reference && orderSearch.error ? null : (
             <EmptyState
               icon={ServerCog}
-              title={servers.data.length ? 'سروری با این جستجو یا فیلترها یافت نشد' : 'هنوز سروری نساخته‌اید'}
-              description={servers.data.length ? 'عبارت جستجو یا فیلترها را تغییر دهید یا آن‌ها را پاک کنید.' : 'برای شروع، اولین سرور ابری خود را ایجاد کنید.'}
-              action={servers.data.length
+              title={hasFilters ? 'سروری با این جستجو یا فیلترها یافت نشد' : 'هنوز سروری نساخته‌اید'}
+              description={hasFilters ? 'عبارت جستجو یا فیلترها را تغییر دهید یا آن‌ها را پاک کنید.' : 'برای شروع، اولین سرور ابری خود را ایجاد کنید.'}
+              action={hasFilters
                 ? <Button variant="secondary" onClick={resetFilters}>پاک کردن فیلترها</Button>
                 : <LinkButton to="/servers/create" icon={<Plus size={17} />}>ساخت اولین سرور</LinkButton>}
             />
@@ -173,7 +195,7 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
               <tr key={item.id}>
                 <td><CopyableIp value={item.address} /></td>
                 <td><Badge tone="info">{item.version}</Badge></td>
-                <td><Badge>{item.status}</Badge></td>
+                <td><Badge>{ipStatusLabels[item.status] ?? 'نامشخص'}</Badge></td>
                 <td>{item.server ?? '—'}</td>
               </tr>
             ))}
@@ -181,9 +203,10 @@ function ResourceList({ kind }: { kind: ResourceKind }) {
         ) : (
           <EmptyState
             icon={Globe2}
-            title="آی‌پی‌ای یافت نشد"
-            description={query ? 'عبارت جستجو یا فیلترها را تغییر دهید.' : 'آی‌پی‌های خریداری‌شده و وضعیت اتصال آن‌ها اینجا نمایش داده می‌شود.'}
-            action={<Button icon={<Plus size={17} />} disabled={buying || !purchase.enabled} aria-describedby={purchase.message ? purchase.messageId : undefined} onClick={handleBuyIp}>{buying ? 'در حال ثبت...' : 'خرید آی‌پی'}</Button>}
+            title={hasFilters ? 'آی‌پی‌ای با این جستجو یا فیلترها یافت نشد' : 'آی‌پی‌ای یافت نشد'}
+            description={hasFilters ? 'عبارت جستجو یا فیلترها را تغییر دهید یا آن‌ها را پاک کنید.' : 'نشانی‌های متصل به سرورهای شما اینجا نمایش داده می‌شوند.'}
+            action={hasFilters ? <Button variant="secondary" onClick={resetFilters}>پاک کردن فیلترها</Button>
+              : <Button icon={<Plus size={17} />} disabled={buying || !purchase.enabled} aria-describedby={purchase.message ? purchase.messageId : undefined} onClick={handleBuyIp}>{buying ? 'در حال ثبت...' : 'خرید آی‌پی'}</Button>}
           />
         )}
       </Card>

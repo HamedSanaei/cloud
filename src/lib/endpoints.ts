@@ -1,6 +1,7 @@
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut, isApiConfigured } from './apiClient'
 import { platformGet, platformPost } from './platformClient'
 import { operationHeaders, type EmailProof, type OperationIntent } from './operationEmail'
+import type { HistoryFilters, HistoryPage } from '../hooks/useCustomerHistory'
 import type {
   AppNotification,
   ChargeRequest,
@@ -84,14 +85,15 @@ export async function getWalletSummary(): Promise<WalletSummary> {
   return unwrapOne(payload, { totalBalance: 0, wallets: 0, defaultWallet: 'پیش‌فرض', connectedProducts: 0 })
 }
 
-export async function getNotifications(): Promise<AppNotification[]> {
-  if (noApi()) return []
-  const payload = await apiGet<Paginated<AppNotification> | AppNotification[]>('/notifications')
-  return unwrapList<AppNotification>(payload)
+export async function getNotifications() {
+  if (noApi()) return { items: [], unreadCount: 0 }
+  const payload = await apiGet<{ data: AppNotification[]; unreadCount?: number }>('/notifications')
+  const items = unwrapList<AppNotification>(payload)
+  return { items, unreadCount: payload.unreadCount ?? items.filter(item => !item.read).length }
 }
 
-export async function markNotificationsRead(ids: string[]): Promise<void> {
-  await apiPatch('/notifications/read', { ids })
+export async function markNotificationsRead(ids?: string[]): Promise<void> {
+  await apiPatch('/notifications/read', ids ? { ids } : { all: true })
 }
 
 // --- Servers / IPs / traffic / domains ------------------------------------
@@ -100,6 +102,11 @@ export async function listServers(): Promise<Server[]> {
   if (noApi()) return []
   const payload = await apiGet<Paginated<Server> | Server[]>('/servers')
   return unwrapList<Server>(payload)
+}
+
+export async function searchServerOrders(reference: string): Promise<Server[]> {
+  if (noApi()) return []
+  return (await apiGet<{ data: Server[] }>(`/servers/provisioning/search?${new URLSearchParams({ reference })}`)).data
 }
 
 export async function getServerTracking(tracking: ServerTracking, signal?: AbortSignal): Promise<Server> {
@@ -118,7 +125,7 @@ export async function changeServerPower(serverId: string, action: 'power-on' | '
 
 export async function getStorefrontCatalog(): Promise<StorefrontCatalog> {
   if (noApi()) throw new Error('اتصال به سرویس کاتالوگ پیکربندی نشده است.')
-  const payload = await apiGet<{ data: StorefrontCatalog }>('/catalog/storefront', { timeoutMs: 50000 })
+  const payload = await apiGet<{ data: StorefrontCatalog }>('/catalog/storefront', { timeoutMs: 50000, cache: 'no-store' })
   return payload.data
 }
 
@@ -259,24 +266,25 @@ export async function listTransactions(period: '24h' | '7d'): Promise<{ rows: Tr
   }
 }
 
-export async function listInvoices(): Promise<Invoice[]> {
-  if (noApi()) return []
-  const payload = await apiGet<Paginated<Invoice> | Invoice[]>('/invoices')
-  return unwrapList<Invoice>(payload)
+async function listCustomerHistory<T>(path: string, filters: HistoryFilters): Promise<HistoryPage<T>> {
+  if (noApi()) return { items: [] }
+  const params = new URLSearchParams({ search: filters.search, status: filters.status, offset: String(filters.offset) })
+  if (filters.department && filters.department !== 'all') params.set('department', filters.department)
+  const url = filters.search || filters.status !== 'all' || filters.offset || params.has('department') ? `${path}?${params}` : path
+  const payload = await apiGet<{ data: T[]; pagination?: HistoryPage<T>['pagination'] }>(url)
+  return { items: unwrapList<T>(payload), pagination: payload.pagination }
 }
 
-export async function listChargeRequests(): Promise<ChargeRequest[]> {
-  if (noApi()) return []
-  const payload = await apiGet<Paginated<ChargeRequest> | ChargeRequest[]>('/charge-requests')
-  return unwrapList<ChargeRequest>(payload)
-}
+export const listFinancialDocuments = (type: 'invoice' | 'charge', filters: HistoryFilters) =>
+  listCustomerHistory<Invoice | ChargeRequest>(type === 'invoice' ? '/invoices' : '/charge-requests', filters)
 
 // --- Tickets ----------------------------------------------------------------
+export const listTickets = (filters: HistoryFilters) => listCustomerHistory<Ticket>('/tickets', filters)
 
-export async function listTickets(): Promise<Ticket[]> {
-  if (noApi()) return []
-  const payload = await apiGet<Paginated<Ticket> | Ticket[]>('/tickets')
-  return unwrapList<Ticket>(payload)
+export async function markTicketRepliesRead(ticketId: string, ids: string[]) {
+  for (let start = 0; start < ids.length; start += 200) {
+    await apiPost(`/tickets/${encodeURIComponent(ticketId)}/read`, { replyIds: ids.slice(start, start + 200) })
+  }
 }
 
 export async function getTicket(id: string): Promise<Ticket> {

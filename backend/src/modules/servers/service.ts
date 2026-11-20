@@ -58,10 +58,22 @@ export async function getServerForUser(db: DbClient, userId: string, serverId: s
 export async function listServersForUser(db: DbClient, userId: string, opts: { limit?: number; offset?: number } = {}) {
   return db.query.servers.findMany({
     where: (t) => eq(t.userId, userId),
-    orderBy: (t, { desc }) => [desc(t.createdAt)],
+    orderBy: (t, { desc }) => [desc(t.createdAt), desc(t.id)],
     limit: opts.limit ?? 50,
     offset: opts.offset ?? 0,
   })
+}
+
+export async function listServerAddresses(db: DbClient, userId: string) {
+  const rows = await db.query.servers.findMany({
+    columns: { id: true, ipv4: true, ipv6: true, hostname: true, providerLocation: true, status: true },
+    where: (t, { and, eq, inArray }) => and(eq(t.userId, userId), inArray(t.status, ['active', 'suspended'])),
+    orderBy: (t, { desc }) => [desc(t.createdAt), desc(t.id)],
+  })
+  return rows.flatMap(row => ([['IPv4', row.ipv4], ['IPv6', row.ipv6]] as const).flatMap(([version, address]) => address ? [{
+    id: `${row.id}:${version}`, address, version, status: row.status === 'active' ? 'active' : 'inactive',
+    server: row.hostname, datacenter: row.providerLocation,
+  }] : []))
 }
 
 export async function activateServer(db: DbOrTx, serverId: string, view?: ProviderServerView) {

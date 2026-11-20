@@ -105,6 +105,8 @@ export interface CreateOrderInput {
   hostname: string
   idempotencyKey?: string
   expectedTotalRial?: number
+  expectedCoverageDays?: number
+  retailOnly?: boolean
   authorize?: OperationAuthorization
 }
 
@@ -129,11 +131,12 @@ export async function createOrderFromQuote(db: DbClient, input: CreateOrderInput
     if (input.expectedTotalRial !== undefined && input.expectedTotalRial !== quote.totalRial) {
       throw new AppError(409, 'server_price_changed', 'قیمت سرور تغییر کرده است. مبلغ تازه را بررسی و دوباره تأیید کنید.')
     }
-    await assertProviderPurchaseAllowed(tx, quote.provider, input.userId)
+    await assertProviderPurchaseAllowed(tx, quote.provider, input.userId, input.retailOnly)
     const hostname = input.hostname.trim() || `vps-${quote.providerProductId.toLowerCase()}-${randomInt(1000, 9999)}`
     if (!/^[a-z0-9][a-z0-9.-]{2,62}$/i.test(hostname)) throw new ValidationError('نام میزبان نامعتبر است')
     if (wallet) await assertCreationFunding(tx, {
       userId: input.userId, walletId: wallet.id, totalRial: quote.totalRial, billingInterval: quote.billingInterval,
+      expectedCoverageDays: input.expectedCoverageDays,
     })
     await input.authorize?.(tx)
     // Single-use guarantee: lock the quote row so two concurrent orders can

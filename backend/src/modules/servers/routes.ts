@@ -17,6 +17,8 @@ import { pendingProvisioningRows, provisioningRow } from './provisioning.js'
 import { registerCustomerServerRoutes } from './customer-routes.js'
 import { registerServerConsole } from './console.js'
 import { authorizeOperation, operationKey } from '../auth/operation-email.js'
+import { normalizeSearchText } from '../../contracts/search-text.js'
+import { maxCreationCoverageDays } from '../../contracts/creation-funding.js'
 
 const wizardSchema = z.object({
   name: z.string().min(3).max(63),
@@ -25,6 +27,7 @@ const wizardSchema = z.object({
   walletId: z.string().uuid().optional(),
   billingPeriod: z.enum(['hourly', 'monthly']),
   expectedTotalRial: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+  expectedCoverageDays: z.number().int().min(1).max(maxCreationCoverageDays).optional(),
 }).strict()
 
 export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
@@ -35,10 +38,19 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
   app.get('/servers', async (request) => {
     const user = requireUser(request)
     const query = parse(z.object({ limit: z.coerce.number().int().positive().max(200).optional() }), request.query)
-    const rows = await listServersForUser(db, user.id, { limit: query.limit ?? 50 })
-    const fleet = await loadFundingFleet(db, user.id)
-    const pending = await pendingProvisioningRows(db, user.id, query.limit ?? 50)
-    return { data: [...pending, ...rows.map((server) => serverToDto(server, serverPowerPolicy(server, fleet)))] }
+    const limit = query.limit ?? 50
+    const [rows, fleet, pending] = await Promise.all([
+      listServersForUser(db, user.id, { limit }), loadFundingFleet(db, user.id), pendingProvisioningRows(db, user.id, limit),
+    ])
+    const data = [...pending, ...rows.map(server => serverToDto(server, serverPowerPolicy(server, fleet)))]
+    return { data: data.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id)).slice(0, query.limit) }
+  })
+
+  app.get('/servers/provisioning/search', async (request, reply) => {
+    const user = requireUser(request)
+    const { reference } = parse(z.object({ reference: z.string().trim().min(1).max(40).transform(normalizeSearchText) }), request.query)
+    reply.header('Cache-Control', 'private, no-store')
+    return { data: await pendingProvisioningRows(db, user.id, 50, reference) }
   })
 
   app.get('/servers/provisioning/:orderId', async request => {
@@ -89,6 +101,7 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
       billingOption,
       billingPeriod: input.billingPeriod,
       operatingSystem: input.os,
+      retailOnly: true,
     })
 
     const result = await createOrderFromQuote(db, {
@@ -99,6 +112,8 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
       hostname: input.name ?? '',
       idempotencyKey,
       expectedTotalRial: input.expectedTotalRial,
+      expectedCoverageDays: input.expectedCoverageDays,
+      retailOnly: true,
       authorize,
     })
 

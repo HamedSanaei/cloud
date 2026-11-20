@@ -14,12 +14,12 @@ vi.mock('../src/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'check
 const offer = (id: string, price: number) => ({ id, provider: 'hetzner', location: 'nbg1', name: id,
   category: 'cloud', vcpu: 2, memoryMb: 4096, diskGb: 40, trafficGb: null,
   operatingSystems: [{ id: 'ubuntu', label: 'Ubuntu' }], prices: [{ period: 'hourly', totalRial: price }] })
-const catalog = { datacenters: [{ id: 'hetzner', name: 'Hetzner', logo: '/providers/hetzner.svg',
+const catalog = { minimumCoverageDays: 7, datacenters: [{ id: 'hetzner', name: 'Hetzner', logo: '/providers/hetzner.svg',
   locations: [{ code: 'nbg1', city: 'Nuremberg', country: 'DE' }, { code: 'hel1', city: 'Helsinki', country: 'FI' }], billingPeriods: ['hourly'] }],
   offers: [offer('Expensive', 20000), offer('Cheap', 10000)] }
 let posts: Array<{ body: Record<string, unknown>; key?: string }>
 let balance: number
-let availableCatalog: typeof catalog
+let availableCatalog: typeof catalog & { pricingUnavailable?: Array<{ id: string; name: string }> }
 let acceptedOrder: { id: string; name: string } | null
 let pricingUnavailable: boolean
 let holdOrderResponse: boolean
@@ -96,6 +96,7 @@ describe('Issue #3 server checkout', () => {
 
   it.each(['hourly', 'monthly'])('opens a public %s offer without placing an order', async period => {
     availableCatalog = {
+      ...catalog,
       datacenters: catalog.datacenters.map(dc => ({ ...dc, billingPeriods: ['hourly', 'monthly'] })),
       offers: catalog.offers.map(item => ({ ...item, prices: [...item.prices, { period: 'monthly', totalRial: 1000000 }] })),
     }
@@ -177,6 +178,50 @@ describe('Issue #3 server checkout', () => {
     expect(posts).toEqual([])
   })
 
+  it('limits pricing warnings to datacenter selection and closes a stale provider selection after refresh', async () => {
+    balance = 200000
+    availableCatalog = {
+      ...catalog,
+      datacenters: [...catalog.datacenters, { ...catalog.datacenters[0]!, id: 'leaseweb', name: 'Leaseweb' }],
+      pricingUnavailable: [{ id: 'leaseweb', name: 'Leaseweb' }],
+    }
+    open()
+    const user = userEvent.setup()
+    const warning = /قیمت برخی پلن‌های Leaseweb/
+    expect(await screen.findByText(warning)).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: /Hetzner/ }))
+    expect(screen.queryByText(warning)).toBeNull()
+    await user.click(screen.getByRole('button', { name: /Leaseweb/ }))
+    expect(screen.getByText(warning)).toBeTruthy()
+    await configure()
+    expect(screen.queryByText(warning)).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'مرحله بعد' }))
+    expect(screen.getByRole('heading', { name: 'تایید نهایی' })).toBeTruthy()
+    expect(screen.queryByText(warning)).toBeNull()
+    availableCatalog = { ...availableCatalog, datacenters: [], offers: [], pricingUnavailable: [] }
+    await act(async () => { fireEvent.focus(window) })
+    expect(await screen.findByText(/دیتاسنتر انتخاب‌شده دیگر/)).toBeTruthy()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'مرحله بعد' }).disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: /Leaseweb/ })).toBeNull()
+    expect(posts).toEqual([])
+  })
+
+  it('uses the effective three-day funding policy and reconciles policy changes on focus', async () => {
+    availableCatalog = { ...catalog, minimumCoverageDays: 3 }
+    balance = 72000
+    open()
+    const user = await configure()
+    expect(screen.getByText(/حداقل اعتبار این سرور برای ۳ روز: ۷۲,۰۰۰ تومان/)).toBeTruthy()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'مرحله بعد' }).disabled).toBe(false)
+    availableCatalog = { ...catalog, minimumCoverageDays: 7 }
+    await act(async () => { fireEvent.focus(window) })
+    expect(await screen.findByText(/حداقل اعتبار این سرور برای ۷ روز: ۱۶۸,۰۰۰ تومان/)).toBeTruthy()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'مرحله بعد' }).disabled).toBe(true)
+    await user.click(screen.getByRole('link', { name: 'افزایش موجودی کیف پول' }))
+    expect(readCheckoutDraft('checkout-user')).toMatchObject({ offerId: 'Cheap', os: 'ubuntu', step: 4 })
+    expect(posts).toEqual([])
+  })
+
   it('renders invoice traffic usage and billed volume in TB without altering the invoice amount', async () => {
     open('/invoices')
     const details = (await screen.findByText('جزئیات ترافیک مازاد')).parentElement!
@@ -216,6 +261,7 @@ describe('Issue #3 server checkout', () => {
   })
   it('labels monthly funding as a prepaid month in the wallet, review and shortfall', async () => {
     availableCatalog = {
+      ...catalog,
       datacenters: catalog.datacenters.map(item => ({ ...item, billingPeriods: ['hourly', 'monthly'] })),
       offers: catalog.offers.map(item => ({ ...item, prices: [...item.prices, { period: 'monthly', totalRial: 250000 }] })),
     }
@@ -223,6 +269,10 @@ describe('Issue #3 server checkout', () => {
     open()
     expect(await screen.findByText(/پیش‌پرداخت دورهٔ ماهانه:/)).toBeTruthy()
     expect(await screen.findByText(/پیش‌پرداخت دورهٔ ماهانه لازم است/)).toBeTruthy()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'مرحله بعد' }).disabled).toBe(true)
+    balance = 25000
+    await userEvent.click(screen.getByRole('button', { name: 'بررسی دوباره موجودی' }))
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'مرحله بعد' }).disabled).toBe(false))
     await userEvent.click(screen.getByRole('button', { name: 'مرحله بعد' }))
     expect(screen.getByText('پیش‌پرداخت دورهٔ ماهانه')).toBeTruthy()
     expect(screen.queryByText(/حداقل اعتبار برای ۷ روز/)).toBeNull()

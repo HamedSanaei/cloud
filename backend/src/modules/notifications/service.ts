@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, count, eq, inArray } from 'drizzle-orm'
 import { notifications, servers } from '../../db/schema.js'
 import type { DbOrTx } from '../../db/index.js'
 
@@ -12,17 +12,20 @@ export async function publishNotification(db: DbOrTx, notice: Notice) {
 }
 
 export async function listNotifications(db: DbOrTx, userId: string) {
-  const rows = await db.query.notifications.findMany({
-    where: t => eq(t.userId, userId),
-    orderBy: (t, { desc }) => [desc(t.createdAt), desc(t.id)],
-    limit: 50,
-  })
-  return rows.map(n => ({ id: n.id, title: n.title, body: n.body, type: n.type, read: n.read,
-    href: n.href, createdAt: n.createdAt.toISOString() }))
+  const [rows, [unread]] = await Promise.all([
+    db.query.notifications.findMany({ where: t => eq(t.userId, userId),
+      orderBy: (t, { desc }) => [desc(t.createdAt), desc(t.id)], limit: 50 }),
+    db.select({ count: count() }).from(notifications).where(and(eq(notifications.userId, userId), eq(notifications.read, false))),
+  ])
+  return {
+    data: rows.map(n => ({ id: n.id, title: n.title, body: n.body, type: n.type, read: n.read,
+      href: n.href, createdAt: n.createdAt.toISOString() })),
+    unreadCount: unread?.count ?? 0,
+  }
 }
 
 export async function readNotifications(db: DbOrTx, userId: string, ids?: string[]) {
-  await db.update(notifications).set({ read: true }).where(and(eq(notifications.userId, userId),
+  await db.update(notifications).set({ read: true }).where(and(eq(notifications.userId, userId), eq(notifications.read, false),
     ids ? inArray(notifications.id, ids) : undefined))
 }
 

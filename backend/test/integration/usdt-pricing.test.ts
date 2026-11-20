@@ -256,9 +256,20 @@ describe.skipIf(!dbAvailable)('AbanTether EUR and USD = USDT pricing with a loca
       expect(storefront.pricingUnavailable.map(item => item.id)).toEqual([blocked])
       expect(storefront.offers.length).toBeGreaterThan(0)
       expect(storefront.offers.every(item => item.provider === available && item.prices[0]!.totalRial > 0)).toBe(true)
+      await ctx.db.update(providers).set({ enabled: false }).where(eq(providers.id, blocked))
+      for (const mode of ['live', 'mock'] as const) {
+        await ctx.db.update(providers).set({ mode, enabled: mode === 'mock' }).where(eq(providers.id, blocked))
+        const retail = await getStorefront(ctx.db)
+        expect(retail.datacenters.map(item => item.id)).toEqual([available])
+        expect(retail.saleProviderIds).toEqual([available])
+        expect(retail.pricingUnavailable).toEqual([])
+        expect(retail.offers.every(offer => offer.provider === available)).toBe(true)
+      }
+      await ctx.db.update(providers).set({ enabled: true, mode: 'live' }).where(eq(providers.id, blocked))
+      expect((await getStorefront(ctx.db)).pricingUnavailable.map(item => item.id)).toEqual([blocked])
     } finally {
       config.mockRestore()
-      if (admin) await ctx.db.update(providers).set({ enabled: true }).where(eq(providers.id, blocked))
+      await ctx.db.update(providers).set({ enabled: true, mode: 'live' }).where(eq(providers.id, blocked))
     }
   })
 

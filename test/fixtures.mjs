@@ -30,6 +30,7 @@ export function checkoutFixture(path) {
   if (path === '/integration/status') return { data: { enabled: false, linked: false } }
   if (path === '/admin/settings/capabilities') return { data: { allowed: true, encryptionReady: true, mfaEnabled: true, backupsEnabled: true, restoreEnabled: true, maxUploadBytes: 67174400, dualApprovalRial: 100000000 } }
   if (path === '/admin/settings/gateway') return { data: { enabled: true, sandbox: false, configured: true, source: 'store', maskedMerchant: '••••1111', domain: 'example.test', callbackUrl: 'https://example.test/api/v1/payments/tabapay/callback', returnUrl: 'https://example.test/wallet', versions: [] } }
+  if (path === '/admin/settings/creation-funding') return { data: { minimumCoverageDays: 7 } }
   if (path === '/admin/settings/logs') return { data: { items: [{ id: 'audit:1', createdAt: '2026-11-13T08:00:00Z', event: 'system.gateway_updated', service: 'audit', level: 'info', actorId: 'fixture-admin', requestId: 'fixture-request', metadata: { result: 'success' } }], total: 1, page: 1, pages: 1 } }
   if (path === '/admin/settings/finance/users') return { data: [{ id: 'f07b9500-414e-4000-8000-000000000003', name: 'کاربر آزمایشی', email: 'customer@example.test', mobile: '+989120000000', status: 'active', wallets: [{ id: offerId, name: 'کیف پول آزمایشی', balanceRial: 5000000 }] }] }
   if (path === '/admin/settings/finance/adjustments') return { data: { items: [], total: 0, page: 1, pages: 0 } }
@@ -45,6 +46,7 @@ export function checkoutFixture(path) {
   if (path === '/catalog/storefront') {
     const locations = [{ code: 'nbg1', country: 'DE', city: 'Nuremberg' }, { code: 'fsn1', country: 'DE', city: 'Falkenstein' }, { code: 'hel1', country: 'FI', city: 'Helsinki' }, { code: 'ash', country: 'US', city: 'Ashburn' }, { code: 'sin', country: 'SG', city: 'Singapore' }]
     return { data: {
+      minimumCoverageDays: 7,
       datacenters: [{ id: 'hetzner', name: 'Hetzner', logo: '/providers/hetzner.svg', locations, billingPeriods: ['hourly', 'daily', 'monthly'] }],
       offers: locations.flatMap(location => [
         { name: 'CX43', price: 88000, vcpu: 8, memoryMb: 16384, diskGb: 160 },

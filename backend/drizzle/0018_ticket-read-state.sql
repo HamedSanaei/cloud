@@ -1,0 +1,2 @@
+ALTER TABLE "ticket_replies" ADD COLUMN "customer_read_at" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "ticket_replies_ticket_idx" ON "ticket_replies" USING btree ("ticket_id","created_at");

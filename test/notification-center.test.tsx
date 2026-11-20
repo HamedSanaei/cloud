@@ -19,7 +19,7 @@ const open = () => render(<StrictMode><MemoryRouter><NotificationCenter userId="
 beforeEach(() => {
   vi.resetAllMocks()
   vi.stubGlobal('indexedDB', new IDBFactory())
-  getNotifications.mockResolvedValue([notice])
+  getNotifications.mockResolvedValue({ items: [notice], unreadCount: 1 })
 })
 afterEach(() => vi.unstubAllGlobals())
 
@@ -30,14 +30,14 @@ it('shows an unread result once across reconnect and refresh, with its persisten
   first.unmount()
 
   open()
-  const bell = screen.getByRole('button', { name: 'اعلان‌ها' })
+  const bell = await screen.findByRole('button', { name: 'اعلان‌ها، اعلان خوانده‌نشده دارید' })
   fireEvent.click(bell)
   expect((await screen.findByRole('region', { name: 'مرکز اعلان‌ها' })).getAttribute('dir')).toBe('rtl')
   expect(screen.getByRole('link', { name: 'مشاهده جزئیات' }).getAttribute('href')).toBe(notice.href)
   expect(screen.getByText('سرور خاموش شد')).toBeTruthy()
   expect(screen.getByRole('region').querySelector('time')?.dateTime).toBe(notice.createdAt)
 
-  markNotificationsRead.mockImplementation(async () => { getNotifications.mockResolvedValue([{ ...notice, read: true }]) })
+  markNotificationsRead.mockImplementation(async () => { getNotifications.mockResolvedValue({ items: [{ ...notice, read: true }], unreadCount: 0 }) })
   fireEvent.click(screen.getByRole('button', { name: 'خواندم سرور خاموش شد' }))
   expect(await screen.findByText('خوانده‌شده')).toBeTruthy()
   expect(markNotificationsRead).toHaveBeenCalledWith([notice.id])

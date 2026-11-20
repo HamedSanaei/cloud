@@ -28,13 +28,12 @@ export function saveCheckoutDraft(userId: string | undefined, draft: CheckoutDra
 export function clearCheckoutDraft(userId?: string) {
   if (userId) try { sessionStorage.removeItem(storageKey(userId)) } catch { /* No stored draft. */ }
 }
-export function minimumCreationBalance(totalRial: number, period: BillingPeriod): number {
-  return totalRial * ({ hourly: 168, monthly: 1 }[period])
-}
 export interface FundingShortfall { balanceRial: number; requiredBalanceRial: number; shortfallRial: number; orderTotalRial: number }
 export function checkoutFailure(error: unknown): { message: string; funding?: FundingShortfall } {
   const body = error instanceof ApiError ? error.body as { error?: string; details?: FundingShortfall } | null : null
   if (body?.error === 'server_price_changed') return { message: 'قیمت سرور تغییر کرد. مبلغ به‌روز را بررسی و دوباره تأیید کنید.' }
+  if (body?.error === 'funding_policy_changed') return { message: 'حداقل پوشش کیف پول تغییر کرد. شرایط تازه را بررسی و دوباره تأیید کنید.' }
+  if (body?.error === 'funding_policy_unavailable') return { message: 'سیاست پوشش کیف پول موقتاً در دسترس نیست. دوباره تلاش کنید.' }
   if (body?.error === 'insufficient_funds') {
     const funding = body.details
     const valid = funding && [funding.balanceRial, funding.requiredBalanceRial, funding.shortfallRial, funding.orderTotalRial].every(n => Number.isSafeInteger(n) && n >= 0)

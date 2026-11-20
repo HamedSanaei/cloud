@@ -5,7 +5,7 @@ import { AppError, ValidationError } from '../../lib/errors.js'
 import { computePriceFromRules, fxMaxAgeMs, getActiveFxRate, getPricingRules } from '../pricing/service.js'
 import { offeredPeriods, retailBilling, type RetailPeriod } from '../pricing/periods.js'
 import type { ProviderBillingOption, ProviderOsOption } from '../providers/provider.interface.js'
-import { listProviders } from '../providers/registry.js'
+import { saleProviders } from './policy.js'
 import { leasewebTrafficBytes } from '../providers/leaseweb/catalog.js'
 import { hetznerIncludedTraffic, indicativeHetznerTraffic } from '../pricing/hetzner-traffic.js'
 import type { IndicativeTrafficTariff } from '../../contracts/home-tariffs.js'
@@ -42,13 +42,7 @@ type ObserveRetailCost = (offer: { id: string; name: string; location: string },
 // The observer is server-only. The returned storefront always contains retail prices.
 export async function getStorefront(db: DbClient, admin = false, providerFilter?: string, observeCost?: ObserveRetailCost) {
   const config = getConfig()
-  const registered = new Set(listProviders().map((provider) => provider.id))
-  const configured = [
-    { id: 'hetzner', ...config.PROVIDERS.hetzner },
-    { id: 'leaseweb', ...config.PROVIDERS.leaseweb },
-  ].filter((provider) => provider.enabled && provider.orderingEnabled && registered.has(provider.id) && (!providerFilter || providerFilter === provider.id))
-  const providerRows = await db.query.providers.findMany({ where: admin ? undefined : (t) => eq(t.enabled, true) })
-  const active = configured.filter((provider) => providerRows.some((row) => row.id === provider.id && row.mode === 'live'))
+  const active = (await saleProviders(db, admin)).filter(provider => !providerFilter || provider.id === providerFilter)
   const activeIds = new Set(active.map((provider) => provider.id))
   const [products, locations] = await Promise.all([
     db.query.providerProducts.findMany({ where: (t, { and }) => and(eq(t.available, true), eq(t.enabled, true)) }),
@@ -116,7 +110,7 @@ export async function getStorefront(db: DbClient, admin = false, providerFilter?
   }
   offers.sort((a, b) => a.vcpu - b.vcpu || a.memoryMb - b.memoryMb || a.name.localeCompare(b.name))
   const pricingUnavailable = active.filter(provider => eligible.some(product => product.provider === provider.id &&
-    fxByCurrency.get(product.providerCurrency) instanceof AppError)).map(provider => ({ id: provider.id, name: provider.displayName }))
+    fxByCurrency.get(product.providerCurrency) instanceof AppError)).map(provider => ({ id: provider.id, name: provider.name }))
   const firstFxError = [...fxByCurrency.values()].find((fx): fx is AppError => fx instanceof AppError)
   if (!offers.length && firstFxError) throw new AppError(503, firstFxError.code, 'قیمت‌گذاری موقتاً در دسترس نیست. برای دریافت نرخ تازه دوباره تلاش کنید.')
   const now = Date.now()
@@ -138,13 +132,14 @@ export async function getStorefront(db: DbClient, admin = false, providerFilter?
       fxUpdatedAt: fxTimes.length ? new Date(Math.min(...fxTimes.map(({ fx }) => fx.createdAt.getTime()))).toISOString() : null,
     },
     pricingUnavailable,
+    saleProviderIds: [...activeIds],
     datacenters: active.filter(provider => !pricingUnavailable.some(item => item.id === provider.id) || offers.some(offer => offer.provider === provider.id)).map((provider) => {
       const providerOffers = offers.filter((offer) => offer.provider === provider.id)
       const codes = new Set(providerOffers.map((offer) => offer.location))
       const periods = new Set(providerOffers.flatMap((offer) => offer.prices.map((price) => price.period)))
       return {
         id: provider.id,
-        name: provider.displayName,
+        name: provider.name,
         logo: `/providers/${provider.id}.svg`,
         locations: locations.filter((location) => location.provider === provider.id && codes.has(location.code)).map((location) => ({ code: location.code, country: location.country, city: location.city })),
         billingPeriods: (['hourly', 'monthly'] as const).filter((period) => periods.has(period)),

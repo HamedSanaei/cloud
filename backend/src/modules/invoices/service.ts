@@ -1,15 +1,32 @@
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, gte, inArray, lt, or, sql } from 'drizzle-orm'
+import { containsSearch } from '../../lib/list-search.js'
 import type { DbClient } from '../../db/index.js'
 import { invoices } from '../../db/schema.js'
 import { NotFoundError } from '../../lib/errors.js'
 import { writeAudit } from '../audit/service.js'
 
-export async function listInvoices(db: DbClient, userId: string, opts: { limit?: number; offset?: number } = {}) {
+export const customerInvoiceStatuses = ['all', 'pending', 'overdue', 'paid', 'cancelled', 'refunded'] as const
+
+export async function listInvoices(db: DbClient, userId: string, opts: {
+  limit: number; offset: number; search: string; status: typeof customerInvoiceStatuses[number]; now: Date
+}) {
+  const states = {
+    all: undefined,
+    pending: or(eq(invoices.status, 'draft'), and(eq(invoices.status, 'open'), gte(invoices.dueAt, opts.now))),
+    overdue: or(eq(invoices.status, 'overdue'), and(eq(invoices.status, 'open'), lt(invoices.dueAt, opts.now))),
+    paid: eq(invoices.status, 'paid'),
+    cancelled: eq(invoices.status, 'void'),
+    refunded: eq(invoices.status, 'refunded'),
+  }
+  const description = sql`case when ${invoices.description} ~ '^تمدید .*?[-—–]' then
+    regexp_replace(regexp_replace(regexp_replace(${invoices.description}, 'HOURLY[[:space:]]*$', 'ساعتی'), 'DAILY[[:space:]]*$', 'روزانه'), 'MONTHLY[[:space:]]*$', 'ماهانه')
+    else ${invoices.description} end`
   return db.query.invoices.findMany({
-    where: (t) => eq(t.userId, userId),
-    orderBy: (t, { desc }) => [desc(t.createdAt)],
-    limit: opts.limit ?? 50,
-    offset: opts.offset ?? 0,
+    where: and(eq(invoices.userId, userId), states[opts.status], opts.search
+      ? containsSearch(sql`concat_ws(' ', ${invoices.invoiceNumber}, ${invoices.description}, ${description})`, opts.search) : undefined),
+    orderBy: (t, { desc }) => [desc(t.createdAt), desc(t.id)],
+    limit: opts.limit,
+    offset: opts.offset,
   })
 }
 
@@ -50,6 +67,6 @@ export async function countOpenInvoices(db: DbClient, userId: string): Promise<n
   const rows = await db
     .select({ n: sql<number>`count(*)` })
     .from(invoices)
-    .where(and(eq(invoices.userId, userId), eq(invoices.status, 'open')))
+    .where(and(eq(invoices.userId, userId), inArray(invoices.status, ['open', 'overdue'])))
   return Number(rows[0]?.n ?? 0)
 }

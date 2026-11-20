@@ -1,11 +1,55 @@
 import { enqueueSms } from '../notifications/sms.js'
-import { and, eq, notInArray } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm'
 import type { DbClient } from '../../db/index.js'
 import { servers, tickets, ticketReplies } from '../../db/schema.js'
 import { ConflictError, NotFoundError } from '../../lib/errors.js'
 import { writeAudit } from '../audit/service.js'
 import { ticketToDto } from '../../lib/dto.js'
 import { publishNotification } from '../notifications/service.js'
+import { containsSearch } from '../../lib/list-search.js'
+
+// Keep the outer ID qualified when Drizzle renders this as a selected expression.
+const hasUnreadReply = sql<boolean>`exists (select 1 from ${ticketReplies} where
+  ${ticketReplies.ticketId} = ${tickets}.${sql.identifier(tickets.id.name)} and ${ticketReplies.customerReadAt} is null)`
+
+export async function listCustomerTickets(db: DbClient, userId: string, filters: {
+  search: string; status: string; department: string; limit: number; offset: number
+}) {
+  const rows = await db.select({ ticket: tickets, unread: hasUnreadReply }).from(tickets)
+    .where(and(eq(tickets.userId, userId), filters.status === 'all' ? undefined : eq(tickets.status, filters.status),
+      filters.department === 'all' ? undefined : eq(tickets.department, filters.department),
+      filters.search ? containsSearch(tickets.title, filters.search) : undefined))
+    .orderBy(desc(tickets.updatedAt), desc(tickets.id)).limit(filters.limit).offset(filters.offset)
+  return rows.map(row => ticketToDto({ ...row.ticket, unread: row.unread }))
+}
+
+export async function customerTicketSummary(db: DbClient, userId: string) {
+  const [counts] = await db.select({
+    total: sql<number>`count(*)::int`,
+    open: sql<number>`(count(*) filter (where ${tickets.status} in ('pending', 'review')))::int`,
+    reviewing: sql<number>`(count(*) filter (where ${tickets.status} = 'review'))::int`,
+    answered: sql<number>`(count(*) filter (where ${tickets.status} = 'answered'))::int`,
+    unread: sql<number>`(count(*) filter (where ${hasUnreadReply}))::int`,
+  }).from(tickets).where(eq(tickets.userId, userId))
+  return counts!
+}
+
+export async function customerTicket(db: DbClient, userId: string, id: string) {
+  const ticket = await db.query.tickets.findFirst({ where: t => and(eq(t.id, id), eq(t.userId, userId)) })
+  if (!ticket) throw new NotFoundError('تیکت یافت نشد.')
+  const rows = await db.query.ticketReplies.findMany({ where: t => eq(t.ticketId, id), orderBy: (t, { asc }) => [asc(t.createdAt), asc(t.id)],
+    columns: { id: true, body: true, createdAt: true, customerReadAt: true } })
+  const replies = rows.map(({ customerReadAt, ...reply }) => ({ ...reply, read: customerReadAt !== null }))
+  return { ...ticketToDto({ ...ticket, unread: replies.some(reply => !reply.read) }), replies }
+}
+
+export async function readTicketReplies(db: DbClient, userId: string, id: string, replyIds: string[]) {
+  const owned = await db.query.tickets.findFirst({ where: t => and(eq(t.id, id), eq(t.userId, userId)), columns: { id: true } })
+  if (!owned) throw new NotFoundError('تیکت یافت نشد.')
+  await db.update(ticketReplies).set({ customerReadAt: new Date() }).where(and(
+    eq(ticketReplies.ticketId, id), inArray(ticketReplies.id, replyIds), isNull(ticketReplies.customerReadAt),
+  ))
+}
 
 export async function ticketServers(db: DbClient, userId: string) {
   return db.select({ id: servers.id, name: servers.hostname, ip: servers.ipv4, status: servers.status })

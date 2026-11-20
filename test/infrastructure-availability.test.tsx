@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { IpsPage, TrafficPackagesPage } from '../src/pages/InfrastructurePages'
@@ -91,4 +91,21 @@ describe.each(scenarios)('$service purchase availability', scenario => {
     await screen.findByText(new RegExp(`بررسی امکان خرید ${scenario.name} ناموفق بود`))
     expect(disabled(scenario.label)).toBe(true); expect(purchases).toEqual([])
   })
+})
+
+it('matches IPv6 without case sensitivity and offers a usable reset for empty filters', async () => {
+  const fallback = globalThis.fetch
+  vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => url.endsWith('/ips')
+    ? Promise.resolve(Response.json({ data: [{ ...scenarios[0].item, address: '2001:db8::abcd', version: 'IPv6' }] }))
+    : fallback(url, init)))
+  const user = userEvent.setup()
+  open(<IpsPage />)
+  await user.type(screen.getByRole('textbox', { name: 'جستجو' }), '2001:DB8::ABCD')
+  expect(await screen.findByRole('cell', { name: 'فعال' })).toBeTruthy()
+  await user.selectOptions(screen.getByRole('combobox', { name: 'نوع آی‌پی' }), 'IPv4')
+  const card = within(document.querySelector('.resource-empty-card') as HTMLElement)
+  expect(card.getByText(/با این جستجو یا فیلترها یافت نشد/)).toBeTruthy()
+  expect(card.queryByRole('button', { name: 'خرید آی‌پی' })).toBeNull()
+  await user.click(card.getByRole('button', { name: 'پاک کردن فیلترها' }))
+  expect(screen.getByText('2001:db8::abcd')).toBeTruthy()
 })
