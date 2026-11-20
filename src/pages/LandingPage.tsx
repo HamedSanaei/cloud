@@ -13,7 +13,7 @@ const kalamehStylesheet = /^[a-f0-9]{64}$/.test(kalamehVersion ?? '') ? `/kalame
 
 const providers = [
   { id: 'asiatech', name: 'آسیاتک', logo: '/providers/asiatech.svg', region: 'ایران', title: 'خرید سرور ایران', tone: 'blue', link: '#iran-server', action: 'وضعیت عرضه و تعرفهٔ ایران', bullets: ['میزبانی در ایران برای مخاطبان داخل کشور', 'تعرفهٔ ماهانهٔ منابع پس از تأیید منتشر می‌شود'] },
-  { id: 'hetzner', name: 'Hetzner', logo: '/providers/hetzner.svg', region: 'اروپا', title: 'خرید سرور هتزنر', tone: 'rose', link: '/hetzner', action: 'مشاهدهٔ پلن‌های هتزنر', bullets: ['مقایسهٔ موقعیت، منابع و ترافیک مشمول', 'دوره‌های پرداخت مطابق پلن‌های قابل سفارش'] },
+  { id: 'hetzner', name: 'Hetzner', logo: '/providers/hetzner.svg', region: 'اروپا، آمریکا و سنگاپور', title: 'خرید سرور هتزنر', tone: 'rose', link: '/hetzner#tariffs', action: 'مشاهدهٔ پلن‌های هتزنر', bullets: ['مقایسهٔ موقعیت، منابع و ترافیک مشمول', 'دوره‌های پرداخت مطابق پلن‌های قابل سفارش'] },
   { id: 'leaseweb', name: 'Leaseweb', logo: '/providers/leaseweb.svg', region: 'خارج', title: 'سرور ابری لیزوب', tone: 'cyan', link: '/servers/create', action: 'بررسی موجودی لیزوب در پنل', bullets: ['موقعیت و دورهٔ پرداخت در پنل سفارش مشخص می‌شود'] },
 ]
 

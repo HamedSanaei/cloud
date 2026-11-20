@@ -48,10 +48,10 @@ try {
     assert.ok(html.includes('<th scope="col">لوکیشن</th>'))
     assert.ok(html.includes('<summary aria-label="فنلاند"><img src="/flags/fi.svg"'))
     assert.ok(html.includes('<bdi>Helsinki، hel1</bdi>'))
-    assert.ok(html.includes('offer=fixture-plan&amp;period=hourly&amp;location=hel1'))
+    assert.ok(html.includes('offer=fixture-plan&amp;period=monthly&amp;location=hel1'))
     assert.ok(html.includes('۶۷۸٬۹۰۰ تومان'))
     assert.ok(!html.includes('انتخاب ساعتی') && !html.includes('انتخاب ماهانه'))
-    assert.ok(html.includes('۲۰ TB') && html.includes('۳۳٬۳۴۵ تومان'))
+    assert.ok(html.includes('۲۰ TiB') && html.includes('۳۳٬۳۴۵ تومان'))
     assert.ok(html.includes('og:image') && html.includes('/parserver-share.png'))
     assert.ok(!html.includes('<!--#'), 'SSI directives must be resolved, not exposed')
     assert.ok(html.includes('application/ld+json'))
@@ -62,7 +62,7 @@ try {
   assert.equal(redirect.status, 308); assert.equal(redirect.headers.get('location'), 'https://parserver.ir/hetzner?period=hourly&x=one%20two')
   const http = await fetch(origin + '/hetzner?x=one%20two', { headers: { 'x-forwarded-proto': 'http' }, redirect: 'manual' })
   assert.equal(http.status, 308); assert.equal(http.headers.get('location'), 'https://parserver.ir/hetzner?x=one%20two')
-  for (const uri of ['/dashboard', '/tickets', '/login', '/register', '/servers/create?offer=fixture-plan&period=hourly', '/servers/fixture-id', '/admin/settings/sms', '/admin/settings/hetzner-margin', '/admin/settings/admin-roles', '/auth/callback']) {
+  for (const uri of ['/dashboard', '/tickets', '/login', '/register', '/terms', '/privacy', '/servers/create?offer=fixture-plan&period=monthly', '/servers/fixture-id', '/admin/settings/sms', '/admin/settings/hetzner-margin', '/admin/settings/admin-roles', '/auth/callback']) {
     const response = await fetch(origin + uri)
     assert.equal(response.status, 200, uri); assert.ok(response.headers.get('x-robots-tag')?.includes('noindex'), uri)
     assert.ok((await response.text()).includes('content="noindex,follow"'), uri)

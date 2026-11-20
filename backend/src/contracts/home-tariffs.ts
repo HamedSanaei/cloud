@@ -23,7 +23,7 @@ export interface IndicativeTrafficTariff {
   ruleVersion: string
 }
 export const isTrafficByteCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
-export const indicativeOverageNotice = 'سهمیه با واحد کنسول هتزنر (۲ به توان ۴۰ بایت) نمایش داده می‌شود. قیمت ترافیک مازاد به ازای هر TB ده‌دهی (۱٬۰۰۰ گیگابایت) است. هزینهٔ مازاد ساعتی محاسبه می‌شود و بر اساس مصرف ثبت‌شده در کیف پول و فاکتور درج می‌شود.'
+export const indicativeOverageNotice = 'سهمیه با TiB (۲ به توان ۴۰ بایت) نمایش داده می‌شود که کنسول هتزنر آن را TB می‌نامد. قیمت ترافیک مازاد به ازای هر TB ده‌دهی (۱٬۰۰۰ گیگابایت) است. هزینهٔ مازاد ساعتی محاسبه می‌شود و بر اساس مصرف ثبت‌شده در کیف پول و فاکتور درج می‌شود.'
 export interface PublicTariffMeta {
   checkedAt: string; validUntil: string; catalogUpdatedAt: string | null; fxUpdatedAt: string | null
   status: 'available' | 'unavailable' | 'not_published' | 'pricing_unavailable' | 'temporarily_unavailable'
@@ -117,7 +117,7 @@ function locationCell(offer: PublicHetznerOffer) {
 }
 const number = new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 })
 const moneyDisplay = new Intl.NumberFormat('fa-IR', { useGrouping: true, maximumFractionDigits: 0 })
-export const hetznerTrafficQuota = (bytes: number | null | undefined) => isTrafficByteCount(bytes) ? `${number.format(bytes / 2 ** 40)} TB` : 'اعلام نشده'
+export const hetznerTrafficQuota = (bytes: number | null | undefined, unit: 'TB' | 'TiB' = 'TB') => isTrafficByteCount(bytes) ? `${number.format(bytes / 2 ** 40)} ${unit}` : 'اعلام نشده'
 export const tariffTime = new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Tehran' })
 const toman = (rial: number) => `${moneyDisplay.format(rial / 10)} تومان`
 const inquiry = 'استعلام قیمت'
@@ -127,6 +127,8 @@ const wrapTable = (caption: string, headings: string[], body: string, hetzner = 
 export const hetznerTariffHeading = 'تعرفه سرور هتزنر'
 
 export function renderTariffSections(iran: IranTariffs | null, hetzner: PublicHetznerOffer[] | null, meta?: PublicTariffMeta, scope: TariffScope = 'all', sort: TariffSort | TariffPeriod = defaultTariffSort, countryFiltered = false) {
+  const period = typeof sort === 'string' ? sort : sort.period
+  const otherPeriod = period === 'monthly' ? 'hourly' : 'monthly'
   const iranRows = (Object.keys(iranResources) as IranResource[]).map(key => {
     const rate = iran?.rates[key]
     const unit = key === 'cpu' ? '۱ هسته vCPU' : key === 'ram' ? '۱ گیگابایت RAM' : iran ? `۱ ${escapeHtml(iran.trafficUnit)}` : 'واحد پس از تأیید قرارداد'
@@ -137,27 +139,28 @@ export function renderTariffSections(iran: IranTariffs | null, hetzner: PublicHe
     : `<bdi>${toman(price)}</bdi>`
   const planLink = (offer: PublicHetznerOffer) => {
     const name = `<bdi>${escapeHtml(offer.name)}</bdi>`
-    const period = offer.hourly !== null ? 'hourly' : offer.monthly !== null ? 'monthly' : null
-    if (!period) return name
-    const label = period === 'hourly' ? 'ساعتی' : 'ماهانه'
-    return `<a href="/servers/create?offer=${encodeURIComponent(offer.id)}&amp;period=${period}&amp;location=${encodeURIComponent(offer.location)}" aria-label="خرید ${escapeHtml(offer.name)} ${label} در ${escapeHtml(offer.location)}">${name}</a>`
+    const orderPeriod = offer[period] !== null ? period : otherPeriod
+    if (offer[orderPeriod] === null) return name
+    const label = orderPeriod === 'hourly' ? 'ساعتی' : 'ماهانه'
+    const periodNote = orderPeriod === period ? '' : `<small class="tariff-plan-period">سفارش ${label}</small>`
+    return `<a href="/servers/create?offer=${encodeURIComponent(offer.id)}&amp;period=${orderPeriod}&amp;location=${encodeURIComponent(offer.location)}" aria-label="خرید ${escapeHtml(offer.name)} ${label} در ${escapeHtml(offer.location)}">${name}${periodNote}</a>`
   }
   const sorted = sortHetznerOffers(hetzner ?? [], sort)
   const hetznerTable = hetzner?.length ? '<p class="tariff-scroll-hint">برای دیدن همهٔ قیمت‌ها، جدول را افقی پیمایش کنید.</p>' +
-    wrapTable('پلن‌های قابل سفارش هتزنر', ['پلن', 'لوکیشن', 'vCPU', 'RAM (گیگابایت)', 'فضای دیسک (گیگابایت)', 'ترافیک ماهانهٔ مشمول', 'ساعتی (تومان / ساعت)', 'ماهانه (تومان / ماه)', 'قیمت هر ترابایت ترافیک مازاد (تومان / TB)'],
+    wrapTable('پلن‌های قابل سفارش هتزنر', ['پلن', 'لوکیشن', 'vCPU', 'RAM (گیگابایت)', 'فضای دیسک (گیگابایت)', 'ترافیک ماهانهٔ مشمول (TiB، واحد کنسول هتزنر)', 'ساعتی (تومان / ساعت)', 'ماهانه (تومان / ماه)', 'هزینهٔ ترافیک مازاد (تومان / TB ده‌دهی)'],
     sorted.map(offer => `<tr><th scope="row">${planLink(offer)}${offer.diskType ? `<small class="tariff-disk-type">نوع دیسک <bdi>${escapeHtml(offer.diskType)}</bdi></small>` : ''}</th>${locationCell(offer)}` +
       `<td>${number.format(offer.vcpu)}</td><td>${number.format(offer.memoryMb / 1024)}</td><td>${number.format(offer.diskGb)}</td>` +
-      `<td><bdi>${hetznerTrafficQuota(offer.includedTrafficBytes ?? offer.trafficOverage?.includedBytes)}</bdi></td>` +
+      `<td><bdi>${hetznerTrafficQuota(offer.includedTrafficBytes ?? offer.trafficOverage?.includedBytes, 'TiB')}</bdi></td>` +
       `<td>${displayPrice(offer.hourly, 'hourly')}</td><td>${displayPrice(offer.monthly, 'monthly')}</td><td>${offer.trafficOverage ? `<bdi>${toman(offer.trafficOverage.perTbRial)}</bdi>` : 'نرخ معتبر در دسترس نیست'}</td></tr>`).join(''), true)
     : `<p role="status">${countryFiltered ? 'سروری برای این کشور یافت نشد' : meta?.status === 'pricing_unavailable' ? 'نرخ ارز معتبر برای محاسبهٔ قیمت هتزنر در دسترس نیست؛ پس از تأیید نرخ تازه، قیمت‌ها نمایش داده می‌شوند.' : hetzner === null ? 'دریافت تعرفهٔ هتزنر موقتاً ممکن نیست.' : 'در حال حاضر پلن قابل سفارش هتزنر برای نمایش وجود ندارد.'}</p>`
   const iranSection = `<section id="iran-server"><h3>تعرفه سرور ایران (ماهانه)</h3>` +
     (iran ? `<p>${iran.trafficUnit === 'TB' ? 'هر TB برابر ۱٬۰۰۰ GB است.' : 'هر TiB برابر ۱٬۰۲۴ GiB است.'} نرخ‌ها ${iran.tax === 'included' ? 'شامل مالیات هستند' : 'بدون مالیات هستند'}.</p>`
       : '<p>تعرفهٔ تأییدشدهٔ آسیاتک هنوز منتشر نشده است. برای خرید سرور ایران، وضعیت عرضه و قیمت را از پشتیبانی استعلام کنید.</p>') +
     wrapTable('نرخ واحد منابع سرور ایران', ['منبع', 'واحد', 'قیمت ماهانه'], iranRows) +
-    '<p>این ارقام نرخ واحد منابع‌اند. هزینهٔ دیسک، IPv4 و بسته‌های اضافی در قیمت کامل ماشین مشخص می‌شود.</p></section>'
+    '<p>این ارقام نرخ واحد منابع‌اند. هزینهٔ دیسک، IPv4 و بسته‌های اضافی در قیمت کامل ماشین مشخص می‌شود.</p>' +
+    '<p class="tariff-inquiry"><a href="/tickets">استعلام قیمت سرور ایران از پشتیبانی</a> برای ثبت تیکت، وارد حساب خود شوید.</p></section>'
   const date = (value: string) => `<time datetime="${escapeHtml(value)}">${tariffTime.format(new Date(value))}</time>`
   const time = meta ? `<p class="tariff-freshness">بررسی قیمت: ${date(meta.checkedAt)} (تهران).${meta.catalogUpdatedAt ? ` تعرفهٔ کاتالوگ: ${date(meta.catalogUpdatedAt)}.` : ''}${meta.fxUpdatedAt ? ` نرخ ارز: ${date(meta.fxUpdatedAt)}.` : ''} این جدول پیش‌فاکتور قطعی نیست.</p>` : ''
-  const period = typeof sort === 'string' ? sort : sort.period
   const cheapest = sortHetznerOffers(hetzner ?? [], period)[0]
   const amount = cheapest?.[period]
   const affordable = cheapest && amount != null ? `<p>کم‌هزینه‌ترین گزینهٔ همین فهرست برای پرداخت ${period === 'hourly' ? 'ساعتی' : 'ماهانه'}: <bdi>${escapeHtml(cheapest.name)}</bdi> در <bdi>${escapeHtml(publicLocation(cheapest))}</bdi>، <bdi>${toman(amount)}</bdi>. این مقایسه فقط بین پلن‌های منتشرشدهٔ پارس سرور است.</p>` : ''

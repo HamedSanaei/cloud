@@ -344,7 +344,7 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
         <section className="auth-card">
           <header className="auth-card-header">
             <Link className="public-logo" to="/"><BrandMark /><strong>{BRAND_NAME}</strong></Link>
-            <span><ShieldCheck size={17} /> ورود امن</span>
+            <span><ShieldCheck size={17} /> {intent === 'register' ? 'ثبت‌نام امن' : 'ورود امن'}</span>
           </header>
 
           {success ? (
@@ -456,7 +456,10 @@ export function AuthPage({ intent, adminEntry = false }: { intent: AuthIntent; a
               )}
             </>
           )}
-          <footer className="auth-card-footer">با ادامه، قوانین استفاده و حریم خصوصی را می‌پذیرید.</footer>
+          <footer className="auth-card-footer">
+            با ادامه، <Link to="/terms" target="_blank" rel="noopener">قوانین استفاده</Link> و{' '}
+            <Link to="/privacy" target="_blank" rel="noopener">حریم خصوصی</Link> را می‌پذیرید.
+          </footer>
         </section>
       </div>
     </main>

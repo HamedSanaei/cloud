@@ -1,4 +1,7 @@
 .public-container { width: min(1280px, calc(100% - 64px)); margin-inline: auto; }
+.legal-document { max-width: 760px; padding-block: clamp(32px, 6vw, 80px); display: grid; gap: 24px; line-height: 1.9; }
+.legal-document h2 { font-size: 1.125rem; }
+:is(.legal-document, .auth-card-footer, .tariff-inquiry) a { color: #1f5bd0; text-decoration: underline; text-underline-offset: 3px; }
 .public-brand-mark { width: 36px; height: 36px; border-radius: 10px; background: #2869e8; display: inline-flex; flex-direction: column; justify-content: center; gap: 4px; padding: 8px; box-shadow: 0 8px 18px rgb(40 105 232 / 24%); }
 .public-brand-mark i { height: 4px; border-radius: 4px; background: white; display: block; }
 .public-logo { display: inline-flex; align-items: center; gap: 11px; font-size: 20px; color: #111827; }
@@ -146,7 +149,7 @@
 .tariff-scroll th { background: #f5f8fc; }
 .tariff-scroll td { font-variant-numeric: tabular-nums; }
 .tariff-scroll a { color: #1751a0; text-decoration: underline; white-space: nowrap; }
-.tariff-disk-type { display: block; color: #475569; font-weight: 400; }
+.tariff-disk-type, .tariff-plan-period { display: block; color: #475569; font-weight: 400; }
 #hetzner-server table { min-width: 960px; }
 .tariff-scroll--hetzner { overflow: visible; }
 .tariff-scroll--hetzner table { border-collapse: separate; border-spacing: 0; }

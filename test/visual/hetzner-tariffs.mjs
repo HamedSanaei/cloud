@@ -76,7 +76,7 @@ try {
         await sort.selectOption(`${field}:desc`)
         assert.match(await names.first().textContent(), field === 'traffic' ? /-8$/ : /-9$/)
         if (field === 'traffic') assert.match(await names.last().textContent(), /-9$/)
-        assert.match(await names.first().getAttribute('href'), /period=hourly/)
+        assert.match(await names.first().getAttribute('href'), /period=monthly/)
       }
       await sort.selectOption('price:asc')
 

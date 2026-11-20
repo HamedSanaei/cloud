@@ -29,7 +29,10 @@ it('renders trusted public prices, scopes table headers and links to the actual 
   expect(hetzner.getByRole('rowheader').textContent).toContain('CX <test>')
   expect(hetzner.getByText('۱۲٬۳۴۵ تومان')).toBeTruthy()
   expect(hetzner.getByRole('link', { name: /خرید CX/ }).getAttribute('href')).toBe('/servers/create?offer=fixture&period=hourly&location=hel1')
+  expect(hetzner.getByText('سفارش ساعتی')).toBeTruthy()
   expect(hetzner.getByText('قیمت ماهانهٔ معتبر در دسترس نیست')).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'استعلام قیمت سرور ایران از پشتیبانی' }).getAttribute('href')).toBe('/tickets')
+  expect(screen.getByText(/برای ثبت تیکت، وارد حساب خود شوید/)).toBeTruthy()
   expect(screen.getByText('۰ تومان')).toBeTruthy()
 })
 
@@ -47,11 +50,13 @@ it.each(['all', 'hetzner'] as const)('shows the same rounded money and exact all
   expect(within(location).getByText('hel1')).toBeTruthy()
   expect(within(location).getByText('کشور نامشخص')).toBeTruthy()
   expect(prices.map(cell => cell.textContent)).toEqual([
-    '۲', '۴', '۴۰', '۰٫۵ TB', '۱۲۳٬۴۵۷ تومان', '۵٬۰۰۰٬۰۰۰ تومان', '۳۳۳٬۴۵۶ تومان',
+    '۲', '۴', '۴۰', '۰٫۵ TiB', '۱۲۳٬۴۵۷ تومان', '۵٬۰۰۰٬۰۰۰ تومان', '۳۳۳٬۴۵۶ تومان',
   ])
   expect(within(table).getAllByRole('link')).toHaveLength(1)
   expect(within(table).getByRole('columnheader', { name: 'RAM (گیگابایت)' })).toBeTruthy()
   expect(within(table).getByRole('columnheader', { name: 'فضای دیسک (گیگابایت)' })).toBeTruthy()
+  expect(within(table).getByRole('columnheader', { name: /مشمول.*TiB/ })).toBeTruthy()
+  expect(within(table).getByRole('columnheader', { name: /مازاد.*TB ده‌دهی/ })).toBeTruthy()
   expect(screen.getByRole('heading', { name: 'تعرفه سرور هتزنر', level: 3 })).toBeTruthy()
   expect(screen.getByText(/هزینهٔ مازاد ساعتی محاسبه می‌شود/)).toBeTruthy()
   expect(screen.getByText(/کم‌هزینه‌ترین گزینهٔ همین فهرست/).textContent).toContain('۵٬۰۰۰٬۰۰۰ تومان')
@@ -102,8 +107,8 @@ it('sorts by independent retail monthly prices and filters real catalog location
   const bar = screen.getByRole('heading', { name: 'تعرفه سرور هتزنر' }).parentElement!
   expect(within(bar).getAllByRole('combobox')).toHaveLength(3)
   expect(firstPlan().textContent).toBe('CX Germany')
-  expect(firstPlan().getAttribute('href')).toContain('period=hourly')
-  expect(firstPlan().getAttribute('href')).toBe('/servers/create?offer=de&period=hourly&location=nbg1')
+  expect(firstPlan().getAttribute('aria-label')).toBe('خرید CX Germany ماهانه در nbg1')
+  expect(firstPlan().getAttribute('href')).toBe('/servers/create?offer=de&period=monthly&location=nbg1')
   fireEvent.change(screen.getByLabelText('مبنای قیمت'), { target: { value: 'hourly' } })
   expect(firstPlan().textContent).toBe('CX monthly')
   fireEvent.change(screen.getByLabelText('موقعیت دیتاسنتر'), { target: { value: 'hel1' } })
@@ -156,7 +161,7 @@ it('uses actual countries, reconciles location filters and preserves sort and or
   expect(plans()).toEqual(['CX fsn1', 'CX nbg1'])
   await user.selectOptions(screen.getByLabelText('مبنای قیمت'), 'monthly')
   expect(plans()).toEqual(['CX nbg1', 'CX fsn1'])
-  expect(table().getByRole('link', { name: /خرید CX nbg1/ }).getAttribute('href')).toBe('/servers/create?offer=nbg1&period=hourly&location=nbg1')
+  expect(table().getByRole('link', { name: /خرید CX nbg1/ }).getAttribute('href')).toBe('/servers/create?offer=nbg1&period=monthly&location=nbg1')
   await user.selectOptions(screen.getByLabelText('مرتب‌سازی بر اساس'), 'price:desc')
   expect(plans()).toEqual(['CX fsn1', 'CX nbg1'])
   expect(screen.getByText(/کم‌هزینه‌ترین گزینهٔ همین فهرست/).textContent).toContain('CX nbg1')
