@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { expect, it, vi } from 'vitest'
 import { renderHomepage } from '../src/home-entry'
 import { publicPages } from '../src/public/metadata'
+import { RootRoutes } from '../src/public/RootRoutes'
 import { AuthProvider, ProtectedRoute } from '../src/auth/AuthContext'
 import { AuthPage } from '../src/pages/AuthPages'
 import * as auth from '../src/lib/auth'
@@ -22,10 +23,35 @@ it('renders distinct crawlable Persian public pages with one H1 and visible guid
   expect(hetzner).not.toContain('landing-home')
   expect(hetzner).not.toContain('/kalameh/home.css')
   expect(home).toContain('تعرفه سرور ایران')
+  const homeDoc = new DOMParser().parseFromString(home, 'text/html')
+  const hetznerCard = homeDoc.querySelector('.server-offer.rose')
+  expect(hetznerCard?.querySelector('.server-offer-brand span')?.textContent).toBe('اروپا، آمریکا و سنگاپور · Hetzner')
+  expect(hetznerCard?.querySelector('a')?.getAttribute('href')).toBe('/hetzner#tariffs')
   expect(hetzner).toContain('سرور ارزان هتزنر کدام است؟')
+  expect(hetzner).toContain('«قیمت کم به زیاد» را انتخاب کنید')
   expect(hetzner).toContain('ثابت می‌ماند')
   expect(publicPages['/'].title).not.toBe(publicPages['/hetzner'].title)
   expect(publicPages['/'].description).not.toBe(publicPages['/hetzner'].description)
+})
+
+it.each([
+  ['/login', 'ورود به حساب | پارس سرور', 'ورود امن'],
+  ['/register', 'ساخت حساب | پارس سرور', 'ثبت‌نام امن'],
+])('gives %s a distinct tab title and links to both public documents', async (path, title, badge) => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({}, { status: 401 })))
+  render(<MemoryRouter initialEntries={[path]}><AuthProvider><RootRoutes initialPath={path} /></AuthProvider></MemoryRouter>)
+  expect((await screen.findByRole('link', { name: 'قوانین استفاده' })).getAttribute('href')).toBe('/terms')
+  expect(screen.getByRole('link', { name: 'حریم خصوصی' }).getAttribute('href')).toBe('/privacy')
+  expect(screen.getByText(badge)).toBeTruthy()
+  expect(document.title).toBe(title)
+})
+
+it.each([['/terms', 'قوانین استفاده'], ['/privacy', 'حریم خصوصی']])('renders the document at %s for an anonymous visitor', (path, title) => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({}, { status: 401 })))
+  render(<MemoryRouter initialEntries={[path]}><AuthProvider><RootRoutes initialPath={path} /></AuthProvider></MemoryRouter>)
+  expect(screen.getByRole('heading', { level: 1, name: title })).toBeTruthy()
+  expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(3)
+  expect(document.title).toBe(`${title} | پارس سرور`)
 })
 
 const intent = '/servers/create?offer=real-plan&period=monthly&location=hel1'

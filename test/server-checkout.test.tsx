@@ -74,8 +74,12 @@ describe('Issue #3 server checkout', () => {
     expect(posts).toEqual([])
   })
 
-  it('opens a public offer in its available billing period without placing an order', async () => {
-    open('/servers/create?offer=Cheap&period=hourly')
+  it.each(['hourly', 'monthly'])('opens a public %s offer without placing an order', async period => {
+    availableCatalog = {
+      datacenters: catalog.datacenters.map(dc => ({ ...dc, billingPeriods: ['hourly', 'monthly'] })),
+      offers: catalog.offers.map(item => ({ ...item, prices: [...item.prices, { period: 'monthly', totalRial: 1000000 }] })),
+    }
+    open(`/servers/create?offer=Cheap&period=${period}&location=nbg1`)
     expect(await screen.findByRole('button', { name: /Ubuntu/ })).toBeTruthy()
     expect(posts).toEqual([])
   })

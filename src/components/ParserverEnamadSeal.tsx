@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 const verificationUrl = 'https://trustseal.enamad.ir/?id=8506441&Code=qAgsd2UnHkJB0JD4tk3jLsfi4WbpYfLk'
+const verificationLabel = 'استعلام نماد اعتماد الکترونیکی پارس سرور'
 
 // The eNamad-issued snippet must remain byte-for-byte unchanged.
 export const PARSERVER_ENAMAD_HTML = `<a referrerpolicy='origin' target='_blank' href='https://trustseal.enamad.ir/?id=8506441&Code=qAgsd2UnHkJB0JD4tk3jLsfi4WbpYfLk'><img referrerpolicy='origin' src='https://trustseal.enamad.ir/logo.aspx?id=8506441&Code=qAgsd2UnHkJB0JD4tk3jLsfi4WbpYfLk' alt='' style='cursor:pointer' code='qAgsd2UnHkJB0JD4tk3jLsfi4WbpYfLk'></a>`
@@ -11,8 +12,10 @@ function OfficialSeal() {
   const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
-    const image = imageContainer.current?.querySelector('img')
-    if (!image) return
+    const link = imageContainer.current?.querySelector('a')
+    const image = link?.querySelector('img')
+    if (!link || !image) return
+    link.setAttribute('aria-label', verificationLabel)
     const loaded = () => setStatus('loaded')
     const failed = () => setStatus('failed')
     image.addEventListener('load', loaded)

@@ -30,6 +30,7 @@ describe('parserver eNamad seal', () => {
     fireEvent.load(retriedImage)
     expect(screen.queryByRole('status')).toBeNull()
     expect((container.querySelector('.parserver-enamad-seal__image') as HTMLElement).hidden).toBe(false)
+    expect(screen.getByRole('link', { name: 'استعلام نماد اعتماد الکترونیکی پارس سرور' }).getAttribute('href')).toBe(href)
     expect(screen.queryByRole('button', { name: 'تلاش دوباره' })).toBeNull()
   })
 
@@ -47,6 +48,7 @@ describe('parserver eNamad seal', () => {
     const { container } = render(<ParserverEnamadSeal hostname="parserver.ir" />)
     expect(screen.queryByRole('status')).toBeNull()
     expect((container.querySelector('.parserver-enamad-seal__image') as HTMLElement).hidden).toBe(false)
+    expect(screen.getByRole('link', { name: 'استعلام نماد اعتماد الکترونیکی پارس سرور' }).getAttribute('href')).toBe(href)
     expect(container.querySelector('img')?.getAttribute('src')).toBe(imgSrc)
   })
 

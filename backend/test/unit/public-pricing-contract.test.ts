@@ -11,8 +11,9 @@ it('includes all prices in SSR and keeps the extra TB rate indicative', () => {
   expect(html).toContain('۱۲٬۳۴۵ تومان')
   expect(html).toContain('۶۷۸٬۹۰۰ تومان')
   expect(html).toContain('۳۳٬۳۴۵ تومان')
-  expect(html).toContain('۰٫۵ TB')
-  expect(html).toContain('period=hourly&amp;location=hel1')
+  expect(html).toContain('۰٫۵ TiB')
+  expect(html).toContain('period=monthly&amp;location=hel1')
+  expect(renderHomeTariffs(null, [priced], meta, 'hetzner', 'hourly')).toContain('period=hourly&amp;location=hel1')
   expect(html).toContain('هزینهٔ مازاد ساعتی محاسبه می‌شود')
   expect(html).not.toContain('استعلامی')
   expect(html).not.toContain('انتخاب ماهانه')
@@ -20,10 +21,10 @@ it('includes all prices in SSR and keeps the extra TB rate indicative', () => {
   expect(embeddedPrices(html)?.hetzner).toEqual([priced])
   expect(isPublicHomePrices({ iran: null, hetzner: [{ ...priced, trafficOverage: { ...priced.trafficOverage, perTbRial: 0 } }], meta })).toBe(false)
 })
-it('shows a verified 20 TB quota independently of a missing overage price', () => {
+it('shows the verified 20 TiB console quota independently of a missing overage price', () => {
   const offer = { ...plan, trafficGb: 21_990, includedTrafficBytes: 20 * 2 ** 40, trafficOverage: null }
   const html = renderHomeTariffs(null, [offer], meta)
-  expect(html).toContain('۲۰ TB')
+  expect(html).toContain('۲۰ TiB')
   expect(html).not.toContain('۲۱٬۹۹۰')
   expect(html).toContain('نرخ معتبر در دسترس نیست')
   expect(embeddedPrices(html)?.hetzner).toEqual([offer])
