@@ -21,6 +21,7 @@ import { safeMetadata } from './events.js'
 import { acknowledgeRenewalAlert, listRenewalAlerts } from '../billing/renewal-alerts.js'
 import { diagnoseGateway, gatewayStatus, updateGateway } from './gateway.js'
 import { adjustmentSchema, approveAdjustment, findFinancialUser, requestAdjustment } from './finance.js'
+import { linkRejectedProvisionRefund } from '../provisioning/rejection.js'
 import { approveRestore, backupFile, getBackupJob, importBackup, listBackupJobs, removeBackup, requestBackupJob, requestRestore, waitBackupJobs, initializeBackupJobs } from './backups.js'
 import { maxPrimaryIpv4FeeRial, primaryIpv4Pricing, setPrimaryIpv4Fee } from '../servers/primary-ip-pricing.js'
 import { confirmPrimaryIpv4Rollback } from '../servers/primary-ip-operation.js'
@@ -29,7 +30,9 @@ import { requireOutboundAdmin, outboundStatus, profileInput, routeInput, deleteI
 const idParam = z.object({ id: z.string().uuid() })
 const proofSchema = z.string().uuid()
 const confirm = z.object({ confirm: z.literal(true), proof: proofSchema }).strict()
-const actions = z.enum(['gateway.update', 'gateway.diagnose', 'wallet.adjust', 'wallet.approve', 'logs.export', 'backup.backup', 'backup.rehearsal', 'backup.upload', 'backup.download', 'backup.delete', 'backup.restore', 'backup.approve', 'outbound.profile', 'outbound.route', 'outbound.delete', 'outbound.test', marginAction])
+const linkRefundAction = 'wallet.link-refund'
+const linkRefundInput = z.object({ orderId: z.uuid(), adjustmentId: z.uuid(), confirm: z.literal(true) }).strict()
+const actions = z.enum(['gateway.update', 'gateway.diagnose', 'wallet.adjust', 'wallet.approve', linkRefundAction, 'logs.export', 'backup.backup', 'backup.rehearsal', 'backup.upload', 'backup.download', 'backup.delete', 'backup.restore', 'backup.approve', 'outbound.profile', 'outbound.route', 'outbound.delete', 'outbound.test', marginAction])
 const gatewaySchema = z.object({ enabled: z.boolean(), sandbox: z.boolean(), merchant: z.string().uuid().optional(), version: z.string().regex(/^[0-9a-f]{64}$/).optional(), confirm: z.literal(true) }).strict()
 const paging = z.object({ page: z.coerce.number().int().min(1).max(10000).default(1), limit: z.coerce.number().int().min(1).max(100).default(20) })
 const logsQuery = paging.extend({ level: z.enum(['', 'info', 'warn', 'error', 'critical']).default(''), service: z.string().regex(/^[a-zA-Z0-9_-]{0,40}$/).default(''),
@@ -121,6 +124,7 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     if (input.action.startsWith('outbound.')) requireOutboundAdmin(requireAdmin(request))
     if (input.action === marginAction) requireHetznerPricingAdmin(requireAdmin(request))
     const payload = input.action === marginAction ? parse(confirmedMargin, input.payload)
+      : input.action === linkRefundAction ? parse(linkRefundInput, input.payload)
       : input.action === 'outbound.profile' ? parse(profileInput, input.payload)
       : input.action === 'outbound.route' ? parse(routeInput, input.payload)
       : input.action === 'outbound.delete' ? parse(deleteInput, input.payload)
@@ -217,6 +221,15 @@ export const registerSystemRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
   app.post('/finance/adjustments/:id/approve', async request => {
     const { id } = parse(idParam, request.params), { proof } = parse(confirm, request.body)
     return { data: await approveAdjustment(db, requireAdmin(request), id, proof) }
+  })
+  app.post('/finance/order-refunds/link', { config: { rateLimit: { max: 10, timeWindow: '10 minutes' } } }, async request => {
+    const admin = requireAdmin(request)
+    const { proof, ...input } = parse(linkRefundInput.extend({ proof: proofSchema }), request.body)
+    await db.transaction(async tx => {
+      await consumeAuthorization(tx, admin, proof, linkRefundAction, input)
+      await linkRejectedProvisionRefund(tx, { ...input, actorId: admin.id })
+    })
+    return { data: { linked: true } }
   })
   app.get('/backups', async () => { await initializeBackupJobs(); return { data: (await listBackupJobs()).map(publicJob) } })
   app.get('/backups/:id', async request => ({ data: publicJob(await getBackupJob(parse(idParam, request.params).id)) }))

@@ -1,5 +1,5 @@
 import { createContext, useContext, useRef, useState, type ReactNode } from 'react'
-import { NavLink, Outlet, useLocation, useNavigate, useOutletContext } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { CreditCard, Database, FileClock, Settings2, WalletCards } from 'lucide-react'
 import { apiGet, apiPost, systemBinary } from '../lib/apiClient'
@@ -224,6 +224,35 @@ function download(blob: Blob, name: string) { const url = URL.createObjectURL(bl
 
 interface FinancialUser { id: string; name: string; email: string; mobile: string; status: string; wallets: Array<{ id: string; name: string; balanceRial: number }> }
 interface Adjustment { ownerEmail?: string; ownerName?: string; walletName?: string; id: string; actorId: string; userId: string; walletId: string; direction: string; amountRial: number; status: string; reason: string; reference: string; beforeRial: number | null; afterRial: number | null; createdAt: string }
+function LinkOrderRefund() {
+  const [params] = useSearchParams()
+  const [orderId, setOrderId] = useState(params.get('refundOrder') ?? '')
+  const [adjustmentId, setAdjustmentId] = useState('')
+  const [confirmed, setConfirmed] = useState(false)
+  const [notice, setNotice] = useState('')
+  const sensitive = useSensitive()
+  const uuid = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i
+  return <Card><h2>اتصال بازپرداخت به سفارش ردشده</h2>
+    <p>شناسهٔ تعدیل تکمیل‌شده‌ای را وارد کنید که وجه همان خرید را به کیف پول مشتری بازگردانده است. این ثبت، موجودی را تغییر نمی‌دهد.</p>
+    <form className="form-stack" onSubmit={event => {
+      event.preventDefault()
+      if (!confirmed || !uuid.test(orderId.trim()) || !uuid.test(adjustmentId.trim())) return
+      const input = { orderId: orderId.trim(), adjustmentId: adjustmentId.trim(), confirm: true }
+      setNotice('')
+      sensitive('wallet.link-refund', input, 'اتصال اعتبار ثبت‌شده به سفارش ردشده', async proof => {
+        await post('/finance/order-refunds/link', { ...input, proof })
+        setConfirmed(false)
+        setNotice('بازپرداخت در پیگیری سفارش ثبت شد.')
+      })
+    }}>
+      <Input label="شناسهٔ سفارش ردشده" dir="ltr" required value={orderId} onChange={event => { setOrderId(event.target.value); setConfirmed(false) }} />
+      <Input label="شناسهٔ تعدیل کیف پول" dir="ltr" required value={adjustmentId} onChange={event => { setAdjustmentId(event.target.value); setConfirmed(false) }} />
+      <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} /> تأیید می‌کنم این تعدیل بازپرداخت همین سفارش است.</label>
+      <Button type="submit" disabled={!confirmed || !uuid.test(orderId.trim()) || !uuid.test(adjustmentId.trim())}>ثبت ارتباط بازپرداخت</Button>
+    </form>
+    {notice && <p role="status">{notice}</p>}
+  </Card>
+}
 export function SystemFinance() {
   const [search, setSearch] = useState(''), [results, setResults] = useState<FinancialUser[]>([]), [user, setUser] = useState<FinancialUser | null>(null), [direction, setDirection] = useState('credit'), [amount, setAmount] = useState(''), [reason, setReason] = useState(''), [reference, setReference] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false), [page, setPage] = useState(1)
   const key = useRef(crypto.randomUUID()), sensitive = useSensitive()
@@ -242,7 +271,7 @@ export function SystemFinance() {
       <Select label="نوع تعدیل" value={direction} onChange={e => { setDirection(e.target.value); changed() }}><option value="credit">افزایش موجودی</option><option value="debit">کاهش موجودی</option></Select>
       <Input label="مبلغ دقیق (ریال)" inputMode="numeric" required value={amount} onChange={e => { setAmount(e.target.value); changed() }} /><Input label="علت و توضیح اجباری" minLength={10} maxLength={500} required value={reason} onChange={e => { setReason(e.target.value); changed() }} /><Input label="شناسهٔ پیگیری / تیکت" minLength={3} maxLength={120} required value={reference} onChange={e => { setReference(e.target.value); changed() }} />
       {wallet && value > 0 ? <p>موجودی فعلی: {rial(wallet.balanceRial)} · برآورد پس از تعدیل: {rial(after)} · موجودی نهایی زیر قفل دیتابیس دوباره بررسی می‌شود.</p> : null}<Button type="submit" disabled={!wallet || !Number.isSafeInteger(value) || value <= 0 || after < 0}>بازبینی و تأیید تعدیل</Button>
-    </form></Card> : null}<p role="status">{notice}</p><Card><h2>تاریخچه و درخواست‌های تأیید</h2>{history.error ? <p role="alert">{history.error}</p> : history.data?.items.map(item => <section className="system-record" key={item.id}><strong>{item.direction === 'credit' ? 'افزایش' : 'کاهش'} {rial(item.amountRial)} · {label(item.status)}</strong><p>{item.ownerName} · <bdi>{item.ownerEmail || item.userId}</bdi> · {item.walletName}</p><p>{item.reason} · پیگیری: {item.reference}</p><p dir="ltr">{item.id} · {item.walletId}</p><p>{date(item.createdAt)}{item.beforeRial !== null ? ` · ${rial(item.beforeRial)} ← ${rial(item.afterRial!)}` : ''}</p>
+    </form></Card> : null}<p role="status">{notice}</p><LinkOrderRefund /><Card><h2>تاریخچه و درخواست‌های تأیید</h2>{history.error ? <p role="alert">{history.error}</p> : history.data?.items.map(item => <section className="system-record" key={item.id}><strong>{item.direction === 'credit' ? 'افزایش' : 'کاهش'} {rial(item.amountRial)} · {label(item.status)}</strong><p>{item.ownerName} · <bdi>{item.ownerEmail || item.userId}</bdi> · {item.walletName}</p><p>{item.reason} · پیگیری: {item.reference}</p><p dir="ltr">{item.id} · {item.walletId}</p><p>{date(item.createdAt)}{item.beforeRial !== null ? ` · ${rial(item.beforeRial)} ← ${rial(item.afterRial!)}` : ''}</p>
       {item.status === 'awaiting_approval' ? <Button variant="secondary" onClick={() => sensitive('wallet.approve', { id: item.id, confirm: true }, `بررسی درخواست قدیمی برای ${item.id}؛ ${rial(item.amountRial)}؛ کاربر ${item.ownerEmail || item.userId}؛ کیف پول ${item.walletName || ''} (${item.walletId})؛ ${item.reason}`, async proof => { await post(`/finance/adjustments/${item.id}/approve`, { confirm: true, proof }); history.refetch(); setNotice('تعدیل تکمیل شد.') })}>تکمیل درخواست قدیمی</Button> : null}</section>)}<Pagination page={page} pages={history.data?.pages ?? 0} setPage={setPage} /></Card></div>
 }
 

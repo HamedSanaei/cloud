@@ -124,7 +124,7 @@ export interface AdminOrderDetail {
   items: Array<{ id: string; description: string; quantity: number; totalRial: number; totalToman: number }>
   events: Array<{ fromStatus: string | null; toStatus: string; reason: string | null; createdAt: string }>
   invoice: { id: string; number: string; status: string; totalRial: number } | null
-  financialEvidence?: { debitRial: number; refundRial: number; invoicedRial: number; invoiceIds: string[]; transactionIds: string[];
+  financialEvidence?: { debitRial: number; refundRial: number; invoicedRial: number; invoiceIds: string[]; transactionIds: string[]; unreturned?: boolean;
     operations: Array<{ id: string; status: string; kind: string }>; adjustments: Array<{ id: string; type: string; amountRial: number; referenceId: string | null; createdAt: string }> } | null
 }
 export interface AdminServerDetail {

@@ -49,7 +49,20 @@ cards show full names and local flag assets for Hetzner countries.
 The recharge action uses the existing `/wallet` route. A per-user, per-tab draft
 preserves selections and the request key for two hours; returning revalidates
 against current catalog and wallet data. `/wallet?returnTo=server-checkout`
-offers a fixed return link (no arbitrary return URL).
+offers a fixed return link (no arbitrary return URL). A payment receipt opened
+in the same tab also offers that link while the user's draft is valid.
+
+Before a site-authority checkout sends the final request, it saves the same
+request key in the draft. After an interrupted response the wizard reads the
+authenticated, owner-scoped receipt by that key before showing funding guidance.
+Looking up the receipt does not submit an order.
+
+For a provision operation explicitly rejected by the superadmin, **Settings →
+Finance → Link refund to rejected order** accepts the order UUID and the UUID
+of the completed credit adjustment. The API verifies the original purchase,
+customer, payment wallet and exact posted credit, then records the relationship
+in the order history. A credit can be linked once. Linking does not write a
+second credit or rewrite the existing ledger entry.
 
 Site-authority mode supports online TabaPay recharge through the website's own
 ledger. See [wallet payments and support tickets](WALLET_PAYMENTS_AND_TICKETS.md)

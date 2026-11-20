@@ -63,8 +63,8 @@ export function EmailCode({ start, submit, cancel, onToken, initialChallenge, on
   </div>
 }
 
-export function OperationEmail({ intent, children, execute, close }: {
-  intent: OperationIntent; children?: ReactNode; execute: (proof: EmailProof) => Promise<void>; close: () => void
+export function OperationEmail({ intent, children, execute, close, dismissOnBackdrop }: {
+  intent: OperationIntent; children?: ReactNode; execute: (proof: EmailProof) => Promise<void>; close: () => void; dismissOnBackdrop?: boolean
 }) {
   const token = useRef<string>(undefined)
   const closed = useRef(false)
@@ -77,7 +77,7 @@ export function OperationEmail({ intent, children, execute, close }: {
     if (closed.current) void cancelOperationEmail(next).catch(() => undefined)
     else token.current = next
   }
-  return <Modal open trapFocus title="تأیید ایمیلی عملیات سرور" onClose={cancel}>
+  return <Modal open trapFocus dismissOnBackdrop={dismissOnBackdrop} title="تأیید ایمیلی عملیات سرور" onClose={cancel}>
     {children}
     <EmailCode start={() => startOperationEmail(intent)} submit={execute} cancel={cancel} onToken={saveToken} />
   </Modal>

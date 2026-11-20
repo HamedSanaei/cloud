@@ -8,7 +8,7 @@ import { getServerForUser, listServersForUser, recordServerActionAudit, createSe
 import { createQuote } from '../quotes/service.js'
 import { createOrderFromQuote } from '../orders/service.js'
 import { getOffer } from '../catalog/service.js'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { ValidationError } from '../../lib/errors.js'
 import { retailBilling } from '../pricing/periods.js'
 import type { ProviderBillingOption } from '../providers/provider.interface.js'
@@ -45,6 +45,14 @@ export const registerServerRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asy
     const user = requireUser(request)
     const { orderId } = parse(z.object({ orderId: z.string().uuid() }), request.params)
     return { data: await provisioningRow(db, user.id, orderId) }
+  })
+  app.get('/servers/provisioning/by-request/:key', async (request, reply) => {
+    const user = requireUser(request)
+    const { key } = parse(z.object({ key: operationKey }), request.params)
+    reply.header('Cache-Control', 'private, no-store')
+    const order = await db.query.orders.findFirst({ columns: { id: true },
+      where: t => and(eq(t.userId, user.id), eq(t.idempotencyKey, key)) })
+    return { data: order ? await provisioningRow(db, user.id, order.id) : null }
   })
   // Platform-mode middleware handles this route with the authenticated linked token.
   app.get('/servers/provisioning/platform/:id', async request => {

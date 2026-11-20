@@ -29,7 +29,7 @@ const TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   active: ['requires_review', 'refunded'],
   failed: ['requires_review', 'refunded'],
   cancelled: [],
-  requires_review: ['failed', 'refunded', 'active'],
+  requires_review: ['provisioning', 'failed', 'refunded', 'active'],
   refunded: [],
 }
 
@@ -38,7 +38,7 @@ export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
 }
 
 export async function transitionOrder(
-  db: DbClient,
+  db: DbOrTx,
   orderId: string,
   to: OrderStatus,
   opts: { actorId?: string | null; reason?: string; metadata?: Record<string, unknown> } = {},

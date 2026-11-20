@@ -117,7 +117,7 @@ function locationCell(offer: PublicHetznerOffer) {
 }
 const number = new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 })
 const moneyDisplay = new Intl.NumberFormat('fa-IR', { useGrouping: true, maximumFractionDigits: 0 })
-export const hetznerTrafficQuota = (bytes: number | null | undefined, unit: 'TB' | 'TiB' = 'TB') => isTrafficByteCount(bytes) ? `${number.format(bytes / 2 ** 40)} ${unit}` : 'اعلام نشده'
+export const hetznerTrafficQuota = (bytes: number | null | undefined) => isTrafficByteCount(bytes) ? `${number.format(bytes / 2 ** 40)} TiB` : 'اعلام نشده'
 export const tariffTime = new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Tehran' })
 const toman = (rial: number) => `${moneyDisplay.format(rial / 10)} تومان`
 const inquiry = 'استعلام قیمت'
@@ -150,7 +150,7 @@ export function renderTariffSections(iran: IranTariffs | null, hetzner: PublicHe
     wrapTable('پلن‌های قابل سفارش هتزنر', ['پلن', 'لوکیشن', 'vCPU', 'RAM (گیگابایت)', 'فضای دیسک (گیگابایت)', 'ترافیک ماهانهٔ مشمول (TiB، واحد کنسول هتزنر)', 'ساعتی (تومان / ساعت)', 'ماهانه (تومان / ماه)', 'هزینهٔ ترافیک مازاد (تومان / TB ده‌دهی)'],
     sorted.map(offer => `<tr><th scope="row">${planLink(offer)}${offer.diskType ? `<small class="tariff-disk-type">نوع دیسک <bdi>${escapeHtml(offer.diskType)}</bdi></small>` : ''}</th>${locationCell(offer)}` +
       `<td>${number.format(offer.vcpu)}</td><td>${number.format(offer.memoryMb / 1024)}</td><td>${number.format(offer.diskGb)}</td>` +
-      `<td><bdi>${hetznerTrafficQuota(offer.includedTrafficBytes ?? offer.trafficOverage?.includedBytes, 'TiB')}</bdi></td>` +
+      `<td><bdi>${hetznerTrafficQuota(offer.includedTrafficBytes ?? offer.trafficOverage?.includedBytes)}</bdi></td>` +
       `<td>${displayPrice(offer.hourly, 'hourly')}</td><td>${displayPrice(offer.monthly, 'monthly')}</td><td>${offer.trafficOverage ? `<bdi>${toman(offer.trafficOverage.perTbRial)}</bdi>` : 'نرخ معتبر در دسترس نیست'}</td></tr>`).join(''), true)
     : `<p role="status">${countryFiltered ? 'سروری برای این کشور یافت نشد' : meta?.status === 'pricing_unavailable' ? 'نرخ ارز معتبر برای محاسبهٔ قیمت هتزنر در دسترس نیست؛ پس از تأیید نرخ تازه، قیمت‌ها نمایش داده می‌شوند.' : hetzner === null ? 'دریافت تعرفهٔ هتزنر موقتاً ممکن نیست.' : 'در حال حاضر پلن قابل سفارش هتزنر برای نمایش وجود ندارد.'}</p>`
   const iranSection = `<section id="iran-server"><h3>تعرفه سرور ایران (ماهانه)</h3>` +

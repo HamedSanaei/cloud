@@ -18,6 +18,21 @@ import { resolveOperationByAdmin } from '../provisioning/handlers.js'
 
 export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = async (app, { ctx }) => {
   const { db, queues } = ctx
+  async function reopenFailedProvision(op: typeof providerOperations.$inferSelect) {
+    if (op.kind !== 'provision' || op.referenceType !== 'order') throw new ConflictError('بازگشایی فقط برای عملیات ساخت سرور مجاز است')
+    await db.transaction(async tx => {
+      const [order] = await tx.select().from(orders).where(eq(orders.id, op.referenceId)).for('update')
+      const [current] = await tx.select().from(providerOperations).where(eq(providerOperations.id, op.id)).for('update')
+      const meta = current?.responseMetadata as Record<string, unknown> | null
+      if (!order || !['failed', 'provisioning'].includes(order.status) || current?.status !== 'failed'
+        || current.completedAt || meta?.permanent === true) {
+        throw new ConflictError('فقط عملیات ناموفقِ قابل تکرار و بدون بازپرداخت بازگشایی می‌شود')
+      }
+      await tx.update(providerOperations).set({ status: 'pending', lastError: null, updatedAt: new Date() }).where(eq(providerOperations.id, op.id))
+      if (order.status === 'failed') await tx.update(orders).set({ status: 'queued', error: null, updatedAt: new Date() }).where(eq(orders.id, order.id))
+    })
+    await queues.addProvision(op.referenceId)
+  }
 
   app.get('/admin/users', async (request) => {
     requireAdmin(request)
@@ -175,24 +190,7 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
     const body = parse(z.object({ note: z.string().max(500).optional() }), request.body)
     const op = await db.query.providerOperations.findFirst({ where: (t) => eq(t.id, id) })
     if (!op) throw new NotFoundError('عملیات سرویس‌دهنده یافت نشد')
-    if (op.kind !== 'provision') throw new ConflictError('بازگشایی فقط برای عملیات ساخت سرور مجاز است')
-    // NEVER reopen UNKNOWN operations: the provider may have processed the
-    // original POST — a retry could create a second paid server.
-    if (op.status === 'unknown') {
-      throw new ConflictError('عملیات با نتیجه نامشخص (UNKNOWN) قابل بازگشایی برای ارسال مجدد نیست — ابتدا به‌صورت دستی تعیین تکلیف کنید')
-    }
-    const meta = (op.responseMetadata ?? {}) as Record<string, unknown>
-    if (op.status === 'failed' && meta.permanent === true) {
-      throw new ConflictError('این عملیات به‌صورت قطعی رد شده است (permanent) و قابل ارسال مجدد نیست')
-    }
-    await db.update(providerOperations).set({ status: 'pending', lastError: null, updatedAt: new Date() }).where(eq(providerOperations.id, id))
-    const order = op.referenceType === 'order' ? await db.query.orders.findFirst({ where: (t) => eq(t.id, op.referenceId) }) : null
-    if (order && order.status === 'failed') {
-      await db.update(orders).set({ status: 'queued', error: null, updatedAt: new Date() }).where(eq(orders.id, order.id))
-    }
-    if (op.kind === 'provision') {
-      await queues.addProvision(op.referenceId)
-    }
+    await reopenFailedProvision(op)
     await writeAudit(db, {
       actorId: admin.id,
       action: 'admin.provider_operation_reopened',
@@ -220,16 +218,11 @@ export const registerAdminRoutes: FastifyPluginAsync<{ ctx: AppContext }> = asyn
     if (!op) throw new NotFoundError('عملیات سرویس‌دهنده یافت نشد')
     if (op.status === 'succeeded') return { data: { ok: true, skipped: true } }
     // NEVER retry an operation with an ambiguous outcome.
-    if (op.status === 'unknown') {
+    if (op.status === 'unknown' || op.status === 'needs_reconciliation') {
       throw new ConflictError('عملیات با نتیجه نامشخص (UNKNOWN) قابل ارسال مجدد نیست — ابتدا تعیین تکلیف دستی انجام دهید')
     }
     if (op.kind === 'provision') {
-      await db.update(providerOperations).set({ status: 'pending', lastError: null, updatedAt: new Date() }).where(eq(providerOperations.id, id))
-      const order = await db.query.orders.findFirst({ where: (t) => eq(t.id, op.referenceId) })
-      if (order && order.status === 'failed') {
-        await db.update(orders).set({ status: 'queued', error: null, updatedAt: new Date() }).where(eq(orders.id, order.id))
-      }
-      await queues.addProvision(op.referenceId)
+      await reopenFailedProvision(op)
     } else if (op.kind === 'server_action') {
       if (op.status !== 'failed' || op.completedAt) throw new ConflictError('این عملیات برق قابل ارسال مجدد نیست')
       const [changed] = await db.update(providerOperations).set({ status: 'pending', lastError: null, updatedAt: new Date() })
