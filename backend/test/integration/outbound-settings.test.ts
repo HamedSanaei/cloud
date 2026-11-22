@@ -144,6 +144,25 @@ describe.skipIf(!dbAvailable)('admin outbound settings and shared runtime policy
     expect(view.profiles.find((p: any) => p.id === saved.id).lastTest.ok).toBe(false)
     expect((await send(actor, 'POST', '/outbound/test', { ...payload, proof: randomUUID(), url: 'http://169.254.169.254/' })).statusCode).toBe(422)
   })
+  it('persists the Google route and the results of both unauthenticated diagnostics', async () => {
+    const actor = await account(), saved = await profile(actor)
+    vi.stubGlobal('fetch', vi.fn(async url => new Response(null, { status: url === policy.googleTargets.tokenProbe ? 400 : 401 })))
+    const integration = 'google'
+    const route = await perform(actor, 'outbound.route', '/outbound/routes', {
+      revision: saved.revision, integration, profileId: saved.id, enabled: true, failurePolicy: 'closed', confirm: true,
+    })
+    expect(route.statusCode, route.body).toBe(200)
+    const tested = await perform(actor, 'outbound.test', '/outbound/test', { revision: route.json().data.revision, integration, confirm: true })
+    expect(tested.statusCode, tested.body).toBe(200)
+    expect(tested.json().data).toMatchObject({ route: 'proxy', ok: true, checks: [
+      { name: 'token', ok: true, httpStatus: 400 }, { name: 'userinfo', ok: true, httpStatus: 401 },
+    ] })
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([policy.googleTargets.tokenProbe, policy.googleTargets.userinfo])
+    expect(vi.mocked(fetch).mock.calls.every(([, init]) => !new Headers(init?.headers).has('authorization'))).toBe(true)
+    const entry = (await status(actor)).integrations.find((item: { id: string }) => item.id === integration)
+    expect(entry.active.route).toBe('proxy')
+    expect(entry.lastTest).toEqual(tested.json().data)
+  })
   it('keeps the last console failure after success and redacts secrets from health status', async () => {
     const actor = await account(), snapshot = await status(actor)
     const metadata = { integration: 'hetzner', route: 'proxy', revision: snapshot.revision, elapsedMs: 30, password: 'fixture-secret', url: 'wss://fixture-ticket' }

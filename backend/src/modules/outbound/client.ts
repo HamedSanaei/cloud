@@ -1,7 +1,7 @@
 import type { Dispatcher } from 'undici'
-import type { NetworkCategory, OutboundIntegration, OutboundState, ProxyProfile, RouteReport } from '../../contracts/outbound.js'
-import { approvedHetznerConsole, approvedTarget, errorCategory, OutboundError, publicAddresses, withinDeadline } from './policy.js'
-import { connectTargetTls, directDispatcher, proxyDispatcher } from './transport.js'
+import { requiresClosedRoute, type HttpIntegration, type NetworkCategory, type OutboundIntegration, type OutboundState, type ProxyProfile, type RouteReport } from '../../contracts/outbound.js'
+import { approvedHetznerConsole, approvedTarget, approveSmtpTarget, errorCategory, OutboundError, publicAddresses, withinDeadline } from './policy.js'
+import { connectTargetTls, directDispatcher, openProxyTunnel, proxyDispatcher } from './transport.js'
 import { recordEvent } from '../system/events.js'
 
 export const emptyOutboundState = (): OutboundState => ({ revision: 'initial', profiles: [], routes: {} })
@@ -69,7 +69,22 @@ export class OutboundHttp {
     }
   }
 
-  async request(integration: OutboundIntegration, input: string | URL, init: RequestInit = {}, testProfile?: string) {
+  async openSmtp(host: string, port: number, secure: boolean, testProfile?: string) {
+    const deadline = AbortSignal.timeout(10000)
+    const { report, profile } = await this.route('smtp', deadline, testProfile)
+    try {
+      if (report.route === 'direct') return { socket: undefined, report }
+      if (report.route === 'blocked' || !profile) throw new OutboundError('configuration')
+      approveSmtpTarget(host, port, secure)
+      const signal = AbortSignal.any([deadline, AbortSignal.timeout(profile.timeoutMs)])
+      const address = (await withinDeadline(publicAddresses(profile.host), signal))[0]!.address
+      signal.throwIfAborted()
+      const socket = await openProxyTunnel(host, port, signal, { profile, address })
+      return { socket, report }
+    } catch (error) { throw new OutboundFailure(error, report) }
+  }
+
+  async request(integration: HttpIntegration, input: string | URL, init: RequestInit = {}, testProfile?: string) {
     const url = approvedTarget(integration, input)
     const started = Date.now()
     const deadline = AbortSignal.any([AbortSignal.timeout(30000), ...(init.signal ? [init.signal] : [])])
@@ -100,7 +115,7 @@ export class OutboundHttp {
     } catch (error) {
       // Never redispatch a mutation. Read fallback is explicit and uses the same total deadline.
       const safeRead = ['GET', 'HEAD'].includes((init.method ?? 'GET').toUpperCase())
-      if (integration !== 'hetzner' && !testProfile && report.route === 'proxy' && safeRead && state.routes[integration]?.failurePolicy === 'read-only-direct'
+      if (!requiresClosedRoute(integration) && !testProfile && report.route === 'proxy' && safeRead && state.routes[integration]?.failurePolicy === 'read-only-direct'
           && errorCategory(error) !== 'policy' && !signal.aborted) {
         const fallback = { route: 'direct-fallback' as const, profileId: profile!.id }
         try { const response = await dispatch(); event(fallback, 'none', response.status); return { response, report: fallback, revision: state.revision } }
@@ -122,10 +137,11 @@ const unconfigured = new OutboundHttp(async () => {
   if (process.env.NODE_ENV !== 'test') throw new OutboundError('configuration')
   return emptyOutboundState()
 })
-export const outboundFetch = async (integration: OutboundIntegration, input: string | URL, init?: RequestInit) =>
+export const outboundFetch = async (integration: HttpIntegration, input: string | URL, init?: RequestInit) =>
   (await (active ?? unconfigured).request(integration, input, init)).response
 export const openHetznerConsole = (input: string, signal: AbortSignal) => (active ?? unconfigured).openHetznerConsole(input, signal)
-export const integrationFetcher = (integration: OutboundIntegration): typeof fetch => (input, init) => {
+export const openSmtp = (host: string, port: number, secure: boolean) => (active ?? unconfigured).openSmtp(host, port, secure)
+export const integrationFetcher = (integration: HttpIntegration): typeof fetch => (input, init) => {
   if (typeof input !== 'string' && !(input instanceof URL)) throw new OutboundError('policy')
   return outboundFetch(integration, input, init)
 }

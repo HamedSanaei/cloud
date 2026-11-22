@@ -2,7 +2,7 @@
 import { createServer as httpServer } from 'node:http'
 import { createServer as httpsServer } from 'node:https'
 import { createServer as tcpServer, connect, type Server, type Socket } from 'node:net'
-import { getCACertificates, setDefaultCACertificates } from 'node:tls'
+import { createServer as tlsServer, getCACertificates, setDefaultCACertificates } from 'node:tls'
 import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -20,19 +20,24 @@ import { LeasewebClient } from '../../src/modules/providers/leaseweb/client.js'
 import { ProviderUnknownError } from '../../src/lib/errors.js'
 import { pino } from 'pino'
 import type { OutboundState, ProxyType, OutboundIntegration } from '../../src/contracts/outbound.js'
+import { smtpTransport } from '../../src/modules/outbound/smtp.js'
+import { getConfig } from '../../src/config.js'
 
 const sockets = new Set<Socket>(), servers: Server[] = []
 const roots = getCACertificates('default')
-let directory: string, certificate: string, upstreamPort: number
+let directory: string, certificate: string, upstreamPort: number, mailPort: number
 let mode: 'ok' | 'drop' | 'redirect' | 'stall', mutations: number, authenticated: boolean, rejectAuth: boolean, upgrades: number
+let requireAuth = true
+let smtpCommands: string[]
 let ports: Record<ProxyType, number>, hosts: string[], proxyHeaders: Record<string, unknown>[], cleanups: Array<() => Promise<void>>
 const track = (socket: Socket) => { sockets.add(socket); socket.on('error', () => undefined); socket.once('close', () => sockets.delete(socket)); return socket }
 const listen = (server: Server) => new Promise<number>(resolve => {
   servers.push(server); server.on('connection', track)
   server.listen(0, '127.0.0.1', () => resolve((server.address() as { port: number }).port))
 })
-const tunnel = (incoming: Socket, reply: () => void) => {
-  const destination = track(connect(upstreamPort, '127.0.0.1', () => { reply(); incoming.pipe(destination); destination.pipe(incoming) }))
+const tunnel = (incoming: Socket, reply: () => void, authority = '') => {
+  const destination = track(connect(authority === 'smtp.resend.com:465' ? mailPort : upstreamPort, '127.0.0.1',
+    () => { reply(); incoming.pipe(destination); destination.pipe(incoming) }))
   incoming.on('close', () => destination.destroy())
   destination.on('error', () => incoming.destroy())
 }
@@ -42,7 +47,7 @@ beforeAll(async () => {
   const keyPath = path.join(directory, 'key.pem'), certPath = path.join(directory, 'cert.pem')
   const openssl = process.platform === 'win32' && existsSync('C:/Program Files/Git/usr/bin/openssl.exe') ? 'C:/Program Files/Git/usr/bin/openssl.exe' : 'openssl'
   execFileSync(openssl, ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', keyPath, '-out', certPath, '-days', '2',
-    '-subj', '/CN=proxy.fixture.test', '-addext', 'subjectAltName=DNS:proxy.fixture.test,DNS:api.hetzner.cloud,DNS:api.leaseweb.com,DNS:web-console.hetzner.cloud'], { stdio: 'ignore' })
+    '-subj', '/CN=proxy.fixture.test', '-addext', 'subjectAltName=DNS:proxy.fixture.test,DNS:api.hetzner.cloud,DNS:api.leaseweb.com,DNS:web-console.hetzner.cloud,DNS:oauth2.googleapis.com,DNS:openidconnect.googleapis.com,DNS:smtp.resend.com'], { stdio: 'ignore' })
   certificate = readFileSync(certPath, 'utf8')
   const tls = { key: readFileSync(keyPath), cert: certificate }
   const upstream = httpsServer(tls, async (request, response) => {
@@ -68,15 +73,25 @@ beforeAll(async () => {
     })
   })
   upstreamPort = await listen(upstream)
+  mailPort = await listen(tlsServer(tls, socket => {
+    socket.write('220 fixture ESMTP\r\n')
+    socket.on('data', chunk => {
+      for (const command of chunk.toString().trim().split('\r\n')) {
+        smtpCommands.push(command)
+        if (command.startsWith('EHLO')) socket.write('250 fixture\r\n')
+        else if (command === 'QUIT') socket.end('221 closing\r\n')
+      }
+    })
+  }))
   const proxies = [httpServer(), httpsServer(tls)]
   const connectPorts: number[] = []
   for (const proxy of proxies) {
     proxy.on('connect', (request, socket) => {
       proxyHeaders.push(request.headers); hosts.push(request.url!)
       authenticated = request.headers['proxy-authorization'] === `Basic ${Buffer.from('fixture-user:fixture-password').toString('base64')}`
-      if (rejectAuth || !authenticated) { socket.end('HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n'); return }
+      if (rejectAuth || requireAuth && !authenticated) { socket.end('HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n'); return }
       if (mode === 'stall') return
-      tunnel(socket as Socket, () => socket.write('HTTP/1.1 200 Connection Established\r\n\r\n'))
+      tunnel(socket as Socket, () => socket.write('HTTP/1.1 200 Connection Established\r\n\r\n'), request.url)
     })
     connectPorts.push(await listen(proxy))
   }
@@ -87,7 +102,7 @@ beforeAll(async () => {
       while (true) {
         if (stage === 'greeting') {
           if (data.length < 2 || data.length < 2 + data[1]!) return
-          data = data.subarray(2 + data[1]!); socket.write(Buffer.from([5, 2])); stage = 'auth'
+          data = data.subarray(2 + data[1]!); socket.write(Buffer.from([5, requireAuth ? 2 : 0])); stage = requireAuth ? 'auth' : 'connect'
         } else if (stage === 'auth') {
           if (data.length < 2 || data.length < 3 + data[1]!) return
           const userLength = data[1]!, passwordLength = data[2 + userLength]!, end = 3 + userLength + passwordLength
@@ -102,10 +117,11 @@ beforeAll(async () => {
           expect(data[3]).toBe(3)
           const length = data[4]!, end = 7 + length
           if (data.length < end) return
-          hosts.push(`${data.subarray(5, 5 + length)}:${data.readUInt16BE(5 + length)}`)
+          const authority = `${data.subarray(5, 5 + length)}:${data.readUInt16BE(5 + length)}`
+          hosts.push(authority)
           data = data.subarray(end); socket.removeListener('data', read)
           if (mode === 'stall') return
-          tunnel(socket, () => socket.write(Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, 0, 0])))
+          tunnel(socket, () => socket.write(Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, 0, 0])), authority)
           return
         }
       }
@@ -116,7 +132,7 @@ beforeAll(async () => {
 })
 beforeEach(() => {
   setDefaultCACertificates([...roots, certificate])
-  mode = 'ok'; mutations = 0; upgrades = 0; authenticated = false; rejectAuth = false; hosts = []; proxyHeaders = []; cleanups = []
+  mode = 'ok'; mutations = 0; upgrades = 0; authenticated = false; rejectAuth = false; requireAuth = true; hosts = []; proxyHeaders = []; cleanups = []; smtpCommands = []
   vi.spyOn(policy, 'publicAddresses').mockImplementation(async host => {
     expect(host).toBe('proxy.fixture.test')
     return [{ address: '127.0.0.1', family: 4 }] // Test fixture only; production rejects loopback.
@@ -140,6 +156,31 @@ function configure(type: ProxyType, integration: OutboundIntegration = 'hetzner'
 }
 
 describe.each(['http', 'https', 'socks5'] as const)('%s actual outbound transport', type => {
+  it.each([true, false])('uses the network route for both Google endpoints with proxy authentication %s', async withAuth => {
+    requireAuth = withAuth
+    const client = configure(type, 'google', state => {
+      if (!withAuth) { state.profiles[0]!.username = ''; state.profiles[0]!.password = '' }
+    })
+    const token = await client.request('google', policy.googleTargets.token, { method: 'POST', body: new URLSearchParams({ code: 'oauth-fixture' }) })
+    await token.response.json()
+    const account = await client.request('google', policy.googleTargets.userinfo, { headers: { authorization: 'Bearer oauth-fixture' } })
+    await account.response.json()
+    expect(account.report.route).toBe('proxy')
+    expect(authenticated).toBe(withAuth)
+    expect(hosts).toEqual(['oauth2.googleapis.com:443', 'openidconnect.googleapis.com:443'])
+    expect(JSON.stringify(proxyHeaders)).not.toContain('oauth-fixture')
+  })
+  it('verifies SMTP TLS through the configured tunnel without sending mail', async () => {
+    const client = configure(type, 'smtp')
+    const { socket, report } = await client.openSmtp('smtp.resend.com', 465, true)
+    try {
+      expect(report.route).toBe('proxy')
+      await expect(smtpTransport({ ...getConfig(), SMTP_HOST: 'smtp.resend.com', SMTP_PORT: 465, SMTP_SECURE: true }, socket, false).verify()).resolves.toBe(true)
+      expect(hosts).toEqual(['smtp.resend.com:465'])
+      expect(smtpCommands[0]).toMatch(/^EHLO /)
+      expect(smtpCommands.every(command => /^(EHLO |QUIT$)/.test(command))).toBe(true)
+    } finally { socket?.destroy() }
+  })
   it('uses one proxy policy for the console grant, WSS handshake and bidirectional frames', async () => {
     let state!: OutboundState
     configure(type, 'hetzner', value => { state = value })

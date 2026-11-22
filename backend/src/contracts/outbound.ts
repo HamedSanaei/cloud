@@ -1,6 +1,8 @@
 /** Fixed integration IDs only. Browser input never chooses a destination URL. */
-export const outboundIntegrations = ['hetzner', 'leaseweb', 'parsgreen', 'tabapay', 'abantether'] as const
+export const outboundIntegrations = ['hetzner', 'leaseweb', 'google', 'smtp', 'parsgreen', 'tabapay', 'abantether'] as const
 export type OutboundIntegration = typeof outboundIntegrations[number]
+export type HttpIntegration = Exclude<OutboundIntegration, 'smtp'>
+export const requiresClosedRoute = (id: OutboundIntegration) => id === 'hetzner' || id === 'google' || id === 'smtp'
 export type ProxyType = 'socks5' | 'http' | 'https'
 export type FailurePolicy = 'closed' | 'read-only-direct'
 export interface ProxyProfile {
@@ -18,6 +20,7 @@ export interface OutboundConsoleHealth extends RouteReport {
 export interface OutboundTestResult extends RouteReport {
   integration: OutboundIntegration; ok: boolean; reachable: boolean; category: NetworkCategory; latencyMs: number
   httpStatus?: number; testedAt: string; lastSuccessAt: string | null; revision: string
+  checks?: Array<{ name: 'token' | 'userinfo'; ok: boolean; category: NetworkCategory; httpStatus?: number }>
 }
 export interface OutboundStatus {
   revision: string; profiles: Array<PublicProxyProfile & { lastTest: OutboundTestResult | null }>
