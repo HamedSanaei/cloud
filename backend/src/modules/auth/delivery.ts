@@ -1,8 +1,8 @@
-import nodemailer from 'nodemailer'
 import { getConfig, isProduction } from '../../config.js'
 import { ProviderPermanentError, ProviderRetryableError, ProviderUnknownError } from '../../lib/errors.js'
 import { createLogger } from '../../logger.js'
-import { outboundFetch } from '../outbound/client.js'
+import { openSmtp, outboundFetch } from '../outbound/client.js'
+import { smtpTransport } from '../outbound/smtp.js'
 import { smsSegments } from './parsgreen-templates.js'
 import { normalizeIranMobile } from '../../contracts/iran-mobile.js'
 import { internalEmail } from './email-address.js'
@@ -54,17 +54,12 @@ export async function sendEmailOtp(to: string, code: string, purpose: 'login' | 
     recovery: 'بازیابی رمز عبور پارس سرور',
     operation: 'کد تأیید عملیات سرور پارس سرور',
   }
-  const transport = nodemailer.createTransport({
-    host: config.SMTP_HOST,
-    port: config.SMTP_PORT,
-    secure: config.SMTP_SECURE,
-    requireTLS: !config.SMTP_SECURE && isProduction(),
-    connectionTimeout: 10_000,
-    socketTimeout: 15_000,
-    auth: config.SMTP_USER ? { user: config.SMTP_USER, pass: config.SMTP_PASSWORD } : undefined,
-  })
   const validity = `این کد تا ${Math.ceil((expiresIn ?? config.AUTH_OTP_TTL_SECONDS) / 60)} دقیقه معتبر است.`
+  let connection: Awaited<ReturnType<typeof openSmtp>>['socket']
   try {
+    const route = await openSmtp(config.SMTP_HOST, config.SMTP_PORT, config.SMTP_SECURE)
+    connection = route.socket
+    const transport = smtpTransport(config, connection)
     await transport.sendMail({
       from: config.SMTP_FROM,
       to,
@@ -86,6 +81,7 @@ export async function sendEmailOtp(to: string, code: string, purpose: 'login' | 
     })
     return {}
   } catch {
+    connection?.destroy()
     throw new ProviderRetryableError('ارسال ایمیل ناموفق بود؛ کمی بعد دوباره تلاش کنید')
   }
 }

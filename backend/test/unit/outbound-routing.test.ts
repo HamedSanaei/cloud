@@ -7,7 +7,7 @@ import { canManageOutbound, profileInput, routeInput, testInput, readOutbound, o
 import { seal } from '../../src/modules/system/security.js'
 import type { DbClient } from '../../src/db/index.js'
 import { safeMetadata } from '../../src/modules/system/events.js'
-import type { OutboundState, OutboundIntegration } from '../../src/contracts/outbound.js'
+import type { OutboundState, HttpIntegration } from '../../src/contracts/outbound.js'
 import type { SessionUser } from '../../src/modules/auth/service.js'
 
 const id = randomUUID(), adminId = randomUUID()
@@ -128,8 +128,20 @@ describe('outbound security boundary', () => {
     expect(policy.publicAddress(address)).toBe(false)
   })
   it('binds every integration to its own fixed HTTPS authority', () => {
-    for (const [id, target] of Object.entries(policy.testTargets)) expect(policy.approvedTarget(id as OutboundIntegration, target.url).protocol).toBe('https:')
+    for (const [id, target] of Object.entries(policy.testTargets)) expect(policy.approvedTarget(id as HttpIntegration, target.url).protocol).toBe('https:')
     expect(policy.publicAddress('8.8.8.8')).toBe(true)
+  })
+  it('allowlists the exact OAuth endpoints and only the verified Resend SMTP destinations', () => {
+    for (const url of Object.values(policy.googleTargets)) expect(policy.approvedTarget('google', url).href).toBe(url)
+    expect(() => policy.approvedTarget('google', 'https://oauth2.googleapis.com/revoke')).toThrow()
+    expect(() => policy.approvedTarget('google', policy.googleTargets.userinfo + '?redirect=http://localhost')).toThrow()
+    expect(() => policy.approveSmtpTarget('smtp.resend.com', 465, true)).not.toThrow()
+    expect(() => policy.approveSmtpTarget('smtp.resend.com', 587, false)).not.toThrow()
+    expect(() => policy.approveSmtpTarget('smtp.resend.com', 465, false)).toThrow()
+    expect(() => policy.approveSmtpTarget('localhost', 465, true)).toThrow()
+    for (const integration of ['google', 'smtp']) {
+      expect(routeInput.safeParse({ integration, profileId: id, enabled: true, revision: 'initial', failurePolicy: 'read-only-direct', confirm: true }).success).toBe(false)
+    }
   })
   it('rejects arbitrary diagnostic destinations and credential-bearing proxy host strings', () => {
     expect(testInput.safeParse({ revision: 'initial', integration: 'hetzner', url: 'http://localhost', confirm: true }).success).toBe(false)

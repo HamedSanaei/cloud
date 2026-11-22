@@ -8,6 +8,8 @@ import { BadRequestError, ProviderPermanentError, ProviderRetryableError } from 
 import { issueChallenge, findChallenge, consumeChallenge } from './challenges.js'
 import { hashPassword } from './service.js'
 import { internalEmail } from './email-address.js'
+import { outboundFetch } from '../outbound/client.js'
+import { googleTargets } from '../outbound/policy.js'
 
 function base64url(buffer: Buffer): string {
   return buffer.toString('base64url')
@@ -52,7 +54,7 @@ export async function completeGoogleOAuth(db: DbClient, code: string, state: str
   if (!verifier) throw new BadRequestError('درخواست ورود گوگل معتبر نیست')
 
   try {
-    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+    const tokenResponse = await outboundFetch('google', googleTargets.token, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -69,7 +71,7 @@ export async function completeGoogleOAuth(db: DbClient, code: string, state: str
     const token = (await tokenResponse.json()) as { access_token?: string }
     if (!token.access_token) throw new Error('missing access token')
 
-    const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+    const profileResponse = await outboundFetch('google', googleTargets.userinfo, {
       headers: { authorization: `Bearer ${token.access_token}` },
       signal: AbortSignal.timeout(10_000),
     })
